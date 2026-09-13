@@ -356,28 +356,21 @@ function renderWheel(s) {
 function setView(view) {
   const views = { pvp: $("#pvpView"), raffles: $("#rafflesView"), games: $("#gamesView"), profile: $("#profileView") };
   const activeKey = views[view] ? view : "pvp";
+
   Object.values(views).forEach(el => el.classList.add("hidden"));
   views[activeKey].classList.remove("hidden");
-  const upgrade = $("#upgradeGame");
-  if (upgrade && activeKey !== "games") {
-    upgrade.classList.add("hidden");
-    $("#gamesList")?.classList.remove("hidden");
-  }
-  if (activeKey === "profile") {
-    loadProfile();
-    if (isAdmin) scheduleAdminRefresh(80);
-  }
+
+  if (activeKey === "profile") loadProfile();
   if (activeKey === "raffles") loadRaffles();
-  document.querySelectorAll(".nav-item").forEach(btn => btn.classList.toggle("active", btn.dataset.view === activeKey));
+
+  document.querySelectorAll(".nav-item").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.view === activeKey);
+  });
 }
 
 document.querySelectorAll(".nav-item").forEach(btn => {
   btn.addEventListener("click", () => setView(btn.dataset.view));
 });
-
-// Real DOM controls for the current design.
-const openPvpFromGames = document.getElementById("openPvpFromGames");
-if (openPvpFromGames) openPvpFromGames.addEventListener("click", () => setView("pvp"));
 
 async function loadProfile() {
   if (!initData) return handleNotTelegram();
@@ -463,6 +456,13 @@ function formatRaffleCountdown(endAt) {
   return `${m}м ${total % 60}с`;
 }
 
+function formatRaffleDate(endAt) {
+  if (!endAt) return "—";
+  const d = new Date(endAt);
+  if (Number.isNaN(d.getTime())) return "—";
+  return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}.${d.getFullYear()}`;
+}
+
 function setDefaultRaffleEnd() {
   const dt = new Date(Date.now() + 24 * 60 * 60 * 1000);
   dt.setMinutes(dt.getMinutes() - dt.getTimezoneOffset());
@@ -533,10 +533,10 @@ function renderRaffles(items) {
     el.className = `raffle-card ${r.status !== "active" ? "finished" : ""}`;
     el.innerHTML = `
       <div class="raffle-card-glow"></div>
-      <div class="raffle-card-top"><span class="raffle-status">${r.status === "active" ? "АКТИВЕН" : "ЗАВЕРШЁН"}</span><span>🏆 ${Number(r.winnersCount)} побед.</span></div>
-      <div class="raffle-card-prize">${escapeHtml(r.prizeTitle || "Stars")}</div>
+      <div class="raffle-card-top"><span>Winners: ${Number(r.winnersCount)}</span><span class="raffle-status">${r.status === "active" ? "Active" : "Inactive"}</span></div>
+      <div class="raffle-card-top" style="margin-top:6px"><span>Name: ${escapeHtml(r.prizeTitle || "Stars")}</span><span>${r.status === "active" ? formatRaffleCountdown(r.endsAt) : "Results: " + formatRaffleDate(r.endsAt)}</span></div>
+      <div class="raffle-card-prize">Prize:</div>
       <div class="raffle-card-amount">${Number(r.prizePool).toFixed(2)} ⭐</div>
-      <div class="raffle-card-meta"><span>${r.type === "paid" ? `Билет ${Number(r.ticketPrice).toFixed(2)} ⭐` : "Билет бесплатно"}</span><span>${formatRaffleCountdown(r.endsAt)}</span></div>
       <div class="raffle-card-bottom"><span>👥 ${Number(r.participants || 0)} участников · 🎟 ${Number(r.totalTickets || 0)} билетов</span><span class="raffle-arrow">›</span></div>
     `;
     el.onclick = () => openRaffleDetail(r.id);
@@ -563,21 +563,21 @@ function renderRaffleDetail(data) {
   const root = $("#raffleDetailRoot");
   root.innerHTML = `
     <div class="raffle-detail-banner ${ended ? 'finished' : ''}">
-      <div class="raffle-detail-badge">${ended ? 'РОЗЫГРЫШ ЗАВЕРШЁН' : 'РОЗЫГРЫШ'}</div>
       <div class="raffle-detail-prize">${escapeHtml(r.prizeTitle || 'Stars')}</div>
-      <div class="raffle-detail-fund">${Number(r.prizePool).toFixed(2)} ⭐</div>
-      <div class="raffle-detail-each">Каждому победителю ≈ ${each.toFixed(2)} ⭐</div>
+      <div class="raffle-detail-badge" style="margin-top:8px">${ended ? 'Inactive' : 'Active'}</div>
+      <div class="raffle-detail-fund" style="margin-top:14px">Results: ${formatRaffleDate(r.endsAt)}</div>
     </div>
     <div class="raffle-detail-grid">
-      <div><span>Тип</span><b>${r.type === 'paid' ? 'Платный' : 'Бесплатный'}</b></div>
+      <div><span>Prize</span><b>${Number(r.prizePool).toFixed(2)} ⭐</b></div>
+      <div><span>Winners</span><b>${r.winnersCount}</b></div>
+      <div><span>Participants</span><b>${Number(r.participants || 0)}</b></div>
       <div><span>Билет</span><b>${r.type === 'paid' ? Number(r.ticketPrice).toFixed(2) + ' ⭐' : 'Бесплатно'}</b></div>
-      <div><span>Победителей</span><b>${r.winnersCount}</b></div>
-      <div><span>До итогов</span><b>${ended ? '—' : formatRaffleCountdown(r.endsAt)}</b></div>
     </div>
+    <div class="raffle-detail-each">Каждому победителю ≈ ${each.toFixed(2)} ⭐ · ${ended ? '—' : formatRaffleCountdown(r.endsAt)}</div>
     <div class="raffle-channel-row"><a href="${escapeHtml(data.channelUrl)}" target="_blank" rel="noreferrer">📣 ${escapeHtml(r.channelTitle || r.channelUsername)}</a></div>
     ${mine ? `<div class="raffle-your-ticket"><b>Твои билеты: ${mine.tickets}</b><span>Оплачено: ${Number(mine.paidAmount).toFixed(2)} ⭐</span></div>` : ''}
     <div class="raffle-detail-actions">
-      ${ended ? '' : (!data.subscribed ? `<button class="confirm" id="raffleSubscribeBtn">📣 ПОДПИСАТЬСЯ НА КАНАЛ</button><button class="raffle-secondary-btn" id="raffleCheckSubscription">✅ Я ПОДПИСАЛСЯ — ПРОВЕРИТЬ</button>` : `<button class="confirm" id="raffleJoinBtn" ${mine ? 'disabled' : ''}>${mine ? 'ТЫ УЖЕ УЧАСТВУЕШЬ' : (r.type === 'paid' ? `УЧАСТВОВАТЬ · ${Number(r.ticketPrice).toFixed(2)} ⭐` : 'УЧАСТВОВАТЬ БЕСПЛАТНО')}</button>`)}
+      ${ended ? '' : (!data.subscribed ? `<button class="confirm" id="raffleSubscribeBtn">📣 ПОДПИСАТЬСЯ НА КАНАЛ</button><button class="raffle-secondary-btn" id="raffleCheckSubscription">✅ Я ПОДПИСАЛСЯ — ПРОВЕРИТЬ</button>` : `<button class="confirm" id="raffleJoinBtn" ${mine ? 'disabled' : ''}>${mine ? 'ТЫ УЖЕ УЧАСТВУЕШЬ' : (r.type === 'paid' ? `Join · ${Number(r.ticketPrice).toFixed(2)} ⭐` : 'Join')}</button>`)}
       ${ended ? '' : (Number(data.boostCount || 0) > 0 || localStorage.getItem(`raffle_boost_pending_${r.id}`) === '1'
         ? `<button class="raffle-secondary-btn" id="checkRaffleBoost">ПРОВЕРИТЬ БУСТ${data.boostCount ? ` · ${data.boostCount}` : ''}</button>`
         : `<a class="raffle-secondary-btn" id="giveRaffleBoost" href="${escapeHtml(data.boostUrl)}" target="_blank" rel="noreferrer">🚀 Дать буст каналу</a>`)}
@@ -1046,3 +1046,17 @@ setInterval(() => {
 
 // If the page is opened outside Telegram, the server will reject the session.
 if (!initData) setTimeout(handleNotTelegram, 500);
+
+// ---------- Design pass: profile shortcut + top-up/withdraw tab switching ----------
+const profileTopupBtn = $("#profileTopupBtn");
+if (profileTopupBtn) profileTopupBtn.onclick = () => $("#topupBtn").click();
+
+function switchToTopup() { closeModal(withdrawModal); $("#topupBtn").click(); }
+function switchToWithdraw() { closeModal(topupModal); $("#withdrawBtn").click(); }
+["tabGoWithdraw1", "tabGoWithdraw2"].forEach(id => { const b = $("#" + id); if (b) b.onclick = switchToWithdraw; });
+["tabGoTopup", "tabGoTopup2"].forEach(id => { const b = $("#" + id); if (b) b.onclick = switchToTopup; });
+
+// PVP card inside the Games grid jumps back to the PVP wheel view.
+document.querySelectorAll('.game-card[data-view]').forEach(btn => {
+  btn.onclick = () => setView(btn.dataset.view);
+});

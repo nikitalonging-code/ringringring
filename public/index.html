@@ -17,17 +17,17 @@
     </section>
 
     <div id="pvpView" class="view">
-      <section class="status">
-        <div class="timer-label" id="statusLabel">ОЖИДАЕМ ИГРОКА</div>
-        <div class="timer" id="timer">—</div>
+      <section class="wheel-top-info">
+        <div class="total-bank-label">Total bank:</div>
+        <div class="bank" id="bank">— <span>⭐</span></div>
       </section>
 
       <section class="wheel-wrap">
       <div class="pointer-orbit" id="pointerOrbit" aria-hidden="true"><div class="pointer"></div></div>
       <div class="wheel empty" id="wheel">
         <div class="wheel-inner">
-          <div class="bank-label">БАНК</div>
-          <div class="bank" id="bank">0 <span>⭐</span></div>
+          <div class="timer-label" id="statusLabel">ОЖИДАЕМ ИГРОКА</div>
+          <div class="timer" id="timer">—</div>
         </div>
       </div>
     </section>
@@ -59,16 +59,18 @@
     <div id="gamesView" class="view hidden">
       <div id="gamesList" class="games-list">
         <h2 class="games-title">ИГРЫ</h2>
-        <div class="games-tiles">
-          <button type="button" class="games-tile games-tile-pvp" id="openPvpFromGames" aria-label="PVP">
-            <span class="games-tile-wheel">wheel</span><span class="games-tile-pvp-text">PVP</span>
+        <div class="games-grid">
+          <button class="game-card" data-view="pvp">
+            <div class="game-card-icon">🎡</div>
+            <div class="game-card-name"><small>wheel</small>PVP</div>
           </button>
-          <button type="button" class="games-tile games-tile-upgrade" id="openUpgrade" aria-label="Upgrade">
-            <span>Upgrade</span>
+          <button class="game-card upgrade-card" id="openUpgrade">
+            <div class="game-card-icon">🛞</div>
+            <div class="game-card-name">Upgrade</div>
           </button>
-          <div class="games-tile-more">???????</div>
         </div>
-        <div class="games-coming">New modes will be<br>available very soon!</div>
+        <div class="games-locked-row">??????</div>
+        <div class="games-soon-hint">New modes will be<br>available very soon!</div>
       </div>
 
       <div id="upgradeGame" class="upgrade-game hidden">
@@ -89,27 +91,21 @@
 
         <div class="upgrade-inputs">
           <div class="input-row">
-            <input id="upgradeBet" type="number" min="1" step="1" inputmode="numeric" placeholder="Ставка">
+            <input id="upgradeBet" type="number" min="1" step="1" inputmode="numeric" placeholder="Сколько внести…">
             <span>⭐</span>
           </div>
+          <div class="swap-icon">⇅</div>
           <div class="input-row">
-            <input id="upgradeTarget" type="number" min="1" step="1" inputmode="numeric" placeholder="Цель">
+            <input id="upgradeTarget" type="number" min="1" step="1" inputmode="numeric" placeholder="Сколько получить…">
             <span>⭐</span>
           </div>
         </div>
 
-        <button class="bet-button" id="upgradeSpinBtn">КРУТИТЬ</button>
+        <button class="bet-button" id="upgradeSpinBtn">GO!</button>
       </div>
     </div>
 
     <section id="profileView" class="view hidden">
-      <div class="design-hotspots profile-hotspots" aria-hidden="false">
-        <button type="button" class="design-hotspot profile-hotspot-topup" id="designProfileTopup" aria-label="Пополнить"></button>
-        <button type="button" class="design-hotspot profile-hotspot-withdraw" id="designProfileWithdraw" aria-label="Вывод"></button>
-        <button type="button" class="design-hotspot profile-hotspot-refcopy" id="designProfileRefCopy" aria-label="Скопировать ссылку"></button>
-        <button type="button" class="design-hotspot profile-hotspot-refclaim" id="designProfileRefClaim" aria-label="Забрать награду"></button>
-        <button type="button" class="design-hotspot profile-hotspot-promo" id="designProfilePromo" aria-label="Активировать промокод"></button>
-      </div>
       <section class="profile-card">
         <div class="profile-main">
           <div class="avatar-large" id="profileAvatar"></div>
@@ -122,7 +118,14 @@
           <span>Баланс</span>
           <b id="profileBalance">0.00 ⭐</b>
         </div>
-        <button class="withdraw-btn" id="withdrawBtn">ВЫВОД СРЕДСТВ</button>
+        <div class="profile-icon-row">
+          <button class="profile-icon-btn" id="profileTopupBtn" aria-label="Пополнить">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8h18M3 8v9a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8M3 8l3-4h12l3 4"/><path d="M12 12v5m0 0-2.2-2.2M12 17l2.2-2.2"/></svg>
+          </button>
+          <button class="profile-icon-btn" id="withdrawBtn" aria-label="Вывод средств">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8h18M3 8v9a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8M3 8l3-4h12l3 4"/><path d="M12 17v-5m0 0 2.2 2.2M12 12l-2.2 2.2"/></svg>
+          </button>
+        </div>
       </section>
 
       <section class="stats-grid">
@@ -188,11 +191,22 @@
     </section>
 
     <nav class="bottom-nav">
-      <!-- SVG order: Giveaways, Games, Profile, PVP -->
-      <button class="nav-item" data-view="raffles" aria-label="Розыгрыши">🎁<small>Розыгрыши</small></button>
-      <button class="nav-item" data-view="games" aria-label="Игры">◉<small>Игры</small></button>
-      <button class="nav-item" data-view="profile" aria-label="Профиль">◇<small>Профиль</small></button>
-      <button class="nav-item active" data-view="pvp" aria-label="PVP">⚔<small>PVP</small></button>
+      <button class="nav-item" data-view="raffles">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 21h8M12 17v4M5 9h14l-1.2 5.2a2 2 0 0 1-2 1.8H8.2a2 2 0 0 1-2-1.8L5 9Z"/><path d="M12 9V5m0 0a2 2 0 1 0-2-2 2 2 0 0 0 2 2Zm0 0a2 2 0 1 1 2-2 2 2 0 0 1-2 2Z"/></svg>
+        <small>Розыгрыши</small>
+      </button>
+      <button class="nav-item" data-view="games">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="7" width="20" height="11" rx="5"/><path d="M7 10.5v4M5 12.5h4"/><circle cx="15.5" cy="11" r="1"/><circle cx="17.5" cy="13" r="1"/></svg>
+        <small>Игры</small>
+      </button>
+      <button class="nav-item" data-view="profile">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+        <small>Профиль</small>
+      </button>
+      <button class="nav-item active" data-view="pvp">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m14.5 3.5 6 6L9 21l-6-1.5L4.5 13 14.5 3.5Z"/><path d="m17.5 6.5-11 11M3 3l4 1M21 21l-4-1"/></svg>
+        <small>PVP</small>
+      </button>
     </nav>
   </main>
 
@@ -212,41 +226,47 @@
   <div class="modal hidden" id="topupModal">
     <div class="modal-card">
       <button class="modal-close" id="topupClose">×</button>
-      <h3>ПОПОЛНЕНИЕ</h3>
+      <div class="tab-toggle">
+        <button type="button" class="active" id="tabGoTopup">Пополнить</button>
+        <button type="button" id="tabGoWithdraw1">Вывод</button>
+      </div>
       <div class="input-row">
-        <input id="topupAmount" type="number" min="1" step="1" inputmode="numeric" placeholder="100">
+        <input id="topupAmount" type="number" min="1" step="1" inputmode="numeric" placeholder="Введите сумму…">
         <span>⭐</span>
       </div>
-      <button class="confirm" id="createInvoice">ОПЛАТИТЬ В TELEGRAM</button>
-      <p class="hint">Оплата проходит через официальный Telegram Stars invoice.</p>
+      <button class="confirm" id="createInvoice">Продолжить</button>
+      <p class="hint">Payment is made via the official Telegram Stars invoice.</p>
     </div>
   </div>
 
   <div class="modal hidden" id="withdrawModal">
     <div class="modal-card">
       <button class="modal-close" id="withdrawClose">×</button>
-      <h3>ВЫВОД СРЕДСТВ</h3>
+      <div class="tab-toggle">
+        <button type="button" id="tabGoTopup2">Пополнить</button>
+        <button type="button" class="active" id="tabGoWithdraw2">Вывод</button>
+      </div>
       <div class="currency-toggle">
         <button type="button" class="currency-option active" id="withdrawCurrencyStar">⭐ STAR</button>
         <button type="button" class="currency-option" id="withdrawCurrencyGram">💎 GRAM</button>
       </div>
       <div class="input-row">
-        <input id="withdrawAmount" type="number" min="1" step="1" inputmode="numeric" placeholder="100">
+        <input id="withdrawAmount" type="number" min="1" step="1" inputmode="numeric" placeholder="Введите сумму…">
         <span id="withdrawUnitLabel">⭐</span>
       </div>
       <div class="modal-balance">Баланс: <b id="withdrawModalBalance">0 ⭐</b></div>
-      <button class="confirm" id="confirmWithdraw">ОТПРАВИТЬ ЗАЯВКУ</button>
-      <p class="hint">Заявку обработает администратор вручную — деньги спишутся с баланса сразу после отправки.</p>
+      <button class="confirm" id="confirmWithdraw">Продолжить</button>
+      <p class="hint">The withdrawals are not carried out automatically. Your funds will be withdrawn after the administration's approval.</p>
     </div>
   </div>
 
   <div class="winner-overlay hidden" id="winnerOverlay">
     <div class="winner-card">
-      <div class="winner-crown">🏆</div>
-      <div class="winner-title">ПОБЕДИТЕЛЬ</div>
+      <div class="winner-crown">👑</div>
+      <div class="winner-title">Поздравляем!</div>
       <div class="winner-avatar" id="winnerAvatar"></div>
       <div class="winner-name" id="winnerName">Игрок</div>
-      <div class="winner-win-label">ВЫИГРЫШ</div>
+      <div class="winner-win-label">ВЫИГРЫШ:</div>
       <div class="winner-payout" id="winnerPayout">0 ⭐</div>
       <div class="winner-detail" id="winnerBetDetail">Ставка: 0 ⭐</div>
     </div>
@@ -265,8 +285,9 @@
 
   <div class="modal hidden" id="raffleCreateModal">
     <div class="modal-card raffle-modal-card">
+      <div class="sheet-handle"></div>
       <button class="modal-close" id="raffleCreateClose">×</button>
-      <h3>СОЗДАТЬ РОЗЫГРЫШ</h3>
+      <h3 style="display:block;color:#fff;font-size:16px;font-weight:900">СОЗДАТЬ РОЗЫГРЫШ</h3>
       <div class="raffle-type-toggle">
         <button type="button" class="raffle-type-option active" data-type="free">БЕСПЛАТНЫЙ</button>
         <button type="button" class="raffle-type-option" data-type="paid">ПЛАТНЫЙ</button>
