@@ -59,18 +59,16 @@
     <div id="gamesView" class="view hidden">
       <div id="gamesList" class="games-list">
         <h2 class="games-title">ИГРЫ</h2>
-        <button class="game-card" id="openUpgrade">
-          <div class="game-card-icon">⚡</div>
-          <div class="game-card-info">
-            <div class="game-card-name">Апгрейд</div>
-            <div class="game-card-desc">Выбери ставку и цель — рискни удвоить Stars</div>
-          </div>
-          <div class="game-card-arrow">›</div>
-        </button>
-      </div>
-      <div class="design-hotspots game-hotspots" aria-hidden="false">
-        <button type="button" class="design-hotspot game-hotspot-pvp" id="designGamePvp" aria-label="PVP"></button>
-        <button type="button" class="design-hotspot game-hotspot-upgrade" id="designGameUpgrade" aria-label="Upgrade"></button>
+        <div class="games-tiles">
+          <button type="button" class="games-tile games-tile-pvp" id="openPvpFromGames" aria-label="PVP">
+            <span class="games-tile-wheel">wheel</span><span class="games-tile-pvp-text">PVP</span>
+          </button>
+          <button type="button" class="games-tile games-tile-upgrade" id="openUpgrade" aria-label="Upgrade">
+            <span>Upgrade</span>
+          </button>
+          <div class="games-tile-more">???????</div>
+        </div>
+        <div class="games-coming">New modes will be<br>available very soon!</div>
       </div>
 
       <div id="upgradeGame" class="upgrade-game hidden">

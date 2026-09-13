@@ -356,37 +356,28 @@ function renderWheel(s) {
 function setView(view) {
   const views = { pvp: $("#pvpView"), raffles: $("#rafflesView"), games: $("#gamesView"), profile: $("#profileView") };
   const activeKey = views[view] ? view : "pvp";
-
   Object.values(views).forEach(el => el.classList.add("hidden"));
   views[activeKey].classList.remove("hidden");
-
-  if (activeKey === "profile") loadProfile();
+  const upgrade = $("#upgradeGame");
+  if (upgrade && activeKey !== "games") {
+    upgrade.classList.add("hidden");
+    $("#gamesList")?.classList.remove("hidden");
+  }
+  if (activeKey === "profile") {
+    loadProfile();
+    if (isAdmin) scheduleAdminRefresh(80);
+  }
   if (activeKey === "raffles") loadRaffles();
-
-  document.querySelectorAll(".nav-item").forEach(btn => {
-    btn.classList.toggle("active", btn.dataset.view === activeKey);
-  });
+  document.querySelectorAll(".nav-item").forEach(btn => btn.classList.toggle("active", btn.dataset.view === activeKey));
 }
 
 document.querySelectorAll(".nav-item").forEach(btn => {
   btn.addEventListener("click", () => setView(btn.dataset.view));
 });
 
-// Exact SVG design hit-targets: visuals come from the SVG, mechanics remain the original DOM handlers.
-const designGamePvp = document.getElementById("designGamePvp");
-if (designGamePvp) designGamePvp.addEventListener("click", () => setView("pvp"));
-const designGameUpgrade = document.getElementById("designGameUpgrade");
-if (designGameUpgrade) designGameUpgrade.addEventListener("click", openUpgrade);
-const designProfileTopup = document.getElementById("designProfileTopup");
-if (designProfileTopup) designProfileTopup.addEventListener("click", () => document.getElementById("topupBtn")?.click());
-const designProfileWithdraw = document.getElementById("designProfileWithdraw");
-if (designProfileWithdraw) designProfileWithdraw.addEventListener("click", () => document.getElementById("withdrawBtn")?.click());
-const designProfileRefCopy = document.getElementById("designProfileRefCopy");
-if (designProfileRefCopy) designProfileRefCopy.addEventListener("click", () => document.getElementById("copyReferral")?.click());
-const designProfileRefClaim = document.getElementById("designProfileRefClaim");
-if (designProfileRefClaim) designProfileRefClaim.addEventListener("click", () => document.getElementById("claimReferral")?.click());
-const designProfilePromo = document.getElementById("designProfilePromo");
-if (designProfilePromo) designProfilePromo.addEventListener("click", () => document.getElementById("activatePromo")?.click());
+// Real DOM controls for the current design.
+const openPvpFromGames = document.getElementById("openPvpFromGames");
+if (openPvpFromGames) openPvpFromGames.addEventListener("click", () => setView("pvp"));
 
 async function loadProfile() {
   if (!initData) return handleNotTelegram();

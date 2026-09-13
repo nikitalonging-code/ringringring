@@ -199,3 +199,100 @@ body{overflow-x:hidden!important}
 #profileView .profile-card .avatar-large{visibility:visible!important;pointer-events:none!important}
 #profileView .design-hotspots{pointer-events:none!important}
 #profileView .profile-hotspots .design-hotspot{pointer-events:auto!important}
+
+/* ===== v10 stable UI: real DOM controls, SVG is reference only ===== */
+html, body { background:#000 !important; }
+body { overflow-x:hidden !important; }
+.app{width:min(100%,402px)!important;max-width:402px!important;min-height:100vh!important;height:auto!important;margin:0 auto!important;padding:0 0 88px!important;background:#0d0e0f!important;position:relative!important;overflow:hidden!important}
+.view{position:relative!important;inset:auto!important;width:100%!important;height:auto!important;min-height:786px!important;padding:72px 16px 94px!important;margin:0!important;overflow:auto!important;background-image:none!important;background-color:#0d0e0f!important}
+#pvpView,#gamesView,#profileView,#rafflesView{background-image:linear-gradient(180deg,#0d0e0f 0%,#171305 100%)!important}
+#upgradeGame{background-image:linear-gradient(180deg,#0d0e0f 0%,#171305 100%)!important;position:absolute!important;inset:0!important;width:100%!important;height:100%!important;min-height:786px!important;overflow:auto!important;padding:72px 16px 94px!important}
+
+/* One balance only */
+.balance-row{position:fixed!important;z-index:120!important;left:50%!important;top:10px!important;transform:translateX(-50%)!important;width:auto!important;height:auto!important;margin:0!important;pointer-events:none!important}
+.balance-row .balance{pointer-events:none!important;position:static!important;transform:none!important;background:#090a0b!important;border:1px solid #ffd21c!important;border-radius:18px!important;padding:4px 15px!important;font-size:13px!important;line-height:20px!important;height:31px!important;min-width:86px!important;color:#fff!important;box-shadow:0 0 0 1px rgba(255,201,21,.08)!important}
+.balance-row .topup{display:none!important}
+
+/* PVP */
+#pvpView{display:flex!important;flex-direction:column!important;align-items:center!important;gap:0!important}
+#pvpView .status{opacity:1!important;pointer-events:none!important;text-align:center!important;margin:12px 0 8px!important}
+#pvpView .timer-label{font-size:11px!important;color:#fff!important;font-weight:900!important}
+#pvpView .timer{height:22px!important;font-size:16px!important;padding-top:2px!important}
+#pvpView .wheel-wrap{position:relative!important;left:auto!important;top:auto!important;width:290px!important;height:290px!important;margin:14px auto 20px!important;opacity:1!important;pointer-events:none!important}
+#pvpView .wheel{width:100%!important;height:100%!important;padding:36px!important}
+#pvpView .bet-under-wheel{position:relative!important;left:auto!important;top:auto!important;width:214px!important;height:66px!important;margin:0 auto 12px!important;opacity:1!important;z-index:70!important;pointer-events:auto!important}
+#pvpView .players-section{position:relative!important;left:auto!important;top:auto!important;width:316px!important;height:auto!important;max-height:220px!important;margin:0 auto!important;opacity:1!important;pointer-events:auto!important;z-index:71!important;background:rgba(24,24,24,.82)!important;border:1px solid rgba(255,255,255,.12)!important;border-radius:18px!important;padding:12px!important;box-sizing:border-box!important}
+#pvpView .players-section h2{font-size:11px!important;margin:0 0 7px!important;color:#fff!important;text-transform:uppercase!important}
+#pvpView .players{max-height:155px!important;overflow:auto!important}
+#pvpView .player{padding:9px 10px!important;grid-template-columns:30px 1fr auto!important;font-size:10px!important}
+#pvpView .player .meta{font-size:9px!important}
+#pvpView .empty-players{font-size:10px!important}
+
+/* Games: real DOM tiles, no invisible hotspots */
+#gamesView{padding-top:62px!important}
+#gamesView #gamesList{position:relative!important;width:100%!important;height:auto!important;margin:0!important;z-index:20!important}
+#gamesView .games-title{display:none!important}
+.games-tiles{display:grid!important;grid-template-columns:1.9fr 1fr!important;gap:8px!important}
+.games-tile{border:1px solid rgba(255,255,255,.12)!important;border-radius:24px!important;min-height:235px!important;color:#fff!important;display:flex!important;align-items:center!important;justify-content:center!important;position:relative!important;overflow:hidden!important;font-weight:900!important}
+.games-tile-pvp{background:radial-gradient(circle at 35% 30%,rgba(255,60,60,.33),transparent 34%),linear-gradient(145deg,#790000,#240000)!important}
+.games-tile-upgrade{background:radial-gradient(circle at 65% 35%,rgba(70,120,255,.33),transparent 34%),linear-gradient(145deg,#123eaa,#061a58)!important}
+.games-tile-pvp-text{font-size:56px!important;align-self:flex-end!important;margin:0 18px 12px 0!important}
+.games-tile-wheel{position:absolute!important;left:16px!important;top:16px!important;font-size:10px!important;opacity:.75!important;transform:rotate(-90deg)!important}
+.games-tile-upgrade span{font-size:28px!important;writing-mode:vertical-rl!important;transform:rotate(180deg)!important}
+.games-tile-more{grid-column:1 / -1!important;height:126px!important;border-radius:24px!important;background:linear-gradient(145deg,#171717,#242424)!important;border:1px solid #2e2e2e!important;color:#090909!important;display:flex!important;align-items:center!important;justify-content:center!important;font-size:46px!important;letter-spacing:2px!important}
+.games-coming{text-align:center!important;color:#38331a!important;font-weight:900!important;font-size:20px!important;margin-top:142px!important;line-height:1.25!important}
+#gamesView .design-hotspots{display:none!important}
+
+/* Upgrade functional layout */
+#upgradeGame .upgrade-header{position:static!important;display:flex!important;opacity:1!important;pointer-events:auto!important;align-items:center!important;justify-content:center!important;margin:0 0 8px!important}
+#upgradeGame .upgrade-back{position:absolute!important;left:16px!important;top:60px!important;opacity:1!important;pointer-events:auto!important}
+#upgradeGame .upgrade-title{font-size:16px!important;opacity:1!important}
+#upgradeGame .upgrade-wheel-wrap{position:relative!important;left:auto!important;top:auto!important;width:290px!important;height:290px!important;margin:15px auto 18px!important;opacity:1!important;pointer-events:none!important}
+#upgradeGame .upgrade-inputs{position:relative!important;left:auto!important;top:auto!important;width:100%!important;height:auto!important;display:block!important;margin:0!important}
+#upgradeGame .upgrade-inputs .input-row{position:relative!important;left:auto!important;top:auto!important;width:100%!important;height:48px!important;margin:0 0 10px!important;background:#1b1c1e!important;border:1px solid #2d3034!important;border-radius:16px!important;padding:0 12px!important}
+#upgradeGame #upgradeSpinBtn{position:relative!important;left:auto!important;top:auto!important;width:170px!important;height:48px!important;display:block!important;margin:8px auto 0!important}
+
+/* Profile: use real DOM as the sole content */
+#profileView{padding-top:60px!important;overflow-y:auto!important}
+#profileView .design-hotspots{display:none!important}
+#profileView .profile-card{position:relative!important;left:auto!important;top:auto!important;width:100%!important;height:auto!important;margin:0 0 10px!important;padding:20px!important;background:linear-gradient(145deg,#2d2710,#151515)!important;border-radius:24px!important;border:1px solid rgba(255,201,21,.14)!important;box-shadow:none!important;pointer-events:auto!important}
+#profileView .profile-main{position:relative!important;left:auto!important;top:auto!important;width:100%!important;height:auto!important;display:block!important;text-align:center!important}
+#profileView .avatar-large{position:relative!important;left:auto!important;top:auto!important;width:94px!important;height:94px!important;margin:0 auto 8px!important;border-radius:50%!important;background:#d8d8d8!important}
+#profileView .profile-main>div:last-child{position:static!important;width:auto!important}
+#profileView .profile-name{font-size:17px!important;font-weight:900!important}
+#profileView .profile-username{font-size:14px!important;color:#fff!important}
+#profileView .profile-balance{display:none!important}
+#profileView .withdraw-btn{display:block!important;width:150px!important;margin:12px auto 0!important;border:0!important;border-radius:22px!important;background:#5a4c15!important;color:#fff!important;padding:11px!important;font-weight:900!important}
+#profileView .stats-grid{position:relative!important;left:auto!important;top:auto!important;width:100%!important;height:auto!important;margin:0 0 10px!important;grid-template-columns:repeat(3,1fr)!important;gap:6px!important}
+#profileView .stats-grid .profile-stat{display:flex!important;padding:12px 5px!important;background:#1b2832!important;border:0!important;border-radius:20px!important}
+#profileView .stats-grid .profile-stat:nth-child(4){display:none!important}
+#profileView .referral-card{position:relative!important;left:auto!important;top:auto!important;width:100%!important;height:auto!important;margin:0 0 10px!important;background:linear-gradient(145deg,#0d3812,#071c0c)!important;border:0!important;box-shadow:none!important;border-radius:22px!important;padding:18px!important;visibility:visible!important}
+#profileView .profile-info{display:none!important}
+#profileView .promo-card{position:relative!important;left:auto!important;top:auto!important;width:100%!important;height:auto!important;margin:0 0 10px!important;border:0!important;background:linear-gradient(145deg,#2e1111,#180909)!important;box-shadow:none!important;padding:14px!important;border-radius:18px!important;visibility:visible!important}
+#profileView .promo-title{font-size:14px!important;text-align:left!important}
+#profileView .promo-subtitle{display:none!important}
+#profileView .promo-row{display:flex!important;gap:7px!important;margin-top:8px!important}
+#profileView .promo-row input{display:block!important;flex:1!important;min-width:0!important;background:#0e0f11!important;border:1px solid #34383f!important;color:#fff!important;border-radius:12px!important;padding:11px!important;font-size:11px!important}
+#profileView .promo-row button{display:block!important;border:0!important;background:#ffc915!important;color:#111!important;border-radius:12px!important;padding:0 12px!important;font-size:10px!important;font-weight:900!important}
+
+/* Admin restored */
+#profileView .admin-panel{display:block!important;position:relative!important;left:auto!important;top:auto!important;width:100%!important;margin-top:10px!important;visibility:visible!important}
+
+/* Raffles: real DOM only */
+#rafflesView{padding-top:62px!important;overflow-y:auto!important}
+#rafflesView .raffles-head{position:relative!important;left:auto!important;right:auto!important;top:auto!important;display:flex!important;align-items:center!important;justify-content:space-between!important;margin:0 0 12px!important;z-index:30!important}
+#rafflesView .raffles-head h2{font-size:18px!important;margin:0!important}
+#rafflesView .raffle-create-btn{display:block!important;padding:10px 12px!important;border:0!important;border-radius:18px!important;background:#ffc915!important;color:#111!important;font-size:10px!important;font-weight:900!important}
+#rafflesView .raffle-cards{position:relative!important;left:auto!important;top:auto!important;width:100%!important;height:auto!important;display:grid!important;gap:10px!important;margin:0!important;z-index:20!important}
+#rafflesView .raffle-card{min-height:150px!important;background:linear-gradient(145deg,#2c2813,#171717)!important;border:1px solid rgba(255,201,21,.08)!important;border-radius:28px!important;padding:16px!important}
+#rafflesView .raffle-card.finished{opacity:.62!important}
+
+/* Nav is real DOM */
+.bottom-nav{position:fixed!important;left:50%!important;bottom:7px!important;transform:translateX(-50%)!important;width:388px!important;height:54px!important;background:rgba(40,40,40,.92)!important;border:1px solid rgba(255,255,255,.22)!important;border-radius:28px!important;display:grid!important;grid-template-columns:repeat(4,1fr)!important;padding:0!important;z-index:150!important}
+.bottom-nav .nav-item{width:auto!important;height:54px!important;background:transparent!important;border:0!important;color:#a8a8a8!important;font-size:19px!important;padding:0!important;margin:0!important;display:flex!important;flex-direction:column!important;align-items:center!important;justify-content:center!important}
+.bottom-nav .nav-item small{color:#a8a8a8!important;font-size:9px!important;margin-top:3px!important}
+.bottom-nav .nav-item.active{color:#ffc915!important}
+.bottom-nav .nav-item.active small{color:#ffc915!important}
+
+/* Never let hidden SVG hotspot layers intercept real controls */
+.design-hotspots,.design-hotspot{display:none!important;pointer-events:none!important}
