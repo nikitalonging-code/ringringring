@@ -105,9 +105,14 @@ body{overflow-x:hidden!important}
 #upgradeGame{position:absolute!important;inset:0!important;width:var(--ring-w)!important;height:var(--ring-h)!important;margin:0!important;padding:0!important;overflow:hidden!important;background-image:url('/ring-design.svg')!important;background-repeat:no-repeat!important;background-size:3391px 1875px!important;background-position:-1737px 0!important;background-color:#000!important}
 
 /* Prevent old layout from colliding with the artwork. */
-#pvpView .status,#pvpView .players-section{opacity:0!important;pointer-events:none!important}
-#pvpView .bet-under-wheel{position:absolute!important;left:95px!important;top:496px!important;width:212px!important;height:66px!important;margin:0!important;opacity:0!important;z-index:70!important;pointer-events:auto!important}
-#pvpView .bet-under-wheel .bet-button{width:100%!important;height:100%!important}
+#pvpView .status{opacity:0!important;pointer-events:none!important}
+#pvpView .players-section{position:absolute!important;left:43px!important;top:560px!important;width:316px!important;height:120px!important;opacity:1!important;pointer-events:auto!important;z-index:71!important;background:rgba(24,24,24,.72)!important;border:1px solid rgba(255,255,255,.12)!important;border-radius:18px!important;padding:12px!important;box-sizing:border-box!important}
+#pvpView .players-section h2{font-size:10px!important;margin:0 0 6px!important;color:#fff!important}
+#pvpView .players{max-height:78px!important;overflow:auto!important}
+#pvpView .empty-players{font-size:10px!important;color:#aaa!important}
+#pvpView .player-row{font-size:10px!important;min-height:24px!important}
+#pvpView .bet-under-wheel{position:absolute!important;left:94px!important;top:496px!important;width:214px!important;height:66px!important;margin:0!important;opacity:1!important;z-index:70!important;pointer-events:auto!important}
+#pvpView .bet-under-wheel .bet-button{width:100%!important;height:100%!important;background:#ffc915!important;color:#111!important;border:0!important;border-radius:34px!important;font-weight:950!important;font-size:17px!important;box-shadow:0 5px 18px rgba(255,201,21,.18)!important}
 #pvpView .wheel-wrap{position:absolute!important;left:56px!important;top:89px!important;width:290px!important;height:290px!important;margin:0!important;opacity:0!important;pointer-events:none!important}
 #pvpView[data-state="SPINNING"] .wheel-wrap,#pvpView[data-state="RESULT"] .wheel-wrap{opacity:1!important}
 
@@ -117,8 +122,8 @@ body{overflow-x:hidden!important}
 #gamesView #gamesList .games-title{display:none!important}
 .design-hotspots{position:absolute!important;inset:0!important;z-index:75!important;pointer-events:none!important}
 .design-hotspot{position:absolute!important;display:block!important;border:0!important;background:transparent!important;padding:0!important;margin:0!important;cursor:pointer!important;pointer-events:auto!important;-webkit-tap-highlight-color:transparent!important}
-.game-hotspot-pvp{left:18px!important;top:113px!important;width:236px!important;height:236px!important}
-.game-hotspot-upgrade{left:155px!important;top:113px!important;width:235px!important;height:236px!important}
+.game-hotspot-pvp{left:18px!important;top:113px!important;width:235px!important;height:236px!important}
+.game-hotspot-upgrade{left:277px!important;top:113px!important;width:125px!important;height:236px!important}
 
 /* Upgrade: exact controls on the SVG. */
 #upgradeGame .upgrade-header{position:absolute!important;inset:0!important;opacity:0!important;pointer-events:none!important;z-index:20!important}
@@ -166,8 +171,11 @@ body{overflow-x:hidden!important}
 .profile-hotspot-promo{left:330px!important;top:715px!important;width:34px!important;height:35px!important}
 
 /* Raffles visual cards follow the SVG positions, but real cards remain interactive. */
-#rafflesView .raffles-head{display:none!important}
-#rafflesView .raffle-cards{position:absolute!important;left:32px!important;top:60px!important;width:338px!important;height:320px!important;display:grid!important;grid-template-columns:1fr!important;gap:10px!important;margin:0!important;z-index:20!important}
+#rafflesView .raffles-head{position:absolute!important;left:18px!important;right:18px!important;top:28px!important;display:flex!important;align-items:center!important;justify-content:space-between!important;z-index:30!important}
+#rafflesView .raffles-head h2{font-size:16px!important;margin:0!important;color:#fff!important}
+#rafflesView .raffles-head .raffles-kicker{display:none!important}
+#rafflesView .raffle-create-btn{display:block!important;padding:10px 12px!important;border:1px solid #ffc915!important;border-radius:18px!important;background:#ffc915!important;color:#111!important;font-size:10px!important;font-weight:900!important;white-space:nowrap!important}
+#rafflesView .raffle-cards{position:absolute!important;left:32px!important;top:86px!important;width:338px!important;height:320px!important;display:grid!important;grid-template-columns:1fr!important;gap:10px!important;margin:0!important;z-index:20!important}
 #rafflesView .raffle-card{min-height:150px!important;background:rgba(43,37,16,.80)!important;border:0!important;border-radius:28px!important;padding:17px!important;text-align:left!important;box-shadow:none!important}
 #rafflesView .raffle-card-glow{display:none!important}
 #rafflesView .raffle-card-top{font-size:8px!important}.raffle-card-prize{font-size:23px!important;text-align:center!important}.raffle-card-amount{font-size:18px!important;text-align:center!important}.raffle-card-meta,.raffle-card-bottom{font-size:8px!important}

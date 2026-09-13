@@ -190,10 +190,11 @@
     </section>
 
     <nav class="bottom-nav">
-      <button class="nav-item" data-view="raffles">🎁<small>Розыгрыши</small></button>
-      <button class="nav-item active" data-view="pvp">👥<small>PVP</small></button>
-      <button class="nav-item" data-view="games">🎮<small>Игры</small></button>
-      <button class="nav-item" data-view="profile">◉<small>Профиль</small></button>
+      <!-- SVG order: Giveaways, Games, Profile, PVP -->
+      <button class="nav-item" data-view="raffles" aria-label="Розыгрыши">🎁<small>Розыгрыши</small></button>
+      <button class="nav-item" data-view="games" aria-label="Игры">◉<small>Игры</small></button>
+      <button class="nav-item" data-view="profile" aria-label="Профиль">◇<small>Профиль</small></button>
+      <button class="nav-item active" data-view="pvp" aria-label="PVP">⚔<small>PVP</small></button>
     </nav>
   </main>
 
