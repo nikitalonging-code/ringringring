@@ -1,0 +1,181 @@
+*{box-sizing:border-box}
+:root{--bg:#111315;--card:#191b1d;--yellow:#ffc915;--text:#f5f5f5;--muted:#9a9ca1;--green:#19e58f}
+html,body{margin:0;background:#0b0c0e;color:var(--text);font-family:Arial,Helvetica,sans-serif}
+body{min-height:100vh}
+button,input{font:inherit}
+button{cursor:pointer}
+.app{width:min(100%,600px);min-height:100vh;margin:auto;background:#111315;padding:18px 14px calc(108px + env(safe-area-inset-bottom));position:relative;overflow:hidden}
+.balance-row{display:flex;align-items:center;justify-content:center;gap:10px;margin:12px 0 18px}
+.muted{font-size:27px;opacity:.65;margin-right:auto}
+.balance{background:#08090a;border-radius:14px;padding:12px 16px;font-size:20px;font-weight:900;min-width:82px;text-align:center}
+.balance span:last-child,.bank span{color:#ffd21c}
+.topup{border:2px solid #ffd21c;background:transparent;color:#fff;border-radius:24px;padding:9px 15px;font-weight:900}
+.status{text-align:center;margin:0 0 8px}
+.timer-label{font-size:15px;color:#ffb915;font-weight:900;letter-spacing:.5px}
+.timer{height:34px;font-size:25px;font-weight:900;padding-top:4px}
+.wheel-wrap{position:relative;width:min(88vw,470px);aspect-ratio:1;margin:2px auto 20px;display:grid;place-items:center}
+.wheel{width:100%;height:100%;border-radius:50%;padding:36px;background:#5f6062;box-shadow:0 0 0 5px #050607,0 10px 45px rgba(0,0,0,.5);position:relative;transition:transform 5.8s cubic-bezier(.12,.75,.12,1);overflow:hidden}
+.wheel.empty{background:#66686b;box-shadow:0 0 0 5px #0c0d0e,0 10px 45px rgba(0,0,0,.5)}
+.wheel.empty .wheel-inner{background:#17181a;border:8px solid #3f4144}
+.wheel-inner{position:relative;z-index:2;width:100%;height:100%;border-radius:50%;background:#151719;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.wheel.empty .wheel-inner{background:#17181a}
+.bank-label{font-size:25px;font-weight:900;color:#858585}
+.bank{font-size:32px;font-weight:900;margin-top:2px}
+.pointer-orbit{position:absolute;inset:0;z-index:5;border-radius:50%;pointer-events:none;transform:rotate(0deg);transform-origin:50% 50%;transition:transform .35s ease}
+#upgradePointerOrbit{opacity:0;transition:transform .35s ease,opacity .2s ease}
+.pointer{position:absolute;top:-3px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:17px solid transparent;border-right:17px solid transparent;border-bottom:34px solid #ff9f00;filter:drop-shadow(0 3px 2px #000)}
+.bet-under-wheel{margin:0 0 20px}.bet-button,.confirm{width:100%;border:0;border-radius:16px;background:var(--yellow);color:#111;font-weight:900;font-size:19px;padding:19px;box-shadow:0 7px 25px rgba(255,201,21,.18)}
+.bet-button:disabled,.confirm:disabled{opacity:.55;cursor:not-allowed}
+.players-section{margin-top:8px}.players-section h2,.admin-panel h2{text-align:center;color:#ffb915;font-size:18px;margin:10px 0 14px}
+.players{display:grid;gap:10px}.empty-players{background:#191b1e;border:1px solid #272a2d;border-radius:15px;padding:18px;text-align:center;color:#777;font-weight:700}
+.player{background:#191b1e;border-radius:15px;padding:13px 14px;border:1px solid #272a2d;display:grid;grid-template-columns:38px 1fr auto;align-items:center;gap:10px}.dot{width:28px;height:28px;border-radius:50%;box-shadow:0 0 15px currentColor}.pname{font-weight:800}.meta{color:#bfc0c2;font-size:14px;margin-top:4px}.status-win{color:#5cffb0;font-weight:900}.status-loss{color:#999}
+.hidden{display:none!important}
+.admin-panel{margin-top:28px;background:#151719;border:1px solid #32353a;border-radius:18px;padding:15px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+.admin-title-row{display:flex;align-items:center;justify-content:space-between;gap:10px}.admin-title-row h2{margin:0 0 12px}.admin-badge{font-size:11px;font-weight:900;background:#ffca16;color:#111;border-radius:12px;padding:5px 8px}
+.admin-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}.admin-stat{background:#1c1f22;border-radius:12px;padding:10px;text-align:center}.admin-stat b{display:block;font-size:18px;margin-bottom:3px}.admin-stat span{font-size:11px;color:#8f9398}
+.admin-search-row{display:flex;gap:8px;margin-bottom:10px}.admin-search-row input{flex:1;background:#0e0f11;border:1px solid #31353a;color:#fff;border-radius:12px;padding:12px;outline:none}.admin-search-row button{width:46px;border:0;border-radius:12px;background:#292c30;color:#fff;font-size:22px}
+.admin-users{display:grid;gap:8px}.admin-user{background:#1b1e21;border:1px solid #2c3035;border-radius:13px;padding:11px}.admin-user-head{display:flex;justify-content:space-between;gap:8px}.admin-user-id{font-size:11px;color:#777}.admin-user-name{font-weight:900}.admin-balance{margin:8px 0;font-size:16px;font-weight:900}.admin-actions{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px}.admin-actions input{width:100%;min-width:0;background:#0f1012;border:1px solid #33373c;border-radius:9px;color:#fff;padding:8px}.admin-actions button{border:0;border-radius:9px;padding:8px;font-weight:900}.add-btn{background:#19e58f;color:#101}.remove-btn{background:#ff7b7b;color:#111}.ban-btn{background:#30343a;color:#fff}.ban-btn.unban{background:#4b6cff}
+.bottom-nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:min(100%,600px);height:76px;background:rgba(36,38,40,.97);display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid #343638;padding-bottom:env(safe-area-inset-bottom);z-index:10}.bottom-nav div{display:flex;flex-direction:column;align-items:center;justify-content:center;color:#aaa;font-size:23px}.bottom-nav small{font-size:12px;margin-top:4px}.bottom-nav .active{color:#ffc915}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:30;display:grid;place-items:center;padding:20px}.modal-card{width:min(100%,420px);background:#191b1e;border-radius:22px;padding:24px;position:relative;box-shadow:0 20px 60px rgba(0,0,0,.5)}.modal-card h3{text-align:center;margin:4px 0 20px}.modal-close{position:absolute;right:12px;top:8px;background:none;border:0;color:#aaa;font-size:28px}.input-row{display:flex;align-items:center;background:#0e0f11;border-radius:14px;padding:0 14px;margin-bottom:10px}.input-row input{width:100%;border:0;outline:0;background:transparent;color:white;padding:17px 4px;font-size:22px;font-weight:800}.input-row span{font-size:20px}.modal-balance{text-align:center;color:#9ea1a7;margin-bottom:12px;font-size:13px}.hint{color:#888;font-size:12px;line-height:1.4;text-align:center}.toast{position:fixed;left:50%;bottom:92px;transform:translate(-50%,20px);background:#222;color:white;padding:11px 15px;border-radius:12px;opacity:0;pointer-events:none;transition:.2s;z-index:50;max-width:90%;text-align:center}.toast.show{opacity:1;transform:translate(-50%,0)}
+@media(max-width:420px){.wheel{padding:30px}.wheel.empty .wheel-inner{border-width:7px}.bank{font-size:28px}.bank-label{font-size:22px}.admin-actions{grid-template-columns:1fr 1fr}.admin-actions .ban-btn{grid-column:1/-1}}
+
+/* ---------- Games / Upgrade ---------- */
+.games-list{margin-top:8px}
+.games-title{text-align:center;color:#ffb915;font-size:18px;margin:10px 0 16px}
+.game-card{width:100%;display:grid;grid-template-columns:52px 1fr 20px;align-items:center;gap:12px;background:#191b1e;border:1px solid #272a2d;border-radius:16px;padding:14px;text-align:left;color:#fff}
+.game-card-icon{width:52px;height:52px;border-radius:14px;background:linear-gradient(145deg,#2a2410,#16140a);display:grid;place-items:center;font-size:24px;box-shadow:0 0 18px rgba(255,201,21,.15)}
+.game-card-name{font-weight:900;font-size:16px}
+.game-card-desc{color:#9a9ca1;font-size:12px;margin-top:3px;line-height:1.35}
+.game-card-arrow{font-size:22px;color:#6c6f74;text-align:center}
+.upgrade-game{margin-top:6px}
+.upgrade-header{display:flex;align-items:center;gap:10px;margin:6px 0 14px}
+.upgrade-back{border:0;background:#1c1f22;color:#fff;font-weight:800;border-radius:12px;padding:9px 13px;font-size:14px}
+.upgrade-title{flex:1;text-align:center;margin-right:52px;color:#ffb915;font-weight:900;font-size:16px;letter-spacing:.5px}
+.upgrade-wheel-wrap{margin:2px auto 22px}
+.upgrade-wheel{background:conic-gradient(from -90deg,#ffc915 0%,#141517 0%)}
+.upgrade-inputs{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+.upgrade-inputs .input-row{margin-bottom:0}
+#upgradeBannerCard.lose .winner-payout{color:#ff6b6b;text-shadow:0 0 22px rgba(255,107,107,.35)}
+#upgradeBannerCard.lose .winner-title{color:#ff8a8a}
+#upgradeBannerCard.win .winner-payout{color:#ffc915}
+
+/* ---------- Profile / referrals / winner ---------- */
+.view{width:100%}
+.profile-card{background:linear-gradient(145deg,#1b1e22,#121416);border:1px solid #2c3035;border-radius:22px;padding:18px;margin-top:8px;box-shadow:0 14px 40px rgba(0,0,0,.25)}
+.profile-main{display:flex;align-items:center;gap:14px}.avatar-large{width:72px;height:72px;border-radius:50%;overflow:hidden;border:3px solid #ffc915;background:#24272b;display:grid;place-items:center;flex:none;box-shadow:0 0 22px rgba(255,201,21,.18)}.avatar-large img,.winner-avatar img{width:100%;height:100%;object-fit:cover}.profile-fallback{font-size:30px}.profile-name{font-size:23px;font-weight:900}.profile-username{color:#8e949c;margin-top:5px}.profile-balance{display:flex;justify-content:space-between;gap:10px;border-top:1px solid #2b2f34;margin-top:16px;padding-top:14px;color:#969ca4}.profile-balance b{color:#fff}
+.withdraw-btn{width:100%;margin-top:12px;border:2px solid #ffd21c;background:transparent;color:#fff;border-radius:14px;padding:13px;font-weight:900;font-size:14px;letter-spacing:.02em}
+.currency-toggle{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+.currency-option{border:2px solid #2b2f34;background:#0e0f11;color:#9ea1a7;border-radius:14px;padding:12px;font-weight:900;font-size:14px}
+.currency-option.active{border-color:#ffc915;color:#ffc915;background:rgba(255,201,21,.08)}
+.stats-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:9px;margin-top:10px}.profile-stat{background:#191c20;border:1px solid #292d33;border-radius:16px;padding:14px;text-align:center}.profile-stat b{display:block;font-size:19px}.profile-stat span{display:block;color:#8f949c;font-size:12px;margin-top:4px}
+.referral-card{margin-top:12px;background:linear-gradient(145deg,#202329,#17191c);border:1px solid #34383e;border-radius:20px;padding:16px;box-shadow:0 12px 30px rgba(0,0,0,.22)}.referral-title{font-weight:900;color:#ffc915;font-size:17px}.referral-subtitle{font-size:13px;color:#b9bec5;line-height:1.45;margin-top:6px}.referral-amounts{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:14px}.referral-amounts div{background:#121416;border-radius:12px;padding:10px 7px;text-align:center}.referral-amounts span{display:block;font-size:10px;color:#858b93;margin-bottom:4px}.referral-amounts b{font-size:13px}.referral-link-row{display:flex;gap:7px;margin-top:12px}.referral-link-row input{width:100%;min-width:0;background:#0f1012;border:1px solid #33383f;border-radius:11px;color:#dce0e5;padding:11px;font-size:12px;outline:none}.referral-link-row button{border:0;border-radius:11px;background:#2c3035;color:#fff;font-weight:900;padding:10px 11px;font-size:11px}.claim-button{width:100%;margin-top:9px;border:0;border-radius:13px;background:#19e58f;color:#0d1511;padding:14px;font-weight:900}.claim-button:disabled{opacity:.42}
+.profile-info{background:#17191c;border:1px solid #292d33;border-radius:15px;margin-top:12px;padding:12px}.profile-info div{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid #25292e;font-size:12px}.profile-info div:last-child{border-bottom:0}.profile-info span{color:#8d9298}.profile-info b{text-align:right}
+.player-visual{position:relative;width:38px;height:38px}.avatar-small{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;object-fit:cover;background:#24272b;color:#fff;font-weight:900}.player-color{position:absolute;right:-2px;bottom:-1px;width:11px;height:11px;border-radius:50%;border:2px solid #191b1e}
+.winner-overlay{position:fixed;inset:0;background:rgba(0,0,0,.72);backdrop-filter:blur(7px);z-index:40;display:grid;place-items:center;padding:20px}.winner-card{width:min(100%,360px);background:linear-gradient(160deg,#262a30,#141619);border:1px solid #444a52;border-radius:26px;padding:28px 20px 24px;text-align:center;box-shadow:0 22px 70px rgba(0,0,0,.55),0 0 45px rgba(255,201,21,.12);animation:winnerIn .45s ease-out}.winner-crown{font-size:47px;line-height:1}.winner-title{margin-top:7px;color:#ffc915;font-size:14px;font-weight:900;letter-spacing:1.5px}.winner-avatar{width:76px;height:76px;border-radius:50%;overflow:hidden;background:#272b31;border:3px solid #ffc915;margin:16px auto 10px;display:grid;place-items:center}.winner-fallback{font-size:30px}.winner-name{font-size:22px;font-weight:900}.winner-win-label{margin-top:16px;color:#888f98;font-size:11px;font-weight:900;letter-spacing:1px}.winner-payout{color:#ffc915;font-size:34px;font-weight:950;margin-top:2px;text-shadow:0 0 22px rgba(255,201,21,.35)}.winner-detail{margin-top:8px;color:#aab0b8;font-size:12px}
+@keyframes winnerIn{from{opacity:0;transform:translateY(18px) scale(.96)}to{opacity:1;transform:none}}
+.bottom-nav button{font:inherit;cursor:pointer;border:0;background:transparent}
+
+.promo-card{margin-top:12px;background:linear-gradient(145deg,#202329,#17191c);border:1px solid #34383e;border-radius:20px;padding:16px;box-shadow:0 12px 30px rgba(0,0,0,.22)}
+.promo-title{font-weight:900;color:#ffc915;font-size:17px}.promo-subtitle{font-size:13px;color:#b9bec5;line-height:1.45;margin-top:6px}.promo-row{display:flex;gap:8px;margin-top:12px}.promo-row input{flex:1;min-width:0;background:#0f1012;border:1px solid #33383f;border-radius:11px;color:#fff;padding:12px;outline:none;text-transform:uppercase}.promo-row button{border:0;border-radius:11px;background:#ffc915;color:#111;font-weight:900;padding:10px 12px;font-size:11px}
+.promo-admin{background:#111315;border:1px solid #292d33;border-radius:14px;padding:12px;margin-bottom:10px}.promo-admin-title{font-size:12px;font-weight:900;color:#ffc915;margin-bottom:9px}.promo-admin-grid{display:grid;grid-template-columns:1.3fr .8fr .9fr;gap:7px}.promo-admin-grid input{width:100%;min-width:0;background:#0b0c0e;border:1px solid #33373c;color:#fff;border-radius:9px;padding:9px;outline:none}.promo-admin-grid button{border:0;border-radius:9px;background:#ffc915;color:#111;font-weight:900;padding:9px;grid-column:1/-1}.admin-promos{display:grid;gap:7px;margin-bottom:10px}.admin-promo{display:flex;align-items:center;justify-content:space-between;gap:10px;background:#1b1e21;border:1px solid #2c3035;border-radius:12px;padding:10px 11px}.admin-promo-code{font-weight:900;letter-spacing:.5px}.admin-promo-meta{color:#8f949c;font-size:11px;margin-top:3px}.promo-toggle{border:1px solid #444;background:#2c3035;color:#aaa;border-radius:9px;padding:7px 10px;font-size:10px;font-weight:900}.promo-toggle.active{background:#19e58f;color:#101;border-color:#19e58f}.promo-empty{margin-bottom:10px}
+@media(max-width:420px){.promo-admin-grid{grid-template-columns:1fr 1fr}.promo-admin-grid input:first-child{grid-column:1/-1}.promo-admin-grid button{grid-column:1/-1}.promo-row button{padding-inline:10px}}
+
+
+/* ---------- Raffles ---------- */
+.raffles-head{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;margin:8px 0 16px}.raffles-kicker{color:#72767d;font-size:10px;font-weight:900;letter-spacing:2px}.raffles-head h2{margin:4px 0 0;font-size:24px}.raffle-create-btn{border:0;border-radius:14px;background:#ffc915;color:#111;padding:11px 13px;font-weight:950;font-size:11px;box-shadow:0 0 18px rgba(255,201,21,.12)}
+.raffle-cards{display:grid;gap:12px}.raffle-card{position:relative;overflow:hidden;width:100%;text-align:left;background:linear-gradient(145deg,#212328,#17191c);border:1px solid #353940;color:#fff;border-radius:20px;padding:16px;box-shadow:0 12px 34px rgba(0,0,0,.28)}.raffle-card.finished{opacity:.62}.raffle-card-glow{position:absolute;right:-50px;top:-65px;width:160px;height:160px;border-radius:50%;background:rgba(255,201,21,.1);filter:blur(2px)}.raffle-card-top,.raffle-card-meta,.raffle-card-bottom{display:flex;justify-content:space-between;gap:8px;align-items:center;color:#9b9fa7;font-size:11px}.raffle-status{display:inline-flex;padding:5px 8px;border-radius:9px;background:#262a2e;color:#ffc915;font-weight:900}.raffle-card-prize{font-size:20px;font-weight:950;margin-top:13px;position:relative}.raffle-card-amount{font-size:32px;font-weight:950;color:#fff;margin-top:2px}.raffle-card-meta{padding-top:10px}.raffle-card-bottom{border-top:1px solid #2d3136;margin-top:12px;padding-top:11px}.raffle-arrow{font-size:25px;color:#6f747c}.raffle-modal-card{max-height:90vh;overflow:auto}.raffle-type-toggle{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:12px}.raffle-type-option{border:2px solid #30343a;background:#0f1012;color:#8f949b;border-radius:13px;padding:11px 7px;font-weight:950;font-size:11px}.raffle-type-option.active{border-color:#ffc915;color:#ffc915;background:rgba(255,201,21,.08)}.raffle-fields-2{display:grid;grid-template-columns:1fr 1fr;gap:9px}.raffle-field-label{color:#8c9198;font-size:11px;font-weight:900;margin:8px 2px 5px}.raffle-each{background:#111315;border:1px solid #2e3238;border-radius:12px;padding:11px;text-align:center;color:#ffc915;font-weight:900;margin-bottom:8px}.raffle-hint{color:#73787f;font-size:11px;line-height:1.45;margin:11px 0;text-align:center}.raffle-confirm{margin-top:2px}.raffle-detail-modal{max-height:90vh;overflow:auto}.raffle-detail-banner{background:linear-gradient(145deg,#2a281f,#171819);border:1px solid #4a4224;border-radius:18px;padding:18px;text-align:center}.raffle-detail-banner.finished{filter:grayscale(.65)}.raffle-detail-badge{font-size:10px;font-weight:950;color:#111;background:#ffc915;display:inline-block;padding:6px 9px;border-radius:9px}.raffle-detail-prize{font-size:25px;font-weight:950;margin-top:11px}.raffle-detail-fund{font-size:34px;font-weight:950;margin-top:2px}.raffle-detail-each{color:#a5a9af;font-size:12px;margin-top:4px}.raffle-detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}.raffle-detail-grid>div{background:#111315;border:1px solid #292d33;border-radius:13px;padding:11px}.raffle-detail-grid span{display:block;color:#7d828a;font-size:10px;margin-bottom:4px}.raffle-detail-grid b{font-size:13px}.raffle-channel-row{margin-top:10px}.raffle-channel-row a{display:block;text-decoration:none;background:#1c2024;color:#ffc915;border:1px solid #34383d;border-radius:13px;padding:12px;font-weight:900;text-align:center}.raffle-your-ticket{display:flex;justify-content:space-between;gap:8px;margin-top:10px;background:#151719;border:1px solid #2e3237;border-radius:13px;padding:11px;font-size:11px}.raffle-your-ticket b{color:#ffc915}.raffle-detail-actions{display:grid;gap:8px;margin-top:10px}.raffle-secondary-btn{display:block;width:100%;border:1px solid #373b41;background:#1b1e22;color:#dfe2e6;border-radius:13px;padding:12px;text-align:center;text-decoration:none;font-weight:900}.raffle-ref-box{display:flex;gap:7px}.raffle-ref-box input{flex:1;min-width:0;background:#0e0f11;border:1px solid #34383f;color:#dfe2e6;border-radius:11px;padding:10px;font-size:11px}.raffle-ref-box button{border:0;border-radius:11px;background:#ffc915;color:#111;font-size:10px;font-weight:950;padding:9px}.raffle-ref-hint{color:#7f848c;font-size:10px;text-align:center}.raffle-winners-list{margin-top:12px}.raffle-section-title{font-size:11px;font-weight:950;color:#ffc915;letter-spacing:1px;margin-bottom:7px}.raffle-winner-row{display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-bottom:1px solid #282c31;font-size:12px}.raffle-winner-row b{color:#ffc915}.raffle-card:disabled,.raffle-type-option:disabled,.raffle-secondary-btn:disabled{opacity:.5}
+@media(max-width:420px){.raffles-head{align-items:stretch;flex-direction:column}.raffle-create-btn{width:100%}.raffle-fields-2{grid-template-columns:1fr}.raffle-card-amount{font-size:28px}}
+
+/* =========================================================
+   RING EXACT SVG SKIN — VISUALS FROM Ring SVG.svg
+   Do not move/replace existing game logic. Hotspots are transparent.
+   ========================================================= */
+:root{--ring-w:402px;--ring-h:874px}
+html,body{background:#000!important}
+body{overflow-x:hidden!important}
+.app{width:var(--ring-w)!important;max-width:var(--ring-w)!important;height:var(--ring-h)!important;min-height:var(--ring-h)!important;margin:0 auto!important;padding:0!important;background:#000!important;position:relative!important;overflow:hidden!important}
+.balance-row{position:absolute!important;z-index:80!important;left:0!important;top:0!important;width:100%!important;height:52px!important;pointer-events:none!important}
+.balance-row .balance{pointer-events:none!important;position:absolute!important;top:16px!important;left:50%!important;transform:translateX(-50%)!important;margin:0!important;background:#111!important;border:1px solid #ffd21c!important;border-radius:14px!important;padding:4px 9px!important;font-size:10px!important;line-height:16px!important;height:25px!important;z-index:81!important}
+.balance-row .topup{pointer-events:auto!important;position:absolute!important;right:10px!important;top:14px!important;width:64px!important;height:28px!important;opacity:0!important}
+.view{position:absolute!important;inset:0!important;width:var(--ring-w)!important;height:var(--ring-h)!important;min-height:var(--ring-h)!important;padding:0!important;margin:0!important;overflow:hidden!important;background-image:url('/ring-design.svg')!important;background-repeat:no-repeat!important;background-size:3391px 1875px!important;background-color:#000!important}
+#pvpView{background-position:-853px 0!important}
+#gamesView{background-position:-1295px 0!important}
+#profileView{background-position:-1295px -903px!important}
+#rafflesView{background-position:-1737px -903px!important}
+#upgradeGame{position:absolute!important;inset:0!important;width:var(--ring-w)!important;height:var(--ring-h)!important;margin:0!important;padding:0!important;overflow:hidden!important;background-image:url('/ring-design.svg')!important;background-repeat:no-repeat!important;background-size:3391px 1875px!important;background-position:-1737px 0!important;background-color:#000!important}
+
+/* Prevent old layout from colliding with the artwork. */
+#pvpView .status,#pvpView .players-section{opacity:0!important;pointer-events:none!important}
+#pvpView .bet-under-wheel{position:absolute!important;left:95px!important;top:496px!important;width:212px!important;height:66px!important;margin:0!important;opacity:0!important;z-index:70!important;pointer-events:auto!important}
+#pvpView .bet-under-wheel .bet-button{width:100%!important;height:100%!important}
+#pvpView .wheel-wrap{position:absolute!important;left:56px!important;top:89px!important;width:290px!important;height:290px!important;margin:0!important;opacity:0!important;pointer-events:none!important}
+#pvpView[data-state="SPINNING"] .wheel-wrap,#pvpView[data-state="RESULT"] .wheel-wrap{opacity:1!important}
+
+/* Games: exact two tiles on the SVG. */
+#gamesView #gamesList{position:relative!important;width:100%!important;height:100%!important;margin:0!important;z-index:20!important}
+#gamesView #gamesList .game-card{display:none!important}
+#gamesView #gamesList .games-title{display:none!important}
+.design-hotspots{position:absolute!important;inset:0!important;z-index:75!important;pointer-events:none!important}
+.design-hotspot{position:absolute!important;display:block!important;border:0!important;background:transparent!important;padding:0!important;margin:0!important;cursor:pointer!important;pointer-events:auto!important;-webkit-tap-highlight-color:transparent!important}
+.game-hotspot-pvp{left:18px!important;top:113px!important;width:236px!important;height:236px!important}
+.game-hotspot-upgrade{left:155px!important;top:113px!important;width:235px!important;height:236px!important}
+
+/* Upgrade: exact controls on the SVG. */
+#upgradeGame .upgrade-header{position:absolute!important;inset:0!important;opacity:0!important;pointer-events:none!important;z-index:20!important}
+#upgradeGame .upgrade-wheel-wrap{position:absolute!important;left:56px!important;top:89px!important;width:290px!important;height:290px!important;margin:0!important;opacity:0!important;pointer-events:none!important}
+#upgradeGame .upgrade-inputs{position:absolute!important;left:49px!important;top:515px!important;width:306px!important;height:129px!important;display:block!important;z-index:70!important;margin:0!important}
+#upgradeGame .upgrade-inputs .input-row{position:absolute!important;left:0!important;width:306px!important;height:40px!important;margin:0!important;background:rgba(255,255,255,.16)!important;border:0!important;border-radius:16px!important;padding:0!important}
+#upgradeGame .upgrade-inputs .input-row:nth-child(1){top:0!important}
+#upgradeGame .upgrade-inputs .input-row:nth-child(2){top:87px!important}
+#upgradeGame .upgrade-inputs input{font-size:12px!important;padding:10px 14px!important;color:#fff!important;height:40px!important;box-sizing:border-box!important}
+#upgradeGame .upgrade-inputs span{font-size:12px!important}
+#upgradeGame #upgradeSpinBtn{position:absolute!important;left:120px!important;top:654px!important;width:162px!important;height:40px!important;z-index:71!important;margin:0!important;opacity:1!important;border:0!important;border-radius:20px!important;background:#ffc915!important;color:#111!important;font-size:17px!important;font-weight:950!important;box-shadow:none!important}
+#upgradeGame.playing .upgrade-wheel-wrap{opacity:1!important;pointer-events:none!important}
+
+/* Profile: exact visual card positions + transparent functional hotspots. */
+#profileView{padding:0!important}
+#profileView>*{z-index:10!important}
+#profileView .profile-card{position:absolute!important;left:29px!important;top:52px!important;width:348px!important;height:224px!important;margin:0!important;padding:0!important;background:transparent!important;border:0!important;box-shadow:none!important;border-radius:24px!important}
+#profileView .profile-main{position:absolute!important;left:0!important;top:0!important;width:100%!important;height:100px!important;display:block!important;text-align:center!important}
+#profileView .avatar-large{position:absolute!important;left:122px!important;top:6px!important;width:94px!important;height:94px!important;border-radius:50%!important;background:#d8d8d8!important;border:0!important}
+#profileView .profile-main>div:last-child{position:absolute!important;left:0!important;top:100px!important;width:100%!important}
+#profileView .profile-name{font-size:15px!important;font-weight:900!important}
+#profileView .profile-username{font-size:12px!important;color:#fff!important}
+#profileView .profile-balance{position:absolute!important;left:0!important;top:116px!important;width:100%!important;justify-content:center!important;background:none!important;border:0!important;margin:0!important;padding:0!important}
+#profileView .profile-balance span{display:none!important}
+#profileView .profile-balance b{font-size:12px!important}
+#profileView .withdraw-btn{display:none!important}
+#profileView .stats-grid{position:absolute!important;left:30px!important;top:284px!important;width:348px!important;height:111px!important;margin:0!important;grid-template-columns:repeat(3,1fr)!important;gap:6px!important}
+#profileView .stats-grid .profile-stat{padding:18px 5px!important;background:rgba(27,40,50,.75)!important;border:0!important;border-radius:20px!important}
+#profileView .stats-grid .profile-stat:nth-child(4){display:none!important}
+#profileView .profile-stat b{font-size:12px!important}.profile-stat span{font-size:9px!important}
+#profileView .referral-card{position:absolute!important;left:29px!important;top:403px!important;width:348px!important;height:264px!important;margin:0!important;background:rgba(10,63,14,.30)!important;border:0!important;box-shadow:none!important;border-radius:22px!important;padding:18px!important}
+#profileView .referral-title{font-size:16px!important;text-align:center!important;color:#fff!important}
+#profileView .referral-subtitle{font-size:9px!important}
+#profileView .referral-amounts{margin-top:8px!important;gap:5px!important}.referral-amounts div{padding:8px 4px!important;border-radius:12px!important}.referral-amounts b{font-size:9px!important}.referral-amounts span{font-size:7px!important}
+#profileView .referral-link-row{margin-top:7px!important}.referral-link-row input{padding:8px!important;font-size:8px!important}.referral-link-row button{font-size:8px!important;padding:7px!important}
+#profileView .claim-button{margin-top:6px!important;padding:9px!important;font-size:10px!important}
+#profileView .promo-card{position:absolute!important;left:29px!important;top:677px!important;width:348px!important;height:86px!important;margin:0!important;border:0!important;background:rgba(70,15,15,.28)!important;box-shadow:none!important;padding:12px!important;border-radius:18px!important}
+#profileView .promo-title{font-size:14px!important}.promo-subtitle{display:none!important}.promo-row{margin-top:6px!important}.promo-row input{padding:8px!important;font-size:9px!important}.promo-row button{padding:8px 10px!important;font-size:9px!important}
+#profileView .profile-info,#profileView .admin-panel{display:none!important}
+
+.profile-hotspot-topup{left:102px!important;top:111px!important;width:85px!important;height:51px!important}
+.profile-hotspot-withdraw{left:201px!important;top:111px!important;width:85px!important;height:51px!important}
+.profile-hotspot-refcopy{left:316px!important;top:553px!important;width:35px!important;height:36px!important}
+.profile-hotspot-refclaim{left:135px!important;top:599px!important;width:230px!important;height:36px!important}
+.profile-hotspot-promo{left:330px!important;top:715px!important;width:34px!important;height:35px!important}
+
+/* Raffles visual cards follow the SVG positions, but real cards remain interactive. */
+#rafflesView .raffles-head{display:none!important}
+#rafflesView .raffle-cards{position:absolute!important;left:32px!important;top:60px!important;width:338px!important;height:320px!important;display:grid!important;grid-template-columns:1fr!important;gap:10px!important;margin:0!important;z-index:20!important}
+#rafflesView .raffle-card{min-height:150px!important;background:rgba(43,37,16,.80)!important;border:0!important;border-radius:28px!important;padding:17px!important;text-align:left!important;box-shadow:none!important}
+#rafflesView .raffle-card-glow{display:none!important}
+#rafflesView .raffle-card-top{font-size:8px!important}.raffle-card-prize{font-size:23px!important;text-align:center!important}.raffle-card-amount{font-size:18px!important;text-align:center!important}.raffle-card-meta,.raffle-card-bottom{font-size:8px!important}
+
+/* Bottom navigation: four exact hit columns over the SVG nav. */
+.bottom-nav{position:absolute!important;left:7px!important;right:7px!important;bottom:8px!important;width:388px!important;height:53px!important;transform:none!important;display:grid!important;grid-template-columns:repeat(4,1fr)!important;background:transparent!important;border:0!important;padding:0!important;z-index:100!important}
+.bottom-nav .nav-item{width:auto!important;height:53px!important;background:transparent!important;border:0!important;color:transparent!important;font-size:1px!important;padding:0!important;margin:0!important}
+.bottom-nav .nav-item small{color:transparent!important;font-size:1px!important}
+
+/* Raffle modal stays real and interactive. */
+.modal,.winner-overlay{z-index:200!important}

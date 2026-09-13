@@ -1,0 +1,11 @@
+DEPLOY THIS PROJECT AS A RENDER BLUEPRINT
+
+Render Dashboard
+→ New
+→ Blueprint
+→ connect this GitHub repository
+→ review resources
+→ Apply Blueprint
+
+Do NOT create only a Web Service if you expect render.yaml to create PostgreSQL.
+The Blueprint contains both the web service and the Postgres database.

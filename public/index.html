@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111315">
+  <title>RING — PVP</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="app">
+    <section class="balance-row">
+      <div class="balance"><span id="balance">0</span> <span>⭐</span></div>
+      <button class="topup" id="topupBtn">Пополнить</button>
+    </section>
+
+    <div id="pvpView" class="view">
+      <section class="status">
+        <div class="timer-label" id="statusLabel">ОЖИДАЕМ ИГРОКА</div>
+        <div class="timer" id="timer">—</div>
+      </section>
+
+      <section class="wheel-wrap">
+      <div class="pointer-orbit" id="pointerOrbit" aria-hidden="true"><div class="pointer"></div></div>
+      <div class="wheel empty" id="wheel">
+        <div class="wheel-inner">
+          <div class="bank-label">БАНК</div>
+          <div class="bank" id="bank">0 <span>⭐</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="bet-under-wheel">
+      <button class="bet-button" id="betBtn">СДЕЛАТЬ СТАВКУ</button>
+    </section>
+
+    <section class="players-section">
+      <h2>ИГРОКИ</h2>
+      <div id="players" class="players"></div>
+      <div id="emptyPlayers" class="empty-players">Пока нет игроков</div>
+    </section>
+
+    </div>
+
+    <div id="rafflesView" class="view hidden">
+      <section class="raffles-head">
+        <div>
+          <div class="raffles-kicker">RING</div>
+          <h2>РОЗЫГРЫШИ</h2>
+        </div>
+        <button class="raffle-create-btn" id="openCreateRaffle">＋ СОЗДАТЬ РОЗЫГРЫШ</button>
+      </section>
+      <div id="raffleCards" class="raffle-cards"></div>
+      <div id="raffleEmpty" class="empty-players hidden">Пока нет активных розыгрышей</div>
+    </div>
+
+    <div id="gamesView" class="view hidden">
+      <div id="gamesList" class="games-list">
+        <h2 class="games-title">ИГРЫ</h2>
+        <button class="game-card" id="openUpgrade">
+          <div class="game-card-icon">⚡</div>
+          <div class="game-card-info">
+            <div class="game-card-name">Апгрейд</div>
+            <div class="game-card-desc">Выбери ставку и цель — рискни удвоить Stars</div>
+          </div>
+          <div class="game-card-arrow">›</div>
+        </button>
+      </div>
+      <div class="design-hotspots game-hotspots" aria-hidden="false">
+        <button type="button" class="design-hotspot game-hotspot-pvp" id="designGamePvp" aria-label="PVP"></button>
+        <button type="button" class="design-hotspot game-hotspot-upgrade" id="designGameUpgrade" aria-label="Upgrade"></button>
+      </div>
+
+      <div id="upgradeGame" class="upgrade-game hidden">
+        <div class="upgrade-header">
+          <button class="upgrade-back" id="upgradeBack">‹ Игры</button>
+          <div class="upgrade-title">АПГРЕЙД</div>
+        </div>
+
+        <section class="wheel-wrap upgrade-wheel-wrap">
+          <div class="pointer-orbit" id="upgradePointerOrbit" aria-hidden="true"><div class="pointer"></div></div>
+          <div class="wheel upgrade-wheel" id="upgradeWheel">
+            <div class="wheel-inner">
+              <div class="bank-label">ШАНС</div>
+              <div class="bank" id="upgradeChanceValue">0.00%</div>
+            </div>
+          </div>
+        </section>
+
+        <div class="upgrade-inputs">
+          <div class="input-row">
+            <input id="upgradeBet" type="number" min="1" step="1" inputmode="numeric" placeholder="Ставка">
+            <span>⭐</span>
+          </div>
+          <div class="input-row">
+            <input id="upgradeTarget" type="number" min="1" step="1" inputmode="numeric" placeholder="Цель">
+            <span>⭐</span>
+          </div>
+        </div>
+
+        <button class="bet-button" id="upgradeSpinBtn">КРУТИТЬ</button>
+      </div>
+    </div>
+
+    <section id="profileView" class="view hidden">
+      <div class="design-hotspots profile-hotspots" aria-hidden="false">
+        <button type="button" class="design-hotspot profile-hotspot-topup" id="designProfileTopup" aria-label="Пополнить"></button>
+        <button type="button" class="design-hotspot profile-hotspot-withdraw" id="designProfileWithdraw" aria-label="Вывод"></button>
+        <button type="button" class="design-hotspot profile-hotspot-refcopy" id="designProfileRefCopy" aria-label="Скопировать ссылку"></button>
+        <button type="button" class="design-hotspot profile-hotspot-refclaim" id="designProfileRefClaim" aria-label="Забрать награду"></button>
+        <button type="button" class="design-hotspot profile-hotspot-promo" id="designProfilePromo" aria-label="Активировать промокод"></button>
+      </div>
+      <section class="profile-card">
+        <div class="profile-main">
+          <div class="avatar-large" id="profileAvatar"></div>
+          <div>
+            <div class="profile-name" id="profileName">Игрок</div>
+            <div class="profile-username" id="profileUsername">@username</div>
+          </div>
+        </div>
+        <div class="profile-balance">
+          <span>Баланс</span>
+          <b id="profileBalance">0.00 ⭐</b>
+        </div>
+        <button class="withdraw-btn" id="withdrawBtn">ВЫВОД СРЕДСТВ</button>
+      </section>
+
+      <section class="stats-grid">
+        <div class="profile-stat"><b id="gamesPlayed">0</b><span>Игр</span></div>
+        <div class="profile-stat"><b id="gamesWon">0</b><span>Побед</span></div>
+        <div class="profile-stat"><b id="winrate">0%</b><span>Winrate</span></div>
+        <div class="profile-stat"><b id="totalWagered">0.00 ⭐</b><span>Поставлено</span></div>
+      </section>
+
+      <section class="referral-card">
+        <div class="referral-title">РЕФЕРАЛЬНАЯ ПРОГРАММА</div>
+        <div class="referral-subtitle">Получайте <b>10%</b> от пополнений приглашённых друзей. Начисления накапливаются и забираются вручную.</div>
+        <div class="referral-amounts">
+          <div><span>Доступно</span><b id="refPending">0.00 ⭐</b></div>
+          <div><span>Всего заработано</span><b id="refTotal">0.00 ⭐</b></div>
+          <div><span>Приглашено</span><b id="refInvited">0</b></div>
+        </div>
+        <div class="referral-link-row">
+          <input id="referralLink" readonly value="">
+          <button id="copyReferral">КОПИРОВАТЬ</button>
+        </div>
+        <button class="claim-button" id="claimReferral">ЗАБРАТЬ НА БАЛАНС</button>
+      </section>
+
+      <section class="profile-info">
+        <div><span>Telegram ID</span><b id="profileId">—</b></div>
+        <div><span>Реферальные начисления</span><b>10%</b></div>
+      </section>
+
+      <section class="promo-card">
+        <div class="promo-title">ПРОМОКОД</div>
+        <div class="promo-subtitle">Введи промокод, чтобы получить бонус на баланс.</div>
+        <div class="promo-row">
+          <input id="promoCode" maxlength="32" autocomplete="off" autocapitalize="characters" placeholder="Введите промокод">
+          <button id="activatePromo">АКТИВИРОВАТЬ</button>
+        </div>
+      </section>
+
+      <section class="admin-panel hidden" id="adminPanel">
+      <div class="admin-title-row">
+        <h2>АДМИН-ПАНЕЛЬ</h2>
+        <span class="admin-badge">ADMIN</span>
+      </div>
+      <div class="admin-stats" id="adminStats"></div>
+      <div class="admin-search-row">
+        <input id="adminSearch" placeholder="Поиск по ID, username или имени">
+        <button id="adminRefresh">↻</button>
+      </div>
+      <div class="promo-admin">
+        <div class="promo-admin-title">СОЗДАТЬ ПРОМОКОД</div>
+        <div class="promo-admin-grid">
+          <input id="adminPromoCode" maxlength="32" autocomplete="off" placeholder="КОД (например RING100)">
+          <input id="adminPromoBonus" type="number" min="1" step="1" inputmode="numeric" placeholder="Бонус ⭐">
+          <input id="adminPromoUses" type="number" min="1" step="1" inputmode="numeric" placeholder="Лимит активаций">
+          <button id="createPromo">СОЗДАТЬ</button>
+        </div>
+      </div>
+      <div id="adminPromos" class="admin-promos"></div>
+      <div id="adminUsers" class="admin-users"></div>
+    </section>
+
+      </section>
+    </section>
+
+    <nav class="bottom-nav">
+      <button class="nav-item" data-view="raffles">🎁<small>Розыгрыши</small></button>
+      <button class="nav-item active" data-view="pvp">👥<small>PVP</small></button>
+      <button class="nav-item" data-view="games">🎮<small>Игры</small></button>
+      <button class="nav-item" data-view="profile">◉<small>Профиль</small></button>
+    </nav>
+  </main>
+
+  <div class="modal hidden" id="betModal">
+    <div class="modal-card">
+      <button class="modal-close" id="modalClose">×</button>
+      <h3>ВАША СТАВКА</h3>
+      <div class="input-row">
+        <input id="betAmount" type="number" min="1" step="1" inputmode="numeric" placeholder="100">
+        <span>⭐</span>
+      </div>
+      <div class="modal-balance">Баланс: <b id="modalBalance">0 ⭐</b></div>
+      <button class="confirm" id="confirmBet">СДЕЛАТЬ СТАВКУ</button>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="topupModal">
+    <div class="modal-card">
+      <button class="modal-close" id="topupClose">×</button>
+      <h3>ПОПОЛНЕНИЕ</h3>
+      <div class="input-row">
+        <input id="topupAmount" type="number" min="1" step="1" inputmode="numeric" placeholder="100">
+        <span>⭐</span>
+      </div>
+      <button class="confirm" id="createInvoice">ОПЛАТИТЬ В TELEGRAM</button>
+      <p class="hint">Оплата проходит через официальный Telegram Stars invoice.</p>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="withdrawModal">
+    <div class="modal-card">
+      <button class="modal-close" id="withdrawClose">×</button>
+      <h3>ВЫВОД СРЕДСТВ</h3>
+      <div class="currency-toggle">
+        <button type="button" class="currency-option active" id="withdrawCurrencyStar">⭐ STAR</button>
+        <button type="button" class="currency-option" id="withdrawCurrencyGram">💎 GRAM</button>
+      </div>
+      <div class="input-row">
+        <input id="withdrawAmount" type="number" min="1" step="1" inputmode="numeric" placeholder="100">
+        <span id="withdrawUnitLabel">⭐</span>
+      </div>
+      <div class="modal-balance">Баланс: <b id="withdrawModalBalance">0 ⭐</b></div>
+      <button class="confirm" id="confirmWithdraw">ОТПРАВИТЬ ЗАЯВКУ</button>
+      <p class="hint">Заявку обработает администратор вручную — деньги спишутся с баланса сразу после отправки.</p>
+    </div>
+  </div>
+
+  <div class="winner-overlay hidden" id="winnerOverlay">
+    <div class="winner-card">
+      <div class="winner-crown">🏆</div>
+      <div class="winner-title">ПОБЕДИТЕЛЬ</div>
+      <div class="winner-avatar" id="winnerAvatar"></div>
+      <div class="winner-name" id="winnerName">Игрок</div>
+      <div class="winner-win-label">ВЫИГРЫШ</div>
+      <div class="winner-payout" id="winnerPayout">0 ⭐</div>
+      <div class="winner-detail" id="winnerBetDetail">Ставка: 0 ⭐</div>
+    </div>
+  </div>
+
+  <div class="winner-overlay hidden" id="upgradeBanner">
+    <div class="winner-card" id="upgradeBannerCard">
+      <div class="winner-crown" id="upgradeBannerIcon">🎉</div>
+      <div class="winner-title" id="upgradeBannerTitle">УДАЧНЫЙ АПГРЕЙД!</div>
+      <div class="winner-win-label">ИТОГ</div>
+      <div class="winner-payout" id="upgradeBannerAmount">+0.00 ⭐</div>
+      <div class="winner-detail" id="upgradeBannerDetail">Ставка 0 ⭐ → Цель 0 ⭐</div>
+      <button class="confirm" id="upgradeBannerClose">ПРОДОЛЖИТЬ</button>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="raffleCreateModal">
+    <div class="modal-card raffle-modal-card">
+      <button class="modal-close" id="raffleCreateClose">×</button>
+      <h3>СОЗДАТЬ РОЗЫГРЫШ</h3>
+      <div class="raffle-type-toggle">
+        <button type="button" class="raffle-type-option active" data-type="free">БЕСПЛАТНЫЙ</button>
+        <button type="button" class="raffle-type-option" data-type="paid">ПЛАТНЫЙ</button>
+      </div>
+      <div id="paidTicketField" class="hidden">
+        <div class="raffle-field-label">Цена 1 билета ⭐</div>
+        <div class="input-row"><input id="raffleTicketPrice" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="5"><span>⭐</span></div>
+      </div>
+      <div class="raffle-field-label">Приз</div>
+      <div class="input-row"><input id="rafflePrizeTitle" maxlength="100" placeholder="Например 1000 Stars"></div>
+      <div class="raffle-fields-2">
+        <div>
+          <div class="raffle-field-label">Сумма приза ⭐</div>
+          <div class="input-row"><input id="rafflePrizePool" type="number" min="1" step="0.01" inputmode="decimal" placeholder="1000"><span>⭐</span></div>
+        </div>
+        <div>
+          <div class="raffle-field-label">Победителей</div>
+          <div class="input-row"><input id="raffleWinners" type="number" min="1" max="1000" step="1" inputmode="numeric" placeholder="10"></div>
+        </div>
+      </div>
+      <div class="raffle-each" id="raffleEachPreview">Каждому: — ⭐</div>
+      <div class="raffle-field-label">Канал</div>
+      <div class="input-row"><input id="raffleChannel" placeholder="@mychannel"></div>
+      <div class="raffle-field-label">Время окончания</div>
+      <div class="input-row"><input id="raffleEndsAt" type="datetime-local"></div>
+      <div class="raffle-hint">Бот должен быть администратором канала с правом публикации. Ты тоже должен быть администратором этого канала.</div>
+      <button class="confirm raffle-confirm" id="createRaffleBtn">СОЗДАТЬ РОЗЫГРЫШ</button>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="raffleDetailModal">
+    <div class="modal-card raffle-detail-modal">
+      <button class="modal-close" id="raffleDetailClose">×</button>
+      <div id="raffleDetailRoot"></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
