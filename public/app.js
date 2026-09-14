@@ -366,6 +366,8 @@ function setView(view) {
   document.querySelectorAll(".nav-item").forEach(btn => {
     btn.classList.toggle("active", btn.dataset.view === activeKey);
   });
+  const topupBtn = $("#topupBtn");
+  if (topupBtn) topupBtn.style.display = activeKey === "games" ? "none" : "";
 }
 
 document.querySelectorAll(".nav-item").forEach(btn => {

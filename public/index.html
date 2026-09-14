@@ -12,7 +12,10 @@
 <body>
   <main class="app">
     <section class="balance-row">
-      <div class="balance"><span id="balance">0</span> <span>⭐</span></div>
+      <div class="balance">
+        <span id="balance">0</span>
+        <span class="balance-star"><img src="/assets/vector-15.svg" alt=""></span>
+      </div>
       <button class="topup" id="topupBtn">Пополнить</button>
     </section>
 
@@ -60,13 +63,13 @@
       <div id="gamesList" class="games-list">
         <h2 class="games-title">ИГРЫ</h2>
         <div class="games-grid">
-          <button class="game-card" data-view="pvp">
-            <div class="game-card-icon"><img src="/assets/game-pvp.svg" alt="PVP"></div>
-            <div class="game-card-name"><small>wheel</small>PVP</div>
+          <button class="game-card pvp-card" data-view="pvp">
+            <img class="game-art" src="/assets/game-pvp-card.svg" alt="PVP">
+            <span class="game-card-name"><small>wheel</small>PVP</span>
           </button>
           <button class="game-card upgrade-card" id="openUpgrade">
-            <div class="game-card-icon"><img src="/assets/game-upgrade.svg" alt="Upgrade"></div>
-            <div class="game-card-name">Upgrade</div>
+            <img class="game-art" src="/assets/game-upgrade-card.svg" alt="Upgrade">
+            <span class="game-card-name upgrade-name">Upgrade</span>
           </button>
         </div>
         <div class="games-locked-row">??????</div>
@@ -192,19 +195,19 @@
 
     <nav class="bottom-nav">
       <button class="nav-item" data-view="raffles">
-        <img class="nav-icon" src="/assets/nav-raffles.svg" alt="">
-        <small>Розыгрыши</small>
+        <img class="nav-icon" src="/assets/vector-14.svg" alt="">
+        <small>Giveaways</small>
       </button>
       <button class="nav-item" data-view="games">
-        <img class="nav-icon" src="/assets/nav-games.svg" alt="">
-        <small>Игры</small>
+        <img class="nav-icon nav-games-icon" src="/assets/games-nav.svg" alt="">
+        <small>Games</small>
       </button>
       <button class="nav-item" data-view="profile">
-        <img class="nav-icon" src="/assets/nav-profile.svg" alt="">
-        <small>Профиль</small>
+        <img class="nav-icon nav-profile-icon" src="/assets/vector-16.svg" alt="">
+        <small>Profile</small>
       </button>
       <button class="nav-item active" data-view="pvp">
-        <img class="nav-icon" src="/assets/nav-pvp.svg" alt="">
+        <img class="nav-icon" src="/assets/vector-4.svg" alt="">
         <small>PVP</small>
       </button>
     </nav>

@@ -32,10 +32,13 @@ button{cursor:pointer}
 .balance-row{display:flex;align-items:center;justify-content:center;gap:10px;margin:12px 0 22px}
 .muted{font-size:27px;opacity:.65;margin-right:auto}
 .balance{
-  background:var(--card);border:1.5px solid var(--yellow);border-radius:999px;
-  padding:11px 20px;font-size:17px;font-weight:900;min-width:82px;text-align:center;
-  display:flex;align-items:center;gap:6px;box-shadow:0 0 18px rgba(255,201,21,.10)
+  background:#151515;border:2px solid var(--yellow);border-radius:999px;
+  padding:7px 11px 7px 17px;font-size:22px;font-weight:900;min-width:0;
+  text-align:center;display:flex;align-items:center;gap:9px;
+  box-shadow:0 0 18px rgba(255,201,21,.08);line-height:1
 }
+.balance-star{width:34px;height:34px;border-radius:8px;background:var(--yellow);display:grid;place-items:center;flex:none}
+.balance-star img{width:20px;height:20px;object-fit:contain;filter:brightness(0) saturate(100%)}
 .balance span:last-child,.bank span{color:#ffd21c}
 .topup{border:0;background:var(--yellow);color:#111;border-radius:999px;padding:10px 16px;font-weight:900;box-shadow:0 6px 18px rgba(255,201,21,.25)}
 
@@ -84,14 +87,18 @@ button{cursor:pointer}
 .admin-users{display:grid;gap:8px}.admin-user{background:#161719;border:1px solid #262a2e;border-radius:13px;padding:11px}.admin-user-head{display:flex;justify-content:space-between;gap:8px}.admin-user-id{font-size:11px;color:#777}.admin-user-name{font-weight:900}.admin-balance{margin:8px 0;font-size:16px;font-weight:900}.admin-actions{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px}.admin-actions input{width:100%;min-width:0;background:#0f1012;border:1px solid #33373c;border-radius:9px;color:#fff;padding:8px}.admin-actions button{border:0;border-radius:9px;padding:8px;font-weight:900}.add-btn{background:#19e58f;color:#101}.remove-btn{background:#ff7b7b;color:#111}.ban-btn{background:#30343a;color:#fff}.ban-btn.unban{background:#4b6cff}
 
 /* ---------- Bottom nav ---------- */
-.bottom-nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:min(100%,600px);
-  background:linear-gradient(160deg,#302a10,#100e07 60%,#000);
-  display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid #2a2712;
-  padding:10px 10px calc(10px + env(safe-area-inset-bottom));z-index:10;border-radius:26px 26px 0 0}
-.nav-item{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:#9a978a;font-size:22px;background:transparent;border:0}
-.nav-item .nav-icon{width:23px;height:23px;display:block;object-fit:contain}
-.bottom-nav small{font-size:11px;margin-top:0;font-weight:800}
-.nav-item.active{color:var(--yellow)}
+.bottom-nav{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);width:calc(min(100%,600px) - 24px);
+  background:linear-gradient(180deg,rgba(55,50,20,.42),rgba(21,18,8,.54));
+  border:1px solid rgba(255,255,255,.12);box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 12px 28px rgba(0,0,0,.28);
+  backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+  display:grid;grid-template-columns:repeat(4,1fr);padding:12px 12px calc(10px + env(safe-area-inset-bottom));
+  z-index:10;border-radius:42px}
+.nav-item{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:#a1a0a0;font-size:22px;background:transparent;border:0;padding:0;min-height:66px}
+.nav-item .nav-icon{width:31px;height:31px;display:block;object-fit:contain;filter:none}
+.nav-item .nav-games-icon{width:34px;height:34px}
+.nav-item .nav-profile-icon{width:23px;height:32px}
+.bottom-nav small{font-size:13px;margin-top:0;font-weight:800;color:inherit}
+.nav-item.active{color:#a1a0a0}
 
 /* ---------- Modals (bottom-sheet olive style) ---------- */
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:30;display:grid;place-items:center;padding:20px}
@@ -117,20 +124,32 @@ button{cursor:pointer}
 @media(max-width:420px){.wheel{padding:28px}.bank{font-size:14px}}
 
 /* ---------- Games / Upgrade ---------- */
-.games-list{margin-top:16px}
+.games-list{margin-top:12px}
 .games-title{text-align:center;color:#fff;font-size:17px;font-weight:900;margin:0 0 18px;letter-spacing:.5px;display:none}
-.games-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px}
+.games-grid{display:grid;grid-template-columns:1.88fr 1fr;gap:12px;margin:76px 20px 16px}
 .game-card{
-  position:relative;aspect-ratio:1/1.05;border-radius:22px;border:0;padding:16px;text-align:left;color:#fff;
-  overflow:hidden;display:flex;align-items:flex-end;background:var(--red-grad)
+  position:relative;min-width:0;aspect-ratio:1/1.99;border-radius:36px;border:0;padding:0;text-align:left;color:#fff;
+  overflow:hidden;display:flex;align-items:flex-end;background:#190000;isolation:isolate;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)
 }
-.game-card.upgrade-card{background:var(--darkblue-grad)}
-.game-card-icon{position:absolute;top:12px;left:12px;width:56px;height:56px;display:flex;align-items:center;justify-content:center;opacity:.7;transform:rotate(0deg);overflow:hidden}.game-card-icon img{width:56px;height:56px;display:block;object-fit:contain}
-.game-card-name{font-weight:950;font-size:22px;line-height:1.05;text-transform:none}
-.game-card-name small{display:block;font-weight:800;font-size:13px;opacity:.75;margin-bottom:2px}
-.game-card-desc,.game-card-arrow{display:none}
-.games-locked-row{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.05);border-radius:20px;padding:20px;text-align:center;letter-spacing:8px;color:rgba(255,255,255,.28);font-size:20px;font-weight:900;margin-bottom:26px}
-.games-soon-hint{text-align:center;color:rgba(255,255,255,.4);font-size:15px;font-weight:700;line-height:1.5;margin-top:60px}
+.game-card.upgrade-card{background:#031a68}
+.game-art{position:absolute;inset:0;width:100%;height:100%;display:block;object-fit:cover;z-index:-1}
+.pvp-card .game-art{object-fit:cover}
+.upgrade-card .game-art{object-fit:cover}
+.game-card-name{position:absolute;left:38px;bottom:16px;font-weight:950;font-size:62px;line-height:.9;text-transform:none;letter-spacing:-2px;color:#fff}
+.game-card-name small{display:inline-block;font-weight:900;font-size:22px;opacity:1;margin:0 6px 0 0;letter-spacing:0;transform:rotate(-90deg) translateY(33px);transform-origin:right bottom}
+.upgrade-name{left:auto;right:12px;bottom:26px;writing-mode:vertical-rl;transform:rotate(180deg);font-size:42px;letter-spacing:-1px}
+.games-locked-row{margin:0 20px;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.12);border-radius:34px;height:190px;display:flex;align-items:flex-start;justify-content:center;padding-top:28px;text-align:center;letter-spacing:12px;color:rgba(255,255,255,.17);font-size:72px;font-weight:900;line-height:1}
+.games-soon-hint{text-align:center;color:rgba(255,255,255,.15);font-size:26px;font-weight:900;line-height:1.42;margin:96px 70px 0}
+@media(max-width:600px){
+  .games-grid{margin-left:6px;margin-right:6px;gap:10px}
+  .game-card{border-radius:28px}
+  .game-card-name{left:24px;bottom:14px;font-size:48px}
+  .game-card-name small{font-size:18px;transform:rotate(-90deg) translateY(25px)}
+  .upgrade-name{right:8px;bottom:18px;font-size:34px}
+  .games-locked-row{margin-left:6px;margin-right:6px;height:150px;font-size:52px;letter-spacing:8px}
+  .games-soon-hint{font-size:19px;margin:72px 40px 0}
+}
+.games-card-placeholder{display:none}
 
 .upgrade-game{margin-top:6px}
 .upgrade-header{display:flex;align-items:center;gap:10px;margin:6px 0 14px}
