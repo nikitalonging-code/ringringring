@@ -407,3 +407,71 @@ button{cursor:pointer}
   .raffle-modal-card .raffle-hint{font-size:9px;line-height:1.4;margin:10px auto;}
   .raffle-modal-card .raffle-confirm{font-size:15px;padding:12px;}
 }
+
+/* ---------- Compact sizing pass ---------- */
+@media (max-width: 600px){
+  .app{padding-left:18px;padding-right:18px;padding-top:14px;padding-bottom:calc(96px + env(safe-area-inset-bottom));}
+  .balance-row{margin:8px 0 16px;gap:8px}
+  .balance{font-size:20px;padding:6px 9px 6px 14px;gap:7px}
+  .balance-star{width:30px;height:30px;border-radius:7px}
+  .balance-star img{width:18px;height:18px}
+
+  /* PVP wheel */
+  .wheel-top-info{margin:2px 0 10px}
+  .wheel-top-info .total-bank-label{font-size:15px}
+  .wheel-top-info .bank{font-size:14px}
+  .wheel-wrap{width:min(72vw,380px);margin:0 auto 20px}
+  .wheel{padding:26px}
+  .pointer{border-left-width:14px;border-right-width:14px;border-bottom-width:24px}
+  .bet-button,.confirm{font-size:17px;padding:15px}
+  .players-section h2{font-size:16px;margin:8px 0 11px}
+  .player{padding:10px 12px;grid-template-columns:34px 1fr auto;gap:8px}
+  .dot{width:26px;height:26px}
+  .pname{font-size:14px}
+  .meta{font-size:13px}
+
+  /* Games */
+  .games-grid{margin:48px 28px 13px;gap:9px}
+  .game-card{border-radius:24px}
+  .game-card-name{left:18px;bottom:11px;font-size:40px;letter-spacing:-1.5px}
+  .game-card-name small{font-size:15px;transform:rotate(-90deg) translateY(21px)}
+  .upgrade-name{right:6px;bottom:15px;font-size:29px}
+  .games-locked-row{margin:0 28px;height:126px;font-size:44px;letter-spacing:6px;padding-top:22px;border-radius:28px}
+  .games-soon-hint{font-size:17px;margin:58px 34px 0}
+
+  /* Bottom navigation */
+  .bottom-nav{width:calc(min(100%,600px) - 36px);bottom:10px;padding:9px 8px calc(8px + env(safe-area-inset-bottom));border-radius:36px}
+  .nav-item{gap:3px;min-height:56px;font-size:20px}
+  .nav-item .nav-icon{width:27px;height:27px}
+  .nav-item .nav-games-icon{width:30px;height:30px}
+  .nav-item .nav-profile-icon{width:21px;height:29px}
+  .bottom-nav small{font-size:12px}
+
+  /* Upgrade */
+  .upgrade-header{gap:8px;margin:4px 0 10px}
+  .upgrade-back{padding:8px 11px;font-size:13px}
+  .upgrade-title{font-size:15px;margin-right:44px}
+  .upgrade-wheel-wrap{margin:0 auto 20px}
+  .upgrade-inputs .input-row{margin-bottom:10px}
+  .input-row{border-radius:15px}
+  .input-row input{padding:14px 3px;font-size:16px}
+
+  /* Profile */
+  .profile-card{padding:18px 16px;margin-top:6px}
+  .avatar-large{width:78px;height:78px;margin-bottom:10px}
+  .profile-username{font-size:18px}
+  .profile-balance{font-size:13px;margin-top:5px}
+  .profile-icon-row{gap:11px;margin-top:14px}
+  .profile-icon-btn{padding:13px;border-radius:17px}
+  .profile-stat{padding:10px 5px}
+
+  /* Raffles */
+  .raffles-head{margin:6px 8px 14px}
+  .raffle-create-btn{padding:10px 14px;font-size:11px}
+  .raffle-cards{margin:0 18px;gap:10px}
+  .raffle-card{border-radius:19px;padding:15px}
+  .raffle-status{padding:5px 10px;font-size:10px}
+  .raffle-card-prize{margin-top:11px}
+  .raffle-card-amount{font-size:14px}
+  .raffle-card-meta,.raffle-card-bottom{font-size:10px}
+}
