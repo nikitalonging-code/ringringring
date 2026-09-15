@@ -971,19 +971,26 @@ function spinUpgradePointer(data) {
   const chance = Math.max(0, Math.min(100, Number(data?.chance) || 0));
   const isWin = data?.win === true;
 
-  // IMPORTANT: the server is authoritative about WIN/LOSS. The pointer
-  // position is derived locally from that exact boolean and the exact same
-  // chance that is painted by renderUpgradeWheel(). This prevents a stale or
-  // differently-oriented server angle from ever showing a yellow landing for
-  // a loss (or a gray landing for a win).
-  const sliceStart = isWin ? 0 : chance;
-  const sliceEnd = isWin ? chance : 100;
-  const margin = Math.min(0.35, Math.max(0.05, (sliceEnd - sliceStart) / 5));
-  const safeStart = sliceStart + margin;
-  const safeEnd = Math.max(safeStart, sliceEnd - margin);
-  const landingPercent = safeStart + upgradeSecureRandom() * (safeEnd - safeStart);
-  const targetAngle = landingPercent * 3.6;
+  // Use the exact server roll. This makes the visual landing deterministic:
+  // yellow [0..chance) is WIN, gray [chance..100) is LOSS.
+  let landingPercent = Number(data?.rollPercent);
+  if (!Number.isFinite(landingPercent)) {
+    // Backward-compatible fallback for an older server response.
+    const sliceStart = isWin ? 0 : chance;
+    const sliceEnd = isWin ? chance : 100;
+    const margin = Math.min(0.35, Math.max(0.05, (sliceEnd - sliceStart) / 5));
+    const safeStart = sliceStart + margin;
+    const safeEnd = Math.max(safeStart, sliceEnd - margin);
+    landingPercent = safeStart + upgradeSecureRandom() * (safeEnd - safeStart);
+  }
+  landingPercent = Math.max(0, Math.min(99.999999, landingPercent));
 
+  // Defensive assertion: if an unexpected response is ever received, keep
+  // the pointer visually inside the server-declared result segment.
+  if (isWin && landingPercent >= chance) landingPercent = Math.max(0, chance / 2);
+  if (!isWin && landingPercent < chance) landingPercent = Math.min(99.999999, chance + (100 - chance) / 2);
+
+  const targetAngle = landingPercent * 3.6;
   pointerOrbit.style.opacity = "1";
   pointerOrbit.style.transition = "none";
   pointerOrbit.style.transform = `rotate(${current}deg)`;

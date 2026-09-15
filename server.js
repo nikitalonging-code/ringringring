@@ -752,10 +752,11 @@ async function playUpgrade(playerId, bet, target) {
   const r = Number(BigInt("0x" + crypto.randomBytes(8).toString("hex")) % BigInt(max));
   const roll = r / max;
   const win = roll < bet / target;
+  const rollPercent = Number((roll * 100).toFixed(6));
 
-  // The server is authoritative about the outcome. The client receives the
-  // exact outcome + chance and derives only the visual landing position from
-  // those values, so the displayed pointer can never disagree with `win`.
+  // The server is authoritative about both the outcome and the exact visual
+  // landing point. The client uses this same roll percentage, so the pointer
+  // can never land in yellow for a loss or in gray for a win.
   if (win) {
     try {
       balance = await creditBalance(playerId, target, pool, {
@@ -787,6 +788,7 @@ async function playUpgrade(playerId, bet, target) {
     chance: Number(chance.toFixed(4)),
     bet,
     target,
+    rollPercent,
     payout: win ? target : 0,
     balance
   };
