@@ -361,7 +361,7 @@ async function initDb() {
     `CREATE TABLE IF NOT EXISTS withdrawal_requests (
       id BIGSERIAL PRIMARY KEY,
       telegram_user_id TEXT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-      currency TEXT NOT NULL CHECK (currency IN ('STAR','GRAM')),
+      currency TEXT NOT NULL CHECK (currency IN ('STAR','GRAM','TON')),
       amount NUMERIC(20,2) NOT NULL CHECK (amount > 0),
       status TEXT NOT NULL DEFAULT 'pending',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -381,7 +381,11 @@ async function initDb() {
     `CREATE INDEX IF NOT EXISTS tx_user_idx ON balance_transactions(telegram_user_id, created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS referral_referrer_idx ON referral_earnings(referrer_id, claimed, created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS withdrawal_requests_user_idx ON withdrawal_requests(telegram_user_id, created_at DESC)`,
-    `CREATE INDEX IF NOT EXISTS withdrawal_requests_status_idx ON withdrawal_requests(status, created_at DESC)`
+    `CREATE INDEX IF NOT EXISTS withdrawal_requests_status_idx ON withdrawal_requests(status, created_at DESC)`,
+    `DO $$ BEGIN
+       ALTER TABLE withdrawal_requests DROP CONSTRAINT IF EXISTS withdrawal_requests_currency_check;
+       ALTER TABLE withdrawal_requests ADD CONSTRAINT withdrawal_requests_currency_check CHECK (currency IN ('STAR','GRAM','TON'));
+     EXCEPTION WHEN duplicate_object THEN NULL; END $$`
   ];
 
   for (const sql of statements) {
@@ -1711,7 +1715,12 @@ app.post("/api/telegram/webhook", async (req, res) => {
 app.get("/api/bootstrap", async (req, res) => {
   try {
     const session = await authenticatedUserFromInitData(req.headers["x-telegram-init-data"]);
-    res.json({ user: session.db, isAdmin: isAdmin(session.telegram.id), state: publicState() });
+    res.json({
+      user: session.db,
+      isAdmin: isAdmin(session.telegram.id),
+      state: publicState(),
+      gramUsdPerStar: Number(process.env.GRAM_USD_PER_STAR || 0.10)
+    });
   } catch (e) {
     res.status(401).json({ error: e.message });
   }
@@ -1780,12 +1789,18 @@ app.post("/api/profile/withdraw", async (req, res) => {
     const currency = String(req.body?.currency || "").trim().toUpperCase();
     const amount = Number(req.body?.amount);
 
-    if (!["STAR", "GRAM"].includes(currency)) throw new Error("Выберите валюту вывода: STAR или GRAM.");
-    if (!Number.isInteger(amount) || amount <= 0) throw new Error("Введите целую сумму больше 0.");
+    if (!["STAR", "GRAM", "TON"].includes(currency)) throw new Error("Выберите направление вывода: STAR, GRAM или TON.");
+    if (!Number.isInteger(amount) || amount <= 0) throw new Error("Введите целую сумму Stars больше 0.");
+
+    const gramUsdPerStar = Number(process.env.GRAM_USD_PER_STAR || 0.10);
+    const gramUsd = currency === "GRAM" ? amount * gramUsdPerStar : null;
+    const description = currency === "GRAM"
+      ? `Заявка на вывод ${amount} ⭐ → GRAM (≈ $${gramUsd.toFixed(2)})`
+      : `Заявка на вывод ${amount} ⭐ → ${currency}`;
 
     const balanceAfter = await debitBalance(userId, amount, {
       type: "withdraw_request",
-      description: `Заявка на вывод ${amount} ${currency}`
+      description
     });
 
     const ins = await pool.query(
@@ -1801,8 +1816,9 @@ app.post("/api/profile/withdraw", async (req, res) => {
     notifyAdmins(
       `📤 Новая заявка на вывод\n` +
       `Пользователь: ${displayName} (ID: ${userId})\n` +
-      `Валюта: ${currency}\n` +
-      `Сумма: ${amount}\n` +
+      `Направление: ${currency}\n` +
+      `Сумма списания: ${amount} ⭐\n` +
+      (currency === "GRAM" ? `Эквивалент GRAM: ≈ $${gramUsd.toFixed(2)}\n` : "") +
       `Заявка №${ins.rows[0].id}`
     ).catch(() => {});
 

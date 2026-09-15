@@ -25,6 +25,7 @@ const betModal = $("#betModal");
 const topupModal = $("#topupModal");
 const withdrawModal = $("#withdrawModal");
 let withdrawCurrency = "STAR";
+let GRAM_USD_PER_STAR = Number(window.__RING_GRAM_USD_PER_STAR || 0.10);
 
 function toast(message) {
   const el = $("#toast");
@@ -72,15 +73,29 @@ function setWithdrawCurrency(currency) {
   withdrawCurrency = currency;
   $("#withdrawCurrencyStar").classList.toggle("active", currency === "STAR");
   $("#withdrawCurrencyGram").classList.toggle("active", currency === "GRAM");
-  $("#withdrawUnitLabel").textContent = currency === "STAR" ? "⭐" : "GRAM";
+  $("#withdrawCurrencyTon").classList.toggle("active", currency === "TON");
+  const unit = $("#withdrawUnitLabel");
+  unit.innerHTML = '<img src="/assets/vector-15.svg" alt="">';
+  const conv = $("#withdrawConvert");
+  conv.classList.toggle("hidden", currency !== "GRAM");
+  updateWithdrawConversion();
 }
+function updateWithdrawConversion() {
+  const amount = Number($("#withdrawAmount").value || 0);
+  if (withdrawCurrency !== "GRAM") return;
+  const dollars = Math.max(0, amount) * GRAM_USD_PER_STAR;
+  $("#withdrawConvert").textContent = `Эквивалент GRAM: ≈ $${dollars.toFixed(2)}`;
+}
+$("#withdrawAmount").addEventListener("input", updateWithdrawConversion);
 $("#withdrawCurrencyStar").onclick = () => setWithdrawCurrency("STAR");
 $("#withdrawCurrencyGram").onclick = () => setWithdrawCurrency("GRAM");
+$("#withdrawCurrencyTon").onclick = () => setWithdrawCurrency("TON");
 
 $("#withdrawBtn").onclick = () => {
   if (!initData) return handleNotTelegram();
   $("#withdrawAmount").value = "";
   setWithdrawCurrency("STAR");
+  $("#withdrawAmount").placeholder = "Сумма в Stars…";
   $("#withdrawModalBalance").textContent = currentBalance.toFixed(2) + " ⭐";
   openModal(withdrawModal);
 };
@@ -88,7 +103,7 @@ $("#withdrawClose").onclick = () => closeModal(withdrawModal);
 
 $("#confirmWithdraw").onclick = async () => {
   const amount = Number($("#withdrawAmount").value);
-  if (!Number.isInteger(amount) || amount <= 0) return toast("Введите целую сумму больше 0.");
+  if (!Number.isInteger(amount) || amount <= 0) return toast("Введите целую сумму Stars больше 0.");
   if (amount > currentBalance) return toast("Недостаточно Stars на балансе.");
   try {
     const r = await fetch("/api/profile/withdraw", {
@@ -161,6 +176,9 @@ socket.on("joined", data => {
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.error || "Не удалось загрузить приложение.");
     setBalance(data.user?.balance);
+    if (Number.isFinite(Number(data.gramUsdPerStar))) {
+      GRAM_USD_PER_STAR = Number(data.gramUsdPerStar);
+    }
     isAdmin = !!data.isAdmin;
     if (isAdmin) {
       $("#adminPanel").classList.remove("hidden");
@@ -919,7 +937,7 @@ function upgradeChance() {
 function renderUpgradeWheel() {
   const { valid, chance } = upgradeChance();
   const pct = valid ? chance : 0;
-  $("#upgradeWheel").style.background = `conic-gradient(#ffc915 0%, #ffc915 ${pct}%, #141517 ${pct}%, #141517 100%)`;
+  $("#upgradeWheel").style.background = `conic-gradient(from 0deg at 50% 50%, #ffc915 0%, #ffc915 ${pct}%, #141517 ${pct}%, #141517 100%)`;
   $("#upgradeChanceValue").textContent = pct.toFixed(2) + "%";
   // The colored arc just changed shape (new bet/target), so a pointer left
   // over from a previous spin no longer points at anything meaningful for
@@ -1021,7 +1039,7 @@ function showUpgradeBanner(data) {
   const card = $("#upgradeBannerCard");
   card.classList.toggle("win", isWin);
   card.classList.toggle("lose", !isWin);
-  $("#upgradeBannerIcon").textContent = isWin ? "🎉" : "💥";
+  $("#upgradeBannerIcon").textContent = isWin ? "👑" : "💥";
   $("#upgradeBannerTitle").textContent = isWin ? "УДАЧНЫЙ АПГРЕЙД!" : "АПГРЕЙД НЕ УДАЛСЯ";
   $("#upgradeBannerAmount").textContent = (isWin ? "+" : "-") + Number(isWin ? data.payout : data.bet).toFixed(2) + " ⭐";
   $("#upgradeBannerDetail").textContent = `Ставка ${Number(data.bet).toFixed(2)} ⭐ → Цель ${Number(data.target).toFixed(2)} ⭐ · Шанс ${Number(data.chance).toFixed(2)}%`;
@@ -1033,6 +1051,8 @@ $("#upgradeBannerClose").onclick = () => {
   // so nothing is left resting in the background for the next round.
   $("#upgradePointerOrbit").style.opacity = "0";
 };
+
+$("#upgradeBannerX").onclick = () => $("#upgradeBannerClose").click();
 
 socket.on("upgrade_result", data => {
   spinUpgradePointer(data);

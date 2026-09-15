@@ -7,6 +7,7 @@
   <title>RING — PVP</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="/socket.io/socket.io.js"></script>
+  <script>window.__RING_GRAM_USD_PER_STAR = 0.10;</script>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -250,13 +251,15 @@
         <button type="button" class="active" id="tabGoWithdraw2">Вывод</button>
       </div>
       <div class="currency-toggle">
-        <button type="button" class="currency-option active" id="withdrawCurrencyStar">⭐ STAR</button>
-        <button type="button" class="currency-option" id="withdrawCurrencyGram">💎 GRAM</button>
+        <button type="button" class="currency-option active" id="withdrawCurrencyStar"><img src="/assets/vector-15.svg" alt=""> STAR</button>
+        <button type="button" class="currency-option" id="withdrawCurrencyGram">GRAM</button>
+        <button type="button" class="currency-option" id="withdrawCurrencyTon">TON</button>
       </div>
       <div class="input-row">
-        <input id="withdrawAmount" type="number" min="1" step="1" inputmode="numeric" placeholder="Введите сумму…">
-        <span id="withdrawUnitLabel">⭐</span>
+        <input id="withdrawAmount" type="number" min="1" step="1" inputmode="numeric" placeholder="Сумма в Stars…">
+        <span id="withdrawUnitLabel"><img src="/assets/vector-15.svg" alt=""></span>
       </div>
+      <div class="withdraw-convert hidden" id="withdrawConvert">Эквивалент: ≈ $0.00</div>
       <div class="modal-balance">Баланс: <b id="withdrawModalBalance">0 ⭐</b></div>
       <button class="confirm" id="confirmWithdraw">Продолжить</button>
       <p class="hint">The withdrawals are not carried out automatically. Your funds will be withdrawn after the administration's approval.</p>
@@ -276,8 +279,9 @@
   </div>
 
   <div class="winner-overlay hidden" id="upgradeBanner">
-    <div class="winner-card" id="upgradeBannerCard">
-      <div class="winner-crown" id="upgradeBannerIcon">🎉</div>
+    <div class="winner-card upgrade-result-card" id="upgradeBannerCard">
+      <button class="modal-close upgrade-result-close" id="upgradeBannerX" aria-label="Закрыть">×</button>
+      <div class="winner-crown" id="upgradeBannerIcon">👑</div>
       <div class="winner-title" id="upgradeBannerTitle">УДАЧНЫЙ АПГРЕЙД!</div>
       <div class="winner-win-label">ИТОГ</div>
       <div class="winner-payout" id="upgradeBannerAmount">+0.00 ⭐</div>
