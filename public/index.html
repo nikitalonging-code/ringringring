@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#111315">
   <title>RING — PVP</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="https://unpkg.com/@tonconnect/ui@2.0.11/dist/tonconnect-ui.min.js"></script>
+  <script src="https://unpkg.com/@tonconnect/ui@3.0.2/dist/tonconnect-ui.min.js"></script>
   <script src="/socket.io/socket.io.js"></script>
   <script>window.__RING_GRAM_USD_PER_STAR = 0.015;</script>
   <link rel="stylesheet" href="/styles.css">
@@ -242,7 +242,7 @@
         </div>
         <div class="withdraw-convert" id="gramTopupConvert">Эквивалент: ≈ $0.00</div>
         <div class="ton-connect-wrap">
-          <div id="tonConnectButton"></div>
+          <button type="button" id="tonConnectFallback" class="ton-connect-fallback">Подключить TON Connect</button><div id="tonConnectButton"></div>
           <div class="ton-wallet-status" id="tonWalletStatus">Кошелёк не подключён</div>
         </div>
         <button class="confirm" id="createGramTopup">Продолжить</button>

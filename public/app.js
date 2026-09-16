@@ -100,21 +100,56 @@ function setWithdrawCurrency(currency) {
 $("#gramTopupAmount").addEventListener("input", () => updateGramConversion("#gramTopupAmount", "#gramTopupConvert"));
 $("#withdrawAmount").addEventListener("input", () => updateGramConversion("#withdrawAmount", "#withdrawConvert"));
 
-function initTonConnect() {
-  if (!window.TON_CONNECT_UI) return;
+async function initTonConnect() {
+  const fallback = $("#tonConnectFallback");
+  const status = $("#tonWalletStatus");
+  const root = $("#tonConnectButton");
+  if (fallback) fallback.onclick = async () => {
+    try {
+      if (!tonConnectUI) await initTonConnect(true);
+      if (!tonConnectUI) throw new Error("TON Connect не инициализирован.");
+      await tonConnectUI.openModal();
+    } catch (e) {
+      toast(e.message || "Не удалось открыть TON Connect.");
+    }
+  };
+
+  if (!window.TON_CONNECT_UI) {
+    if (status) status.textContent = "TON Connect не загрузился";
+    return null;
+  }
+
   try {
+    const cfgRes = await fetch("/api/tonconnect/config", { headers: authHeaders() });
+    const cfg = await cfgRes.json().catch(() => ({}));
+    if (!cfgRes.ok) throw new Error(cfg.error || "TON Connect не настроен.");
+
+    if (tonConnectUI) return tonConnectUI;
     tonConnectUI = new TON_CONNECT_UI.TonConnectUI({
-      manifestUrl: `${location.origin}/tonconnect-manifest.json`,
-      buttonRootId: "tonConnectButton"
+      manifestUrl: cfg.manifestUrl,
+      buttonRootId: "tonConnectButton",
+      uiPreferences: {
+        theme: "DARK",
+        borderRadius: "m"
+      }
     });
+
+    if (fallback) fallback.textContent = "Подключить TON Connect";
     tonConnectUI.onStatusChange(wallet => {
       tonWalletAddress = wallet?.account?.address || "";
-      $("#tonWalletStatus").textContent = tonWalletAddress
+      if (status) status.textContent = tonWalletAddress
         ? `Подключён: ${tonWalletAddress.slice(0, 6)}…${tonWalletAddress.slice(-6)}`
         : "Кошелёк не подключён";
+      if (fallback) fallback.classList.toggle("hidden", !!tonWalletAddress);
     });
+    if (typeof tonConnectUI.connectionRestored === "object" && tonConnectUI.connectionRestored?.then) {
+      await tonConnectUI.connectionRestored;
+    }
+    return tonConnectUI;
   } catch (e) {
-    console.warn("TON Connect init failed:", e.message);
+    console.warn("TON Connect init failed:", e);
+    if (status) status.textContent = `Ошибка TON Connect: ${e.message || "unknown"}`;
+    return null;
   }
 }
 
@@ -156,6 +191,7 @@ $("#confirmWithdraw").onclick = async () => {
 $("#createGramTopup").onclick = async () => {
   const amount = Number($("#gramTopupAmount").value);
   if (!Number.isInteger(amount) || amount <= 0) return toast("Введите целую сумму Stars больше 0.");
+  if (!tonConnectUI) await initTonConnect(true);
   if (!tonConnectUI || !tonWalletAddress) return toast("Сначала подключите TON Connect.");
   try {
     const cfgR = await fetch("/api/gram/topup-config", { headers: authHeaders() });
@@ -1182,4 +1218,4 @@ document.querySelectorAll('.game-card[data-view]').forEach(btn => {
 
 setTopupCurrency("STAR");
 setWithdrawCurrency("STAR");
-initTonConnect();
+window.addEventListener("load", () => initTonConnect());

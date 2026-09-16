@@ -627,3 +627,65 @@ button{cursor:pointer}
   .upgrade-name{bottom:10px !important;font-size:23px !important;right:auto !important;}
   .pvp-card .game-card-name{left:50% !important;}
 }
+
+/* ---------- Modal layout correction: close controls stay INSIDE cards ---------- */
+.modal-card,
+.winner-card,
+.raffle-modal-card,
+.raffle-detail-modal,
+.upgrade-result-card{
+  position:relative !important;
+  overflow:visible !important;
+}
+.modal-close,
+.money-modal-card .modal-close,
+.raffle-modal-card .modal-close,
+.raffle-detail-modal .modal-close,
+.upgrade-result-close{
+  top:10px !important;
+  right:10px !important;
+  width:30px !important;
+  height:30px !important;
+  min-width:30px !important;
+  min-height:30px !important;
+  font-size:20px !important;
+  z-index:100 !important;
+}
+.modal-card{padding-top:54px !important;}
+.money-modal-card{padding-top:54px !important;}
+.withdraw-money-card{padding-top:54px !important;}
+.raffle-modal-card,.raffle-detail-modal{padding-top:54px !important;}
+.winner-card{padding-top:54px !important;}
+.upgrade-result-card{padding-top:54px !important;}
+
+/* TON Connect: reliable visible fallback + official widget anchor */
+.ton-connect-wrap{width:100%;}
+.ton-connect-fallback{
+  width:min(100%,280px);min-height:40px;border:1px solid rgba(255,255,255,.18);
+  border-radius:999px;background:#22251d;color:#fff;font-weight:900;padding:10px 16px;
+}
+#tonConnectButton:empty{display:none;}
+#tonConnectButton{min-height:0;width:100%;display:flex;justify-content:center;}
+.ton-connect-wrap .tc-root,
+.ton-connect-wrap tc-root{max-width:280px;width:100%;}
+
+/* Keep fixed navigation below readable content; reserve real space for it. */
+@media(max-width:600px){
+  .app{padding-bottom:150px !important;}
+  .view{padding-bottom:36px !important;}
+  .profile-view,.raffles-view{padding-bottom:70px !important;}
+  .bottom-nav{bottom:8px !important;}
+
+  .modal{padding:20px 10px 20px !important;align-items:center !important;}
+  .modal-card{max-height:calc(100vh - 40px) !important;}
+  .money-modal-card{width:min(100%,370px) !important;padding:54px 16px 28px !important;}
+  .withdraw-money-card{min-height:0 !important;}
+  .raffle-modal-card,.raffle-detail-modal{padding:54px 16px 28px !important;}
+  .winner-card{padding:54px 18px 28px !important;}
+  .upgrade-result-card{padding:54px 18px 28px !important;}
+  .upgrade-result-close{top:10px !important;right:10px !important;}
+
+  /* Games card labels are rendered by HTML, not overlaid SVG text. */
+  .game-card{overflow:hidden !important;position:relative !important;}
+  .game-card-name{z-index:3 !important;bottom:11px !important;}
+}

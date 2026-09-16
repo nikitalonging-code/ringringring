@@ -41,6 +41,21 @@ services:
       - key: ADMIN_TELEGRAM_IDS
         sync: false
 
+      # TON Connect manifest URL. Leave empty to use this service's /tonconnect-manifest.json.
+      - key: TON_CONNECT
+        sync: false
+      - key: TON_CONNECT_MANIFEST_URL
+        sync: false
+      # TON wallet that receives GRAM top-ups (TON transaction).
+      - key: TON_TOPUP_WALLET_ADDRESS
+        sync: false
+      - key: TON_CONNECT_WALLET_ADDRESS
+        sync: false
+      - key: TON_PER_STAR
+        sync: false
+      - key: GRAM_USD_PER_STAR
+        value: "0.015"
+
       - key: TELEGRAM_INIT_DATA_MAX_AGE
         value: "86400"
 

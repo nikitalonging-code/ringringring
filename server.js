@@ -22,6 +22,25 @@ app.get("/tonconnect-manifest.json", (req, res) => {
   });
 });
 
+app.get("/api/tonconnect/config", async (req, res) => {
+  try {
+    await authenticatedUserFromInitData(req.headers["x-telegram-init-data"]);
+    const base = String(process.env.APP_PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || `${req.protocol}://${req.get("host")}`).replace(/\/$/, "");
+    const rawTonConnect = String(process.env.TON_CONNECT || "").trim();
+    const manifestUrl = String(
+      process.env.TON_CONNECT_MANIFEST_URL ||
+      process.env.TON_CONNECT_MANIFEST ||
+      process.env.TON_CONNECT_URL ||
+      (rawTonConnect.startsWith("http://") || rawTonConnect.startsWith("https://") ? rawTonConnect : "") ||
+      `${base}/tonconnect-manifest.json`
+    ).trim();
+    if (!manifestUrl) return res.status(503).json({ error: "Укажите TON_CONNECT_MANIFEST_URL на Render." });
+    res.json({ manifestUrl });
+  } catch (e) {
+    res.status(401).json({ error: e.message || "Авторизация не выполнена." });
+  }
+});
+
 
 const pool = process.env.DATABASE_URL
   ? new Pool({
@@ -1796,7 +1815,11 @@ app.post("/api/profile/promo/redeem", async (req, res) => {
 app.get("/api/gram/topup-config", async (req, res) => {
   try {
     await authenticatedUserFromInitData(req.headers["x-telegram-init-data"]);
-    const recipient = String(process.env.TON_TOPUP_WALLET_ADDRESS || "").trim();
+    const recipient = String(
+      process.env.TON_TOPUP_WALLET_ADDRESS ||
+      process.env.TON_CONNECT_WALLET_ADDRESS ||
+      (!String(process.env.TON_CONNECT || "").trim().startsWith("http") ? String(process.env.TON_CONNECT || "") : "")
+    ).trim();
     const tonPerStar = Number(process.env.TON_PER_STAR || 0);
     if (!recipient || !tonPerStar || tonPerStar <= 0) {
       return res.status(503).json({ error: "Укажите TON_TOPUP_WALLET_ADDRESS и TON_PER_STAR на Render." });
