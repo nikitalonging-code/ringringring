@@ -1840,6 +1840,62 @@ app.get("/api/gram/topup-config", async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// TODO: AUTOMATIC TON TOP-UPS (currently manual — admin approves by hand)
+// ---------------------------------------------------------------------------
+// Right now this endpoint only WRITES a 'topup_pending' request row and pings
+// the admin in Telegram — a human has to see the on-chain payment and credit
+// the user manually. To make this fully automatic, add a background poller
+// that watches TON_TOPUP_WALLET_ADDRESS for incoming transactions and credits
+// balances itself, no admin step needed. Rough plan:
+//
+// 1. Give every user a way to be identified from their transaction alone.
+//    TON lets you attach a short text "comment" to a transfer. When a user
+//    starts a top-up, generate/show them a comment to paste, e.g. their own
+//    telegram_id ("UID12345678"), OR (cleaner) have the TonConnect transfer
+//    include that comment automatically in its payload — no manual typing.
+//
+// 2. Add a small table to remember which on-chain transactions we already
+//    credited, so we never double-credit on a re-poll:
+//      CREATE TABLE IF NOT EXISTS ton_deposits (
+//        tx_hash TEXT PRIMARY KEY,
+//        telegram_user_id TEXT NOT NULL,
+//        amount_ton NUMERIC NOT NULL,
+//        stars_credited INTEGER NOT NULL,
+//        created_at TIMESTAMPTZ DEFAULT NOW()
+//      );
+//
+// 3. Every N seconds (setInterval, e.g. 20–30s), call a TON indexer API for
+//    TON_TOPUP_WALLET_ADDRESS's recent incoming transactions — e.g.
+//    TonCenter: GET https://toncenter.com/api/v2/getTransactions?address=...
+//    or TonAPI:  GET https://tonapi.io/v2/blockchain/accounts/{address}/transactions
+//    (both need a free API key for reasonable rate limits — add as
+//    TONCENTER_API_KEY / TONAPI_KEY env vars).
+//
+// 4. For each NEW incoming transaction (hash not yet in ton_deposits):
+//      - Read the TON amount and the attached comment.
+//      - Extract the telegram_user_id from the comment (parse "UID<digits>").
+//      - If no match, skip it (leave for manual review — could be a stray
+//        transfer) and maybe notifyAdmins() so nothing silently gets lost.
+//      - stars = amount_ton / tonPerStar  (tonPerStar = TON_PER_STAR env var,
+//        same conversion rate already used above for the manual flow).
+//      - Insert the tx_hash into ton_deposits FIRST (or in the same DB
+//        transaction as the credit) so a crash/restart mid-poll can't
+//        double-credit the same transaction on the next poll.
+//      - await creditBalance(telegram_user_id, Math.floor(stars), pool, {
+//          type: "ton_topup", description: `TON пополнение ${amount_ton} TON`
+//        });
+//      - Optionally io.to(`user:${telegram_user_id}`).emit("balance_updated", ...)
+//        so the app updates live without a page refresh.
+//
+// 5. Start the poller once at server boot (near the bottom of this file,
+//    alongside the other setInterval-based background jobs), guarded so it
+//    only runs when TON_TOPUP_WALLET_ADDRESS/TON_PER_STAR are actually set.
+//
+// This is a genuine integration (needs a real TON API key + live testing
+// against real transactions), so it's left as this outline rather than an
+// unverified implementation — ask and it can be built out for real.
+// ---------------------------------------------------------------------------
 app.post("/api/gram/topup-request", async (req, res) => {
   try {
     const session = await authenticatedUserFromInitData(req.headers["x-telegram-init-data"]);

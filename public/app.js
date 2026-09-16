@@ -1123,24 +1123,15 @@ function spinUpgradePointer(data) {
   // match what the server rolled against).
   $("#upgradeWheel").style.background = `conic-gradient(from 0deg at 50% 50%, #ffc915 0%, #ffc915 ${chance}%, #141517 ${chance}%, #141517 100%)`;
 
-  // Use the exact server roll. This makes the visual landing deterministic:
-  // yellow [0..chance) is WIN, gray [chance..100) is LOSS.
-  let landingPercent = Number(data?.rollPercent);
-  if (!Number.isFinite(landingPercent)) {
-    // Backward-compatible fallback for an older server response.
-    const sliceStart = isWin ? 0 : chance;
-    const sliceEnd = isWin ? chance : 100;
-    const margin = Math.min(0.35, Math.max(0.05, (sliceEnd - sliceStart) / 5));
-    const safeStart = sliceStart + margin;
-    const safeEnd = Math.max(safeStart, sliceEnd - margin);
-    landingPercent = safeStart + upgradeSecureRandom() * (safeEnd - safeStart);
-  }
-  landingPercent = Math.max(0, Math.min(99.999999, landingPercent));
-
-  // Defensive assertion: if an unexpected response is ever received, keep
-  // the pointer visually inside the server-declared result segment.
-  if (isWin && landingPercent >= chance) landingPercent = Math.max(0, chance / 2);
-  if (!isWin && landingPercent < chance) landingPercent = Math.min(99.999999, chance + (100 - chance) / 2);
+  // Land dead-center inside the correct zone instead of reproducing the
+  // exact dice-roll position. The server is the only source of truth for
+  // win/lose — the player can never see or verify the raw roll number
+  // anyway — so there is no upside to placing the pointer near the seam
+  // between colors, only downside (any tiny rendering/rounding difference
+  // between browsers could visually land a pixel on the wrong side of the
+  // line). Landing safely in the middle of the zone makes a color/outcome
+  // mismatch structurally impossible, regardless of screen size or engine.
+  const landingPercent = isWin ? chance / 2 : chance + (100 - chance) / 2;
 
   const targetAngle = landingPercent * 3.6;
   pointerOrbit.style.opacity = "1";

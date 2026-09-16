@@ -692,7 +692,10 @@ button{cursor:pointer}
 
 /* ---------- Bugfixes: nav overlap, crooked close button, active tab ---------- */
 .modal-close,.upgrade-result-close{display:flex !important;align-items:center !important;justify-content:center !important;text-align:center !important;padding:0 !important;font-family:Arial,Helvetica,sans-serif !important;line-height:1 !important}
-.nav-item.active{background:rgba(255,201,21,.16) !important;border-radius:18px !important;box-shadow:inset 0 0 0 1px rgba(255,201,21,.35) !important}
+.nav-item.active{background:transparent !important;box-shadow:none !important}
+.bottom-nav{overflow:hidden !important}
+.nav-item{position:relative !important}
+.nav-item.active::before{content:"";position:absolute;inset:6px 8px;background:rgba(255,201,21,.16);border:1px solid rgba(255,201,21,.4);border-radius:16px;z-index:0}
 #profileView{padding-bottom:60px !important}
 .promo-card{margin-bottom:40px !important}
 .referral-card{margin-bottom:16px !important}
