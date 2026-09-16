@@ -6,6 +6,7 @@
   <meta name="theme-color" content="#111315">
   <title>RING — PVP</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="https://unpkg.com/@tonconnect/ui@2.0.11/dist/tonconnect-ui.min.js"></script>
   <script src="/socket.io/socket.io.js"></script>
   <script>window.__RING_GRAM_USD_PER_STAR = 0.015;</script>
   <link rel="stylesheet" href="/styles.css">
@@ -216,39 +217,62 @@
   </div>
 
   <div class="modal hidden" id="topupModal">
-    <div class="modal-card">
+    <div class="modal-card money-modal-card">
       <button class="modal-close" id="topupClose">×</button>
       <div class="tab-toggle">
         <button type="button" class="active" id="tabGoTopup">Пополнить</button>
         <button type="button" id="tabGoWithdraw1">Вывод</button>
       </div>
-      <div class="input-row">
-        <input id="topupAmount" type="number" min="1" step="1" inputmode="numeric" placeholder="Введите сумму…">
-        <span>⭐</span>
+      <div class="currency-toggle money-currency-toggle">
+        <button type="button" class="currency-option active" id="topupCurrencyStar">⭐ STAR</button>
+        <button type="button" class="currency-option" id="topupCurrencyGram">GRAM</button>
       </div>
-      <button class="confirm" id="createInvoice">Продолжить</button>
-      <p class="hint">Payment is made via the official Telegram Stars invoice.</p>
+      <div id="starsTopupPanel">
+        <div class="input-row">
+          <input id="topupAmount" type="number" min="1" step="1" inputmode="numeric" placeholder="Сумма в Stars…">
+          <span>⭐</span>
+        </div>
+        <button class="confirm" id="createInvoice">Продолжить</button>
+        <p class="hint">Оплата Stars проходит через официальный Telegram invoice.</p>
+      </div>
+      <div id="gramTopupPanel" class="hidden">
+        <div class="input-row">
+          <input id="gramTopupAmount" type="number" min="1" step="1" inputmode="numeric" placeholder="Сумма в Stars…">
+          <span>⭐</span>
+        </div>
+        <div class="withdraw-convert" id="gramTopupConvert">Эквивалент: ≈ $0.00</div>
+        <div class="ton-connect-wrap">
+          <div id="tonConnectButton"></div>
+          <div class="ton-wallet-status" id="tonWalletStatus">Кошелёк не подключён</div>
+        </div>
+        <button class="confirm" id="createGramTopup">Продолжить</button>
+        <p class="hint">Пополнение GRAM выполняется через TON Connect. После отправки транзакции заявка поступит администратору на проверку.</p>
+      </div>
     </div>
   </div>
 
   <div class="modal hidden" id="withdrawModal">
-    <div class="modal-card">
+    <div class="modal-card money-modal-card withdraw-money-card">
       <button class="modal-close" id="withdrawClose">×</button>
       <div class="tab-toggle">
         <button type="button" id="tabGoTopup2">Пополнить</button>
         <button type="button" class="active" id="tabGoWithdraw2">Вывод</button>
       </div>
-      <div class="currency-toggle single-currency">
-        <button type="button" class="currency-option active" id="withdrawCurrencyGram">GRAM</button>
+      <div class="currency-toggle money-currency-toggle">
+        <button type="button" class="currency-option active" id="withdrawCurrencyStar">⭐ STAR</button>
+        <button type="button" class="currency-option" id="withdrawCurrencyGram">GRAM</button>
       </div>
       <div class="input-row">
         <input id="withdrawAmount" type="number" min="1" step="1" inputmode="numeric" placeholder="Сумма в Stars…">
         <span id="withdrawUnitLabel" class="star-emoji">⭐</span>
       </div>
       <div class="withdraw-convert hidden" id="withdrawConvert">Эквивалент: ≈ $0.00</div>
+      <div class="input-row hidden" id="withdrawWalletRow">
+        <input id="withdrawWallet" type="text" autocomplete="off" placeholder="TON / GRAM кошелёк…">
+      </div>
       <div class="modal-balance">Баланс: <b id="withdrawModalBalance">0 ⭐</b></div>
       <button class="confirm" id="confirmWithdraw">Продолжить</button>
-      <p class="hint">The withdrawals are not carried out automatically. Your funds will be withdrawn after the administration's approval.</p>
+      <p class="hint">Выводы проверяются администратором. Для GRAM укажите кошелёк получателя.</p>
     </div>
   </div>
 

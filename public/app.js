@@ -24,8 +24,11 @@ let isAdmin = false;
 const betModal = $("#betModal");
 const topupModal = $("#topupModal");
 const withdrawModal = $("#withdrawModal");
-let withdrawCurrency = "GRAM";
+let withdrawCurrency = "STAR";
+let topupCurrency = "STAR";
 let GRAM_USD_PER_STAR = Number(window.__RING_GRAM_USD_PER_STAR || 0.015);
+let tonConnectUI = null;
+let tonWalletAddress = "";
 
 function toast(message) {
   const el = $("#toast");
@@ -69,25 +72,62 @@ $("#topupBtn").onclick = () => {
 };
 $("#topupClose").onclick = () => closeModal(topupModal);
 
-function setWithdrawCurrency(currency) {
-  // Withdrawals are always requested in Stars and routed to GRAM.
-  withdrawCurrency = "GRAM";
-  $("#withdrawCurrencyGram").classList.add("active");
-  updateWithdrawConversion();
-}
-function updateWithdrawConversion() {
-  const amount = Number($("#withdrawAmount").value || 0);
-  if (withdrawCurrency !== "GRAM") return;
+function updateGramConversion(inputSelector, outputSelector) {
+  const amount = Number($(inputSelector)?.value || 0);
   const dollars = Math.max(0, amount) * GRAM_USD_PER_STAR;
-  $("#withdrawConvert").textContent = `Эквивалент GRAM: ≈ $${dollars.toFixed(2)}`;
+  $(outputSelector).textContent = `Эквивалент GRAM: ≈ $${dollars.toFixed(2)}`;
 }
-$("#withdrawAmount").addEventListener("input", updateWithdrawConversion);
+
+function setTopupCurrency(currency) {
+  topupCurrency = String(currency).toUpperCase() === "GRAM" ? "GRAM" : "STAR";
+  $("#topupCurrencyStar").classList.toggle("active", topupCurrency === "STAR");
+  $("#topupCurrencyGram").classList.toggle("active", topupCurrency === "GRAM");
+  $("#starsTopupPanel").classList.toggle("hidden", topupCurrency !== "STAR");
+  $("#gramTopupPanel").classList.toggle("hidden", topupCurrency !== "GRAM");
+  updateGramConversion("#gramTopupAmount", "#gramTopupConvert");
+}
+
+function setWithdrawCurrency(currency) {
+  withdrawCurrency = String(currency).toUpperCase() === "GRAM" ? "GRAM" : "STAR";
+  $("#withdrawCurrencyStar").classList.toggle("active", withdrawCurrency === "STAR");
+  $("#withdrawCurrencyGram").classList.toggle("active", withdrawCurrency === "GRAM");
+  $("#withdrawConvert").classList.toggle("hidden", withdrawCurrency !== "GRAM");
+  $("#withdrawWalletRow").classList.toggle("hidden", withdrawCurrency !== "GRAM");
+  $("#withdrawAmount").placeholder = "Сумма в Stars…";
+  updateGramConversion("#withdrawAmount", "#withdrawConvert");
+}
+
+$("#gramTopupAmount").addEventListener("input", () => updateGramConversion("#gramTopupAmount", "#gramTopupConvert"));
+$("#withdrawAmount").addEventListener("input", () => updateGramConversion("#withdrawAmount", "#withdrawConvert"));
+
+function initTonConnect() {
+  if (!window.TON_CONNECT_UI) return;
+  try {
+    tonConnectUI = new TON_CONNECT_UI.TonConnectUI({
+      manifestUrl: `${location.origin}/tonconnect-manifest.json`,
+      buttonRootId: "tonConnectButton"
+    });
+    tonConnectUI.onStatusChange(wallet => {
+      tonWalletAddress = wallet?.account?.address || "";
+      $("#tonWalletStatus").textContent = tonWalletAddress
+        ? `Подключён: ${tonWalletAddress.slice(0, 6)}…${tonWalletAddress.slice(-6)}`
+        : "Кошелёк не подключён";
+    });
+  } catch (e) {
+    console.warn("TON Connect init failed:", e.message);
+  }
+}
+
+$("#topupCurrencyStar").onclick = () => setTopupCurrency("STAR");
+$("#topupCurrencyGram").onclick = () => setTopupCurrency("GRAM");
+$("#withdrawCurrencyStar").onclick = () => setWithdrawCurrency("STAR");
+$("#withdrawCurrencyGram").onclick = () => setWithdrawCurrency("GRAM");
 
 $("#withdrawBtn").onclick = () => {
   if (!initData) return handleNotTelegram();
   $("#withdrawAmount").value = "";
-  setWithdrawCurrency("GRAM");
-  $("#withdrawAmount").placeholder = "Сумма в Stars…";
+  $("#withdrawWallet").value = "";
+  setWithdrawCurrency("STAR");
   $("#withdrawModalBalance").textContent = currentBalance.toFixed(2) + " ⭐";
   openModal(withdrawModal);
 };
@@ -97,17 +137,75 @@ $("#confirmWithdraw").onclick = async () => {
   const amount = Number($("#withdrawAmount").value);
   if (!Number.isInteger(amount) || amount <= 0) return toast("Введите целую сумму Stars больше 0.");
   if (amount > currentBalance) return toast("Недостаточно Stars на балансе.");
+  const wallet = $("#withdrawWallet").value.trim();
+  if (withdrawCurrency === "GRAM" && !wallet) return toast("Укажите GRAM / TON кошелёк.");
   try {
     const r = await fetch("/api/profile/withdraw", {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ amount, currency: withdrawCurrency })
+      body: JSON.stringify({ amount, currency: withdrawCurrency, wallet })
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.error || "Не удалось отправить заявку.");
     setBalance(data.balance);
     closeModal(withdrawModal);
     toast("Заявка на вывод отправлена администратору.");
+  } catch (e) { toast(e.message); }
+};
+
+$("#createGramTopup").onclick = async () => {
+  const amount = Number($("#gramTopupAmount").value);
+  if (!Number.isInteger(amount) || amount <= 0) return toast("Введите целую сумму Stars больше 0.");
+  if (!tonConnectUI || !tonWalletAddress) return toast("Сначала подключите TON Connect.");
+  try {
+    const cfgR = await fetch("/api/gram/topup-config", { headers: authHeaders() });
+    const cfg = await cfgR.json().catch(() => ({}));
+    if (!cfgR.ok) throw new Error(cfg.error || "GRAM пополнение не настроено.");
+    const nanoTon = String(Math.round(amount * Number(cfg.tonPerStar || 0) * 1e9));
+    if (!nanoTon || nanoTon === "0") throw new Error("Не задан курс TON/Star на Render.");
+    await tonConnectUI.sendTransaction({
+      validUntil: Math.floor(Date.now() / 1000) + 600,
+      messages: [{ address: cfg.recipient, amount: nanoTon }]
+    });
+    const r = await fetch("/api/gram/topup-request", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ amount, wallet: tonWalletAddress })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || "Транзакция отправлена, но заявку создать не удалось.");
+    closeModal(topupModal);
+    toast("Транзакция отправлена. Заявка поступила администратору.");
+  } catch (e) { toast(e.message || "Не удалось выполнить GRAM пополнение."); }
+};
+
+$("#topupBtn").onclick = () => {
+  if (!initData) return handleNotTelegram();
+  $("#topupAmount").value = "";
+  $("#gramTopupAmount").value = "";
+  setTopupCurrency("STAR");
+  openModal(topupModal);
+};
+$("#topupClose").onclick = () => closeModal(topupModal);
+
+$("#createInvoice").onclick = async () => {
+  const amount = Number($("#topupAmount").value);
+  if (!Number.isInteger(amount) || amount <= 0) return toast("Введите сумму Stars.");
+  try {
+    const r = await fetch("/api/stars/create-invoice", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ amount })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || "Ошибка создания счёта.");
+    if (tg?.openInvoice) {
+      tg.openInvoice(data.invoiceUrl, status => {
+        if (status === "paid") toast("Платёж принят. Баланс обновится автоматически.");
+        else if (status === "cancelled") toast("Оплата отменена.");
+        else if (status === "failed") toast("Telegram не подтвердил оплату.");
+      });
+    } else toast("Счёт создан только для Telegram Mini App.");
   } catch (e) { toast(e.message); }
 };
 
@@ -1081,3 +1179,7 @@ function switchToWithdraw() { closeModal(topupModal); $("#withdrawBtn").click();
 document.querySelectorAll('.game-card[data-view]').forEach(btn => {
   btn.onclick = () => setView(btn.dataset.view);
 });
+
+setTopupCurrency("STAR");
+setWithdrawCurrency("STAR");
+initTonConnect();

@@ -13,6 +13,15 @@ const io = new Server(server, { cors: { origin: "*" } });
 app.use(express.json({ limit: "512kb" }));
 app.use(express.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname, "public")));
+app.get("/tonconnect-manifest.json", (req, res) => {
+  const base = String(process.env.APP_PUBLIC_URL || `${req.protocol}://${req.get("host")}`).replace(/\/$/, "");
+  res.json({
+    url: base,
+    name: "RING",
+    iconUrl: `${base}/assets/group-6-nav.svg`
+  });
+});
+
 
 const pool = process.env.DATABASE_URL
   ? new Pool({
@@ -363,6 +372,7 @@ async function initDb() {
       telegram_user_id TEXT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
       currency TEXT NOT NULL CHECK (currency IN ('STAR','GRAM','TON')),
       amount NUMERIC(20,2) NOT NULL CHECK (amount > 0),
+      wallet_address TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'pending',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
@@ -373,6 +383,7 @@ async function initDb() {
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS games_played INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS games_won INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS total_wagered NUMERIC(20,2) NOT NULL DEFAULT 0`,
+    `ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS wallet_address TEXT NOT NULL DEFAULT ''`,
 
     `CREATE INDEX IF NOT EXISTS promo_codes_active_idx ON promo_codes(active, created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS promo_redemptions_user_idx ON promo_redemptions(telegram_user_id, redeemed_at DESC)`,
@@ -1782,21 +1793,69 @@ app.post("/api/profile/promo/redeem", async (req, res) => {
   }
 });
 
+app.get("/api/gram/topup-config", async (req, res) => {
+  try {
+    await authenticatedUserFromInitData(req.headers["x-telegram-init-data"]);
+    const recipient = String(process.env.TON_TOPUP_WALLET_ADDRESS || "").trim();
+    const tonPerStar = Number(process.env.TON_PER_STAR || 0);
+    if (!recipient || !tonPerStar || tonPerStar <= 0) {
+      return res.status(503).json({ error: "Укажите TON_TOPUP_WALLET_ADDRESS и TON_PER_STAR на Render." });
+    }
+    res.json({ recipient, tonPerStar });
+  } catch (e) {
+    res.status(401).json({ error: e.message || "Авторизация не выполнена." });
+  }
+});
+
+app.post("/api/gram/topup-request", async (req, res) => {
+  try {
+    const session = await authenticatedUserFromInitData(req.headers["x-telegram-init-data"]);
+    const userId = session.telegram.id;
+    const amount = Number(req.body?.amount);
+    const wallet = String(req.body?.wallet || "").trim();
+    if (!Number.isInteger(amount) || amount <= 0) throw new Error("Введите целую сумму Stars больше 0.");
+    if (!wallet) throw new Error("TON Connect кошелёк не найден.");
+
+    const gramUsdPerStar = Number(process.env.GRAM_USD_PER_STAR || 0.015);
+    const usd = amount * gramUsdPerStar;
+    await pool.query(
+      `INSERT INTO withdrawal_requests (telegram_user_id, currency, amount, wallet_address, status)
+       VALUES ($1,'GRAM',$2,$3,'topup_pending')`,
+      [String(userId), amount, wallet]
+    );
+
+    const displayName = session.telegram.username ? `@${session.telegram.username}` : session.telegram.first_name;
+    notifyAdmins(
+      `💎 Новая заявка на пополнение GRAM\n` +
+      `Пользователь: ${displayName} (ID: ${userId})\n` +
+      `Сумма заявки: ${amount} ⭐\n` +
+      `Эквивалент: ≈ $${usd.toFixed(2)}\n` +
+      `TON кошелёк: ${wallet}`
+    ).catch(() => {});
+
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message || "Не удалось создать заявку." });
+  }
+});
+
 app.post("/api/profile/withdraw", async (req, res) => {
   try {
     const session = await authenticatedUserFromInitData(req.headers["x-telegram-init-data"]);
     const userId = session.telegram.id;
-    const currency = String(req.body?.currency || "").trim().toUpperCase();
+    const currency = String(req.body?.currency || "STAR").trim().toUpperCase();
     const amount = Number(req.body?.amount);
+    const wallet = String(req.body?.wallet || "").trim();
 
-    if (currency !== "GRAM") throw new Error("Вывод доступен только в GRAM.");
+    if (!["STAR", "GRAM"].includes(currency)) throw new Error("Вывод доступен только в Stars или GRAM.");
     if (!Number.isInteger(amount) || amount <= 0) throw new Error("Введите целую сумму Stars больше 0.");
+    if (currency === "GRAM" && !wallet) throw new Error("Для вывода GRAM укажите кошелёк.");
 
     const gramUsdPerStar = Number(process.env.GRAM_USD_PER_STAR || 0.015);
     const gramUsd = currency === "GRAM" ? amount * gramUsdPerStar : null;
     const description = currency === "GRAM"
-      ? `Заявка на вывод ${amount} ⭐ → GRAM (≈ $${gramUsd.toFixed(2)})`
-      : `Заявка на вывод ${amount} ⭐ → ${currency}`;
+      ? `Заявка на вывод ${amount} ⭐ → GRAM (≈ $${gramUsd.toFixed(2)}), кошелёк ${wallet}`
+      : `Заявка на вывод ${amount} ⭐ → Telegram Stars`;
 
     const balanceAfter = await debitBalance(userId, amount, {
       type: "withdraw_request",
@@ -1804,9 +1863,9 @@ app.post("/api/profile/withdraw", async (req, res) => {
     });
 
     const ins = await pool.query(
-      `INSERT INTO withdrawal_requests (telegram_user_id, currency, amount)
-       VALUES ($1,$2,$3) RETURNING id, created_at`,
-      [String(userId), currency, amount]
+      `INSERT INTO withdrawal_requests (telegram_user_id, currency, amount, wallet_address)
+       VALUES ($1,$2,$3,$4) RETURNING id, created_at`,
+      [String(userId), currency, amount, wallet]
     );
 
     const displayName = session.telegram.username
@@ -1816,9 +1875,9 @@ app.post("/api/profile/withdraw", async (req, res) => {
     notifyAdmins(
       `📤 Новая заявка на вывод\n` +
       `Пользователь: ${displayName} (ID: ${userId})\n` +
-      `Направление: ${currency}\n` +
+      `Направление: ${currency === "GRAM" ? "GRAM" : "Telegram Stars"}\n` +
       `Сумма списания: ${amount} ⭐\n` +
-      (currency === "GRAM" ? `Эквивалент GRAM: ≈ $${gramUsd.toFixed(2)}\n` : "") +
+      (currency === "GRAM" ? `Эквивалент: ≈ $${gramUsd.toFixed(2)}\nTON / GRAM кошелёк: ${wallet}\n` : "") +
       `Заявка №${ins.rows[0].id}`
     ).catch(() => {});
 
