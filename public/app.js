@@ -1115,6 +1115,14 @@ function spinUpgradePointer(data) {
   const chance = Math.max(0, Math.min(100, Number(data?.chance) || 0));
   const isWin = data?.win === true;
 
+  // Redraw the wheel using the SERVER's own chance value right before we
+  // animate, so the yellow/gray boundary the player actually sees can never
+  // drift out of sync with the value used to decide win/loss (e.g. if the
+  // bet/target inputs changed between placing the bet and the result coming
+  // back, the wheel drawn from stale local input values would no longer
+  // match what the server rolled against).
+  $("#upgradeWheel").style.background = `conic-gradient(from 0deg at 50% 50%, #ffc915 0%, #ffc915 ${chance}%, #141517 ${chance}%, #141517 100%)`;
+
   // Use the exact server roll. This makes the visual landing deterministic:
   // yellow [0..chance) is WIN, gray [chance..100) is LOSS.
   let landingPercent = Number(data?.rollPercent);

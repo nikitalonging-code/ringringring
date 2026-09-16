@@ -1821,9 +1821,18 @@ app.get("/api/gram/topup-config", async (req, res) => {
       process.env.TON_CONNECT_WALLET_ADDRESS ||
       (!String(process.env.TON_CONNECT || "").trim().startsWith("http") ? String(process.env.TON_CONNECT || "") : "")
     ).trim();
-    const tonPerStar = Number(process.env.TON_PER_STAR || 0);
-    if (!recipient || !tonPerStar || tonPerStar <= 0) {
-      return res.status(503).json({ error: "Укажите TON_TOPUP_WALLET_ADDRESS и TON_PER_STAR на Render." });
+    // Accept "0,001" as well as "0.001" (a common paste mistake), and ignore
+    // stray surrounding whitespace/newlines from copy-pasting into Render.
+    const tonPerStarRaw = String(process.env.TON_PER_STAR || "").trim().replace(",", ".");
+    const tonPerStar = Number(tonPerStarRaw);
+    if (!recipient && (!tonPerStarRaw || !(tonPerStar > 0))) {
+      return res.status(503).json({ error: "На Render не заданы TON_TOPUP_WALLET_ADDRESS и TON_PER_STAR (или сервис не передеплоен после их добавления)." });
+    }
+    if (!recipient) {
+      return res.status(503).json({ error: "На Render не задан TON_TOPUP_WALLET_ADDRESS (или сервис не передеплоен после его добавления)." });
+    }
+    if (!tonPerStarRaw || !(tonPerStar > 0)) {
+      return res.status(503).json({ error: "TON_PER_STAR на Render пуст или не является числом больше нуля (проверьте, не запятая ли вместо точки)." });
     }
     res.json({ recipient, tonPerStar });
   } catch (e) {
