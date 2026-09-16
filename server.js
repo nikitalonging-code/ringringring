@@ -12,7 +12,6 @@ const io = new Server(server, { cors: { origin: "*" } });
 
 app.use(express.json({ limit: "512kb" }));
 app.use(express.urlencoded({ extended: false }));
-app.use(express.static(path.join(__dirname, "public")));
 app.get("/tonconnect-manifest.json", (req, res) => {
   const base = String(process.env.APP_PUBLIC_URL || `${req.protocol}://${req.get("host")}`).replace(/\/$/, "");
   res.json({
@@ -21,6 +20,8 @@ app.get("/tonconnect-manifest.json", (req, res) => {
     iconUrl: `${base}/assets/group-6-nav.svg`
   });
 });
+
+app.use(express.static(path.join(__dirname, "public")));
 
 app.get("/api/tonconnect/config", async (req, res) => {
   try {
