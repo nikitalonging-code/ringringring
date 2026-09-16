@@ -7,7 +7,7 @@
   <title>RING — PVP</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="/socket.io/socket.io.js"></script>
-  <script>window.__RING_GRAM_USD_PER_STAR = 0.10;</script>
+  <script>window.__RING_GRAM_USD_PER_STAR = 0.015;</script>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -15,7 +15,7 @@
     <section class="balance-row">
       <div class="balance">
         <span id="balance">0</span>
-        <span class="balance-star"><img src="/assets/vector-15.svg" alt=""></span>
+        <span class="balance-star-emoji">⭐</span>
       </div>
       <button class="topup" id="topupBtn">Пополнить</button>
     </section>
@@ -66,7 +66,7 @@
         <div class="games-grid">
           <button class="game-card pvp-card" data-view="pvp">
             <img class="game-art" src="/assets/game-pvp-card.svg" alt="PVP">
-            <span class="game-card-name"><small>wheel</small>PVP</span>
+            <span class="game-card-name">PVP</span>
           </button>
           <button class="game-card upgrade-card" id="openUpgrade">
             <img class="game-art" src="/assets/game-upgrade-card.svg" alt="Upgrade">
@@ -194,23 +194,11 @@
       </section>
     </section>
 
-    <nav class="bottom-nav">
-      <button class="nav-item" data-view="raffles">
-        <img class="nav-icon" src="/assets/vector-14.svg" alt="">
-        <small>Giveaways</small>
-      </button>
-      <button class="nav-item" data-view="games">
-        <img class="nav-icon nav-games-icon" src="/assets/vector-2.svg" alt="">
-        <small>Games</small>
-      </button>
-      <button class="nav-item" data-view="profile">
-        <img class="nav-icon nav-profile-icon" src="/assets/vector-16.svg" alt="">
-        <small>Profile</small>
-      </button>
-      <button class="nav-item active" data-view="pvp">
-        <img class="nav-icon" src="/assets/vector-4.svg" alt="">
-        <small>PVP</small>
-      </button>
+    <nav class="bottom-nav" aria-label="Main navigation">
+      <button class="nav-item" data-view="raffles" aria-label="Giveaways"></button>
+      <button class="nav-item" data-view="games" aria-label="Games"></button>
+      <button class="nav-item" data-view="profile" aria-label="Profile"></button>
+      <button class="nav-item active" data-view="pvp" aria-label="PVP"></button>
     </nav>
   </main>
 
@@ -250,14 +238,12 @@
         <button type="button" id="tabGoTopup2">Пополнить</button>
         <button type="button" class="active" id="tabGoWithdraw2">Вывод</button>
       </div>
-      <div class="currency-toggle">
-        <button type="button" class="currency-option active" id="withdrawCurrencyStar"><img src="/assets/vector-15.svg" alt=""> STAR</button>
-        <button type="button" class="currency-option" id="withdrawCurrencyGram">GRAM</button>
-        <button type="button" class="currency-option" id="withdrawCurrencyTon">TON</button>
+      <div class="currency-toggle single-currency">
+        <button type="button" class="currency-option active" id="withdrawCurrencyGram">GRAM</button>
       </div>
       <div class="input-row">
         <input id="withdrawAmount" type="number" min="1" step="1" inputmode="numeric" placeholder="Сумма в Stars…">
-        <span id="withdrawUnitLabel"><img src="/assets/vector-15.svg" alt=""></span>
+        <span id="withdrawUnitLabel" class="star-emoji">⭐</span>
       </div>
       <div class="withdraw-convert hidden" id="withdrawConvert">Эквивалент: ≈ $0.00</div>
       <div class="modal-balance">Баланс: <b id="withdrawModalBalance">0 ⭐</b></div>

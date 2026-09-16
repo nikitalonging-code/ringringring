@@ -1719,7 +1719,7 @@ app.get("/api/bootstrap", async (req, res) => {
       user: session.db,
       isAdmin: isAdmin(session.telegram.id),
       state: publicState(),
-      gramUsdPerStar: Number(process.env.GRAM_USD_PER_STAR || 0.10)
+      gramUsdPerStar: Number(process.env.GRAM_USD_PER_STAR || 0.015)
     });
   } catch (e) {
     res.status(401).json({ error: e.message });
@@ -1789,10 +1789,10 @@ app.post("/api/profile/withdraw", async (req, res) => {
     const currency = String(req.body?.currency || "").trim().toUpperCase();
     const amount = Number(req.body?.amount);
 
-    if (!["STAR", "GRAM", "TON"].includes(currency)) throw new Error("Выберите направление вывода: STAR, GRAM или TON.");
+    if (currency !== "GRAM") throw new Error("Вывод доступен только в GRAM.");
     if (!Number.isInteger(amount) || amount <= 0) throw new Error("Введите целую сумму Stars больше 0.");
 
-    const gramUsdPerStar = Number(process.env.GRAM_USD_PER_STAR || 0.10);
+    const gramUsdPerStar = Number(process.env.GRAM_USD_PER_STAR || 0.015);
     const gramUsd = currency === "GRAM" ? amount * gramUsdPerStar : null;
     const description = currency === "GRAM"
       ? `Заявка на вывод ${amount} ⭐ → GRAM (≈ $${gramUsd.toFixed(2)})`

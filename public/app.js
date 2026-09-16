@@ -24,8 +24,8 @@ let isAdmin = false;
 const betModal = $("#betModal");
 const topupModal = $("#topupModal");
 const withdrawModal = $("#withdrawModal");
-let withdrawCurrency = "STAR";
-let GRAM_USD_PER_STAR = Number(window.__RING_GRAM_USD_PER_STAR || 0.10);
+let withdrawCurrency = "GRAM";
+let GRAM_USD_PER_STAR = Number(window.__RING_GRAM_USD_PER_STAR || 0.015);
 
 function toast(message) {
   const el = $("#toast");
@@ -70,14 +70,9 @@ $("#topupBtn").onclick = () => {
 $("#topupClose").onclick = () => closeModal(topupModal);
 
 function setWithdrawCurrency(currency) {
-  withdrawCurrency = currency;
-  $("#withdrawCurrencyStar").classList.toggle("active", currency === "STAR");
-  $("#withdrawCurrencyGram").classList.toggle("active", currency === "GRAM");
-  $("#withdrawCurrencyTon").classList.toggle("active", currency === "TON");
-  const unit = $("#withdrawUnitLabel");
-  unit.innerHTML = '<img src="/assets/vector-15.svg" alt="">';
-  const conv = $("#withdrawConvert");
-  conv.classList.toggle("hidden", currency !== "GRAM");
+  // Withdrawals are always requested in Stars and routed to GRAM.
+  withdrawCurrency = "GRAM";
+  $("#withdrawCurrencyGram").classList.add("active");
   updateWithdrawConversion();
 }
 function updateWithdrawConversion() {
@@ -87,14 +82,11 @@ function updateWithdrawConversion() {
   $("#withdrawConvert").textContent = `Эквивалент GRAM: ≈ $${dollars.toFixed(2)}`;
 }
 $("#withdrawAmount").addEventListener("input", updateWithdrawConversion);
-$("#withdrawCurrencyStar").onclick = () => setWithdrawCurrency("STAR");
-$("#withdrawCurrencyGram").onclick = () => setWithdrawCurrency("GRAM");
-$("#withdrawCurrencyTon").onclick = () => setWithdrawCurrency("TON");
 
 $("#withdrawBtn").onclick = () => {
   if (!initData) return handleNotTelegram();
   $("#withdrawAmount").value = "";
-  setWithdrawCurrency("STAR");
+  setWithdrawCurrency("GRAM");
   $("#withdrawAmount").placeholder = "Сумма в Stars…";
   $("#withdrawModalBalance").textContent = currentBalance.toFixed(2) + " ⭐";
   openModal(withdrawModal);
