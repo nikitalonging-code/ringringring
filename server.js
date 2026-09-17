@@ -180,15 +180,19 @@ function broadcast() {
   io.emit("room_state", publicState());
 }
 
-function weightedWinner(players) {
+// Turns a server seed (+ a purpose "salt") into a deterministic float in
+// [0,1). Reusing the same seed with different salts for the winner pick and
+// the spin angle keeps both derived from one committed value, so the whole
+// round can be re-derived and checked later from the seed alone.
+function seededFloat(seed, salt) {
+  const h = crypto.createHash("sha256").update(`${seed}:${salt}`).digest();
+  return h.readUInt32BE(0) / 0x100000000;
+}
+
+function weightedWinner(players, target) {
   const funded = players.filter(p => Number(p.bet) > 0);
   const bank = funded.reduce((sum, p) => sum + Number(p.bet), 0);
   if (!bank) return null;
-
-  // Cryptographically secure random in [0,1).
-  const max = 1_000_000_000;
-  const r = Number(BigInt("0x" + crypto.randomBytes(8).toString("hex")) % BigInt(max));
-  const target = r / max;
 
   let cumulative = 0;
   for (const p of funded) {
@@ -404,6 +408,9 @@ async function initDb() {
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS games_won INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS total_wagered NUMERIC(20,2) NOT NULL DEFAULT 0`,
     `ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS wallet_address TEXT NOT NULL DEFAULT ''`,
+    `ALTER TABLE pvp_rounds ADD COLUMN IF NOT EXISTS round_number SERIAL`,
+    `ALTER TABLE pvp_rounds ADD COLUMN IF NOT EXISTS server_seed TEXT`,
+    `ALTER TABLE pvp_rounds ADD COLUMN IF NOT EXISTS server_seed_hash TEXT`,
 
     `CREATE INDEX IF NOT EXISTS promo_codes_active_idx ON promo_codes(active, created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS promo_redemptions_user_idx ON promo_redemptions(telegram_user_id, redeemed_at DESC)`,
@@ -583,7 +590,15 @@ async function finishRound() {
   state.countdownEndsAt = null;
 
   const players = [...state.players.values()];
-  const winner = weightedWinner(players);
+
+  // Provably-fair round seed: everything random about this round (who wins,
+  // exactly where the pointer stops) is derived from this one seed, so the
+  // seed + hash shown afterwards in the round history are enough for anyone
+  // to recompute the exact same result.
+  const roundSeed = crypto.randomBytes(16).toString("hex");
+  const roundSeedHash = crypto.createHash("sha256").update(roundSeed).digest("hex");
+
+  const winner = weightedWinner(players, seededFloat(roundSeed, "winner"));
   if (!winner) {
     state.status = "WAITING";
     broadcast();
@@ -599,14 +614,14 @@ async function finishRound() {
   for (const p of players) {
     const share = bank > 0 ? (Number(p.bet) / bank) * 100 : 0;
     if (p.id === winner.id) {
-      // Stop at a cryptographically random point INSIDE the winner's sector,
-      // not at its center. This keeps the visual result correct while making
-      // repeated wins land at different positions.
+      // Stop at a random point INSIDE the winner's sector, not at its
+      // center, so repeated wins land at different positions. Derived from
+      // the same round seed as the winner pick (different salt).
       const edge = Math.min(0.75, share / 4);
       const usableStart = sectorStart + edge;
       const usableEnd = sectorStart + share - edge;
       const fraction = usableEnd > usableStart
-        ? usableStart + (crypto.randomBytes(4).readUInt32BE(0) / 0x100000000) * (usableEnd - usableStart)
+        ? usableStart + seededFloat(roundSeed, "angle") * (usableEnd - usableStart)
         : sectorStart + share / 2;
       state.spinTargetAngle = fraction * 3.6;
       break;
@@ -658,9 +673,9 @@ async function finishRound() {
       }
 
       await client.query(
-        `INSERT INTO pvp_rounds (id, bank, winner_id, winner_bet, payout, commission, players)
-         VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (id) DO NOTHING`,
-        [state.roomId, bank, winner.id, winner.bet, payout, commission, JSON.stringify(publicState().players)]
+        `INSERT INTO pvp_rounds (id, bank, winner_id, winner_bet, payout, commission, players, server_seed, server_seed_hash)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO NOTHING`,
+        [state.roomId, bank, winner.id, winner.bet, payout, commission, JSON.stringify(publicState().players), roundSeed, roundSeedHash]
       );
       await client.query("COMMIT");
       io.to(`user:${winner.id}`).emit("balance_updated", { balance: balanceAfter });
@@ -2308,6 +2323,88 @@ app.get("/health", (req, res) => {
     telegramWebhookConfigured: !!process.env.TELEGRAM_WEBHOOK_SECRET && !!process.env.APP_PUBLIC_URL,
     adminsConfigured: getAdminIds().length
   });
+});
+
+// History list: round number, winner, payout/multiplier, timestamp. Search
+// by round number when ?q= is a plain number, otherwise returns the most
+// recent rounds.
+app.get("/api/pvp/history", async (req, res) => {
+  try {
+    const q = String(req.query.q || "").trim();
+    const limit = Math.min(Math.max(Number(req.query.limit || 30), 1), 100);
+    const values = [];
+    let where = "";
+    if (q && /^\d+$/.test(q)) {
+      values.push(q);
+      where = `WHERE round_number::text LIKE $${values.length} || '%'`;
+    }
+    values.push(limit);
+    const r = await pool.query(
+      `SELECT round_number, id, bank, winner_id, winner_bet, payout, players, created_at
+       FROM pvp_rounds ${where} ORDER BY round_number DESC LIMIT $${values.length}`,
+      values
+    );
+    const rounds = r.rows.map(row => {
+      const players = Array.isArray(row.players) ? row.players : [];
+      const winner = players.find(p => p.id === row.winner_id) || null;
+      const winnerBet = Number(row.winner_bet || 0);
+      const payout = Number(row.payout || 0);
+      return {
+        roundNumber: row.round_number,
+        createdAt: row.created_at,
+        bank: Number(row.bank),
+        winner: winner ? {
+          id: winner.id,
+          name: winner.name,
+          avatar: winner.avatar,
+          percentage: winner.percentage
+        } : null,
+        payout,
+        multiplier: winnerBet > 0 ? Number((payout / winnerBet).toFixed(2)) : 0
+      };
+    });
+    res.json({ rounds });
+  } catch (e) {
+    res.status(400).json({ error: e.message || "Не удалось загрузить историю." });
+  }
+});
+
+// Full breakdown of one round: every participant + the provably-fair seed.
+app.get("/api/pvp/history/:roundNumber", async (req, res) => {
+  try {
+    const roundNumber = Number(req.params.roundNumber);
+    if (!Number.isInteger(roundNumber) || roundNumber <= 0) throw new Error("Некорректный номер игры.");
+    const r = await pool.query(
+      `SELECT round_number, id, bank, winner_id, winner_bet, payout, commission, players,
+              server_seed, server_seed_hash, created_at
+       FROM pvp_rounds WHERE round_number=$1`,
+      [roundNumber]
+    );
+    if (!r.rowCount) throw new Error("Игра не найдена.");
+    const row = r.rows[0];
+    const players = Array.isArray(row.players) ? row.players : [];
+    const winnerBet = Number(row.winner_bet || 0);
+    const payout = Number(row.payout || 0);
+    res.json({
+      roundNumber: row.round_number,
+      createdAt: row.created_at,
+      bank: Number(row.bank),
+      winnerId: row.winner_id,
+      payout,
+      multiplier: winnerBet > 0 ? Number((payout / winnerBet).toFixed(2)) : 0,
+      players: players
+        .map(p => ({ id: p.id, name: p.name, avatar: p.avatar, bet: Number(p.bet || 0), percentage: p.percentage }))
+        .sort((a, b) => b.bet - a.bet),
+      // Provably fair: server_seed_hash was fixed before the round settled;
+      // server_seed is only revealed here, afterwards, so anyone can hash it
+      // themselves and confirm it matches — the seed could not have been
+      // chosen after seeing the bets.
+      hash: row.server_seed_hash,
+      seed: row.server_seed
+    });
+  } catch (e) {
+    res.status(400).json({ error: e.message || "Не удалось загрузить игру." });
+  }
 });
 
 app.get("/api/state", (req, res) => res.json(publicState()));

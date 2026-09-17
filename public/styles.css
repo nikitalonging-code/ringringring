@@ -699,3 +699,39 @@ button{cursor:pointer}
 #profileView{padding-bottom:60px !important}
 .promo-card{margin-bottom:40px !important}
 .referral-card{margin-bottom:16px !important}
+
+/* ---------- PVP round history ---------- */
+.players-section-head{display:flex;align-items:center;justify-content:space-between;margin:10px 0 14px}
+.players-section-head h2{margin:0}
+.history-btn{display:flex;align-items:center;gap:6px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.05);color:#e7e2cf;border-radius:999px;padding:9px 14px;font-weight:800;font-size:12px}
+.history-btn svg{width:15px;height:15px}
+.history-modal-card{max-height:88vh;overflow:auto;background:#0d0d0d;padding-top:22px}
+.history-search-row{display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:0 14px;margin-bottom:14px}
+.history-search-row svg{width:18px;height:18px;color:rgba(255,255,255,.45);flex:none}
+.history-search-row input{width:100%;border:0;outline:0;background:transparent;color:#fff;padding:14px 2px;font-size:14px;font-weight:700}
+.history-search-row input::placeholder{color:rgba(255,255,255,.4)}
+.history-list{display:grid;gap:10px}
+.history-round{width:100%;text-align:left;background:var(--olive-grad);border:1px solid rgba(255,255,255,.06);border-radius:18px;padding:14px;color:#fff}
+.history-round-top{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;color:#cfc9ab;font-weight:800}
+.history-round-tag{display:flex;align-items:center;gap:6px}
+.history-round-tag svg{width:13px;height:13px;opacity:.8}
+.history-round-body{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px}
+.history-round-winner{display:flex;align-items:center;gap:10px;min-width:0}
+.history-round-winner .avatar-small{width:36px;height:36px;flex:none}
+.history-round-winner-info{min-width:0}
+.history-round-name{font-weight:800;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px}
+.history-round-pct{color:#c9c4ac;font-size:12px;margin-top:2px}
+.history-round-right{text-align:right;flex:none}
+.history-round-amount{color:#5cffb0;font-weight:900;font-size:14px}
+.history-round-mult{color:#e7e2cf;font-size:12px;margin-top:2px}
+.history-detail-title{color:#fff;font-size:19px;font-weight:900;margin:4px 0 2px}
+.history-detail-date{color:rgba(255,255,255,.45);font-size:12px;margin-bottom:16px}
+.history-hash-row{display:flex;width:100%;justify-content:center;gap:6px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);color:#c9c4ac;border-radius:14px;padding:13px;font-size:12px;font-weight:700;margin-bottom:10px;font-family:ui-monospace,Menlo,Consolas,monospace}
+.history-hash-row span{color:#fff;word-break:break-all}
+.history-section-title{color:var(--yellow);font-size:12px;font-weight:900;letter-spacing:.5px;margin:16px 0 8px}
+.history-detail-players{display:grid;gap:8px}
+.history-player-row{display:flex;align-items:center;gap:10px;background:#141516;border:1px solid #24272b;border-radius:14px;padding:10px 12px}
+.history-player-row .avatar-small{width:32px;height:32px;flex:none}
+.history-player-name{font-weight:800;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.history-player-pct{color:#8f949c;font-size:11px;margin-top:2px}
+.history-player-bet{margin-left:auto;color:var(--yellow);font-weight:900;font-size:13px;flex:none}

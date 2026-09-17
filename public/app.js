@@ -1218,3 +1218,114 @@ document.querySelectorAll('.game-card[data-view]').forEach(btn => {
 setTopupCurrency("STAR");
 setWithdrawCurrency("STAR");
 window.addEventListener("load", () => initTonConnect());
+
+// ---------- PVP round history ----------
+const historyModal = $("#historyModal");
+const historyDetailModal = $("#historyDetailModal");
+let historySearchTimer = null;
+
+function formatHistoryDateTime(value) {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  const date = `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}.${d.getFullYear()}`;
+  const time = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  return `${date} • ${time}`;
+}
+
+function shortenMiddle(value, head = 6, tail = 6) {
+  const s = String(value || "");
+  return s.length > head + tail + 3 ? `${s.slice(0, head)}...${s.slice(-tail)}` : s;
+}
+
+async function loadHistory(q = "") {
+  const list = $("#historyList");
+  const empty = $("#historyEmpty");
+  try {
+    const r = await fetch(`/api/pvp/history?q=${encodeURIComponent(q)}`, { cache: "no-store" });
+    const data = await r.json();
+    const rounds = Array.isArray(data.rounds) ? data.rounds : [];
+    empty.classList.toggle("hidden", rounds.length > 0);
+    list.innerHTML = rounds.map(round => {
+      const w = round.winner;
+      return `
+        <button class="history-round" data-round="${round.roundNumber}">
+          <div class="history-round-top">
+            <span class="history-round-tag">
+              <svg viewBox="0 0 23 23" fill="currentColor"><path d="M0.463147 0.087302C0.22178 0.205418 0.0317684 0.472461 0.00609109 0.73437C-0.0144507 0.924382 0.124207 1.30954 1.17184 3.9543C1.82918 5.60278 2.39921 7.00476 2.43516 7.06125C2.47111 7.11774 3.64713 8.18078 5.04397 9.42356C6.44082 10.6663 7.58089 11.6986 7.57575 11.7191C7.57062 11.7397 7.32412 12.0221 7.0314 12.3508L6.50244 12.9465L6.15837 12.6127C5.93241 12.397 5.7424 12.2635 5.60374 12.2224C5.07479 12.0632 4.56124 12.4432 4.56124 12.9927C4.56124 13.27 4.64854 13.4189 5.0183 13.7887C5.1929 13.9582 5.33156 14.1174 5.33156 14.143C5.33156 14.1739 4.22744 15.3088 2.87168 16.6646C0.155019 19.3915 0.16529 19.3761 0.0317684 20.1669C-0.235275 21.7743 1.22319 23.2328 2.83059 22.9658C3.62145 22.8322 3.60605 22.8425 6.33297 20.1259C7.68873 18.7701 8.82367 17.666 8.85448 17.666C8.88016 17.666 9.03936 17.8046 9.20883 17.9792C9.60939 18.3798 9.74805 18.4517 10.0819 18.426C10.4003 18.4003 10.5851 18.2771 10.7238 17.9946C10.9189 17.5992 10.8265 17.2859 10.3592 16.8135L10.051 16.5002L10.7443 15.8788C11.1244 15.5348 11.4633 15.2523 11.4941 15.2523C11.5249 15.2523 11.8639 15.5348 12.2439 15.8788L12.9372 16.5002L12.629 16.8135C12.1617 17.2859 12.0693 17.5992 12.2644 17.9946C12.4031 18.2771 12.588 18.4003 12.9064 18.426C13.2402 18.4517 13.3788 18.3798 13.7794 17.9792C13.9489 17.8046 14.1081 17.666 14.1337 17.666C14.1645 17.666 15.2995 18.7701 16.6552 20.1259C19.3822 22.8425 19.3668 22.8322 20.1576 22.9658C21.7753 23.2379 23.2389 21.7589 22.9513 20.1413C22.8127 19.3555 22.8332 19.3812 20.1165 16.6646C18.7659 15.3088 17.6567 14.1739 17.6567 14.143C17.6567 14.1174 17.7953 13.9582 17.9699 13.7887C18.3705 13.3881 18.4424 13.2495 18.4167 12.9157C18.391 12.5973 18.2678 12.4124 17.9853 12.2737C17.5745 12.0683 17.3023 12.1556 16.8042 12.6435L16.4909 12.9465L16.0903 12.4946C15.8695 12.2481 15.6179 11.9707 15.5357 11.8834L15.3868 11.7191L17.8723 9.50573C19.2384 8.28349 20.4144 7.21532 20.4863 7.12288C20.6558 6.91746 22.9975 1.03736 22.9975 0.816537C22.9975 0.605983 22.8229 0.287585 22.6329 0.154063C22.2734 -0.10271 22.3196 -0.118116 19.0432 1.18115C17.3896 1.83849 15.9774 2.42393 15.9003 2.48556C15.8233 2.54205 14.8116 3.65644 13.651 4.95572C12.4904 6.25499 11.5198 7.31803 11.4941 7.31803C11.4684 7.31803 10.5132 6.26526 9.36289 4.98139C8.21769 3.69753 7.206 2.58313 7.11356 2.5061C6.90301 2.3315 1.02805 -7.3352e-07 0.796951 -7.3352e-07C0.704513 -7.3352e-07 0.555585 0.0410829 0.463147 0.087302Z"/></svg>
+              Ролл
+            </span>
+            <span>#${round.roundNumber} • ${formatHistoryDateTime(round.createdAt)}</span>
+          </div>
+          <div class="history-round-body">
+            <div class="history-round-winner">
+              ${avatarMarkup(w?.avatar, w?.name)}
+              <div class="history-round-winner-info">
+                <div class="history-round-name">${escapeHtml(w?.name || "Игрок")}</div>
+                <div class="history-round-pct">${Number(w?.percentage || 0).toFixed(2)}%</div>
+              </div>
+            </div>
+            <div class="history-round-right">
+              <div class="history-round-amount">+${Number(round.payout).toFixed(2)} ⭐</div>
+              <div class="history-round-mult">${round.multiplier}x</div>
+            </div>
+          </div>
+        </button>`;
+    }).join("");
+    list.querySelectorAll(".history-round").forEach(btn => {
+      btn.onclick = () => openHistoryDetail(btn.dataset.round);
+    });
+  } catch {
+    empty.classList.remove("hidden");
+    list.innerHTML = "";
+  }
+}
+
+async function openHistoryDetail(roundNumber) {
+  try {
+    const r = await fetch(`/api/pvp/history/${encodeURIComponent(roundNumber)}`, { cache: "no-store" });
+    if (!r.ok) throw new Error();
+    const data = await r.json();
+    $("#historyDetailTitle").textContent = `Ролл #${data.roundNumber}`;
+    $("#historyDetailDate").textContent = formatHistoryDateTime(data.createdAt);
+    $("#historyHashValue").textContent = shortenMiddle(data.hash);
+    $("#historyHashRow").dataset.copy = data.hash || "";
+    $("#historySeedValue").textContent = shortenMiddle(data.seed);
+    $("#historySeedRow").dataset.copy = data.seed || "";
+    $("#historyDetailPlayers").innerHTML = (data.players || []).map(p => `
+      <div class="history-player-row">
+        ${avatarMarkup(p.avatar, p.name)}
+        <div>
+          <div class="history-player-name">${escapeHtml(p.name || "Игрок")}</div>
+          <div class="history-player-pct">${Number(p.percentage || 0).toFixed(2)}%</div>
+        </div>
+        <div class="history-player-bet">${Number(p.bet).toFixed(2)} ⭐</div>
+      </div>`).join("");
+    openModal(historyDetailModal);
+  } catch {
+    toast("Не удалось загрузить игру.");
+  }
+}
+
+const openHistoryBtn = $("#openHistoryBtn");
+if (openHistoryBtn) openHistoryBtn.onclick = () => { openModal(historyModal); loadHistory($("#historySearch").value.trim()); };
+const historyCloseBtn = $("#historyClose");
+if (historyCloseBtn) historyCloseBtn.onclick = () => closeModal(historyModal);
+const historyDetailCloseBtn = $("#historyDetailClose");
+if (historyDetailCloseBtn) historyDetailCloseBtn.onclick = () => closeModal(historyDetailModal);
+
+const historySearchInput = $("#historySearch");
+if (historySearchInput) {
+  historySearchInput.addEventListener("input", () => {
+    clearTimeout(historySearchTimer);
+    historySearchTimer = setTimeout(() => loadHistory(historySearchInput.value.trim()), 250);
+  });
+}
+
+[$("#historyHashRow"), $("#historySeedRow")].forEach(btn => {
+  if (!btn) return;
+  btn.onclick = () => {
+    const value = btn.dataset.copy;
+    if (!value || !navigator.clipboard) return;
+    navigator.clipboard.writeText(value).then(() => toast("Скопировано"));
+  };
+});
