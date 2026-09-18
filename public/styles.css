@@ -695,7 +695,14 @@ button{cursor:pointer}
 .nav-item.active{background:transparent !important;box-shadow:none !important}
 .bottom-nav{overflow:hidden !important}
 .nav-item{position:relative !important}
-.nav-item.active::before{content:"";position:absolute;inset:6px 8px;background:rgba(255,201,21,.16);border:1px solid rgba(255,201,21,.4);border-radius:16px;z-index:0}
+.nav-item.active::before{content:"";position:absolute;top:50%;width:46px;height:44px;background:rgba(255,201,21,.16);border:1px solid rgba(255,201,21,.4);border-radius:14px;transform:translate(-50%,-50%);z-index:0}
+/* Left offset of each ::before is the icon's true center inside the supplied
+   group-6-nav.svg artwork (measured directly from the rendered asset), not
+   an assumed even quarter — the artwork itself doesn't space icons evenly. */
+.nav-item:nth-child(1).active::before{left:86.15%}
+.nav-item:nth-child(2).active::before{left:72.69%}
+.nav-item:nth-child(3).active::before{left:49.23%}
+.nav-item:nth-child(4).active::before{left:25%}
 #profileView{padding-bottom:60px !important}
 .promo-card{margin-bottom:40px !important}
 .referral-card{margin-bottom:16px !important}

@@ -407,6 +407,8 @@ async function initDb() {
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS games_played INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS games_won INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS total_wagered NUMERIC(20,2) NOT NULL DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS wager_remaining NUMERIC(20,2) NOT NULL DEFAULT 0`,
+    `ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS wager NUMERIC(10,2) NOT NULL DEFAULT 0`,
     `ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS wallet_address TEXT NOT NULL DEFAULT ''`,
     `ALTER TABLE pvp_rounds ADD COLUMN IF NOT EXISTS round_number SERIAL`,
     `ALTER TABLE pvp_rounds ADD COLUMN IF NOT EXISTS server_seed TEXT`,
@@ -1953,7 +1955,17 @@ app.post("/api/profile/withdraw", async (req, res) => {
 
     if (!["STAR", "GRAM"].includes(currency)) throw new Error("Вывод доступен только в Stars или GRAM.");
     if (!Number.isInteger(amount) || amount <= 0) throw new Error("Введите целую сумму Stars больше 0.");
+    if (amount < 100) throw new Error("Вывод доступен от 100 звёзд.");
     if (currency === "GRAM" && !wallet) throw new Error("Для вывода GRAM укажите кошелёк.");
+
+    // A promo bonus with a wager requirement locks withdrawals until the
+    // player has staked (bet, win or lose — PVP and/or Upgrade) that much
+    // total volume. It's cleared automatically once the balance hits 0.
+    const wagerRow = await pool.query(`SELECT wager_remaining::float AS w FROM users WHERE telegram_id=$1`, [String(userId)]);
+    const wagerRemaining = Number(wagerRow.rows[0]?.w || 0);
+    if (wagerRemaining > 0) {
+      throw new Error(`Сначала нужно отыграть бонус по промокоду: осталось поставить ${wagerRemaining.toFixed(2)} ⭐.`);
+    }
 
     const gramUsdPerStar = Number(process.env.GRAM_USD_PER_STAR || 0.015);
     const gramUsd = currency === "GRAM" ? amount * gramUsdPerStar : null;
