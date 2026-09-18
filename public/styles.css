@@ -227,7 +227,7 @@ button{cursor:pointer}
 .promo-row{display:flex;gap:8px;margin-top:12px}
 .promo-row input{flex:1;min-width:0;background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.08);border-radius:14px;color:#fff;padding:14px;outline:none;text-transform:uppercase}
 .promo-row button{border:0;border-radius:14px;background:var(--yellow);color:#111;font-weight:900;padding:10px 16px;font-size:13px}
-.promo-admin{background:#0d0e0f;border:1px solid #24272b;border-radius:14px;padding:12px;margin-bottom:10px}.promo-admin-title{font-size:12px;font-weight:900;color:var(--yellow);margin-bottom:9px}.promo-admin-grid{display:grid;grid-template-columns:1.3fr .8fr .9fr;gap:7px}.promo-admin-grid input{width:100%;min-width:0;background:#0b0c0e;border:1px solid #33373c;color:#fff;border-radius:9px;padding:9px;outline:none}.promo-admin-grid button{border:0;border-radius:9px;background:var(--yellow);color:#111;font-weight:900;padding:9px;grid-column:1/-1}.admin-promos{display:grid;gap:7px;margin-bottom:10px}.admin-promo{display:flex;align-items:center;justify-content:space-between;gap:10px;background:#141516;border:1px solid #24272b;border-radius:12px;padding:10px 11px}.admin-promo-code{font-weight:900;letter-spacing:.5px}.admin-promo-meta{color:#8f949c;font-size:11px;margin-top:3px}.promo-toggle{border:1px solid #444;background:#2c3035;color:#aaa;border-radius:9px;padding:7px 10px;font-size:10px;font-weight:900}.promo-toggle.active{background:#19e58f;color:#101;border-color:#19e58f}.promo-empty{margin-bottom:10px}
+.promo-admin{background:#0d0e0f;border:1px solid #24272b;border-radius:14px;padding:12px;margin-bottom:10px}.promo-admin-title{font-size:12px;font-weight:900;color:var(--yellow);margin-bottom:9px}.promo-admin-grid{display:grid;grid-template-columns:1.2fr .7fr .8fr .8fr;gap:7px}.promo-admin-grid input{width:100%;min-width:0;background:#0b0c0e;border:1px solid #33373c;color:#fff;border-radius:9px;padding:9px;outline:none}.promo-admin-grid button{border:0;border-radius:9px;background:var(--yellow);color:#111;font-weight:900;padding:9px;grid-column:1/-1}.admin-promos{display:grid;gap:7px;margin-bottom:10px}.admin-promo{display:flex;align-items:center;justify-content:space-between;gap:10px;background:#141516;border:1px solid #24272b;border-radius:12px;padding:10px 11px}.admin-promo-code{font-weight:900;letter-spacing:.5px}.admin-promo-meta{color:#8f949c;font-size:11px;margin-top:3px}.promo-toggle{border:1px solid #444;background:#2c3035;color:#aaa;border-radius:9px;padding:7px 10px;font-size:10px;font-weight:900}.promo-toggle.active{background:#19e58f;color:#101;border-color:#19e58f}.promo-empty{margin-bottom:10px}
 @media(max-width:420px){.promo-admin-grid{grid-template-columns:1fr 1fr}.promo-admin-grid input:first-child{grid-column:1/-1}.promo-admin-grid button{grid-column:1/-1}.promo-row button{padding-inline:10px}}
 
 
@@ -742,3 +742,29 @@ button{cursor:pointer}
 .history-player-name{font-weight:800;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .history-player-pct{color:#8f949c;font-size:11px;margin-top:2px}
 .history-player-bet{margin-left:auto;color:var(--yellow);font-weight:900;font-size:13px;flex:none}
+
+/* ---------- Final fixes: modal scrolling + app as its own scroll container ----------
+   Several earlier patches set ".modal-card{overflow:visible !important}", which
+   silently overrides any per-modal "overflow:auto" (like on the history/raffle
+   sheets) regardless of order or selector specificity — !important always wins
+   over a plain declaration. These rules are !important + declared last, so they
+   are the ones that actually take effect. */
+.history-modal-card,.raffle-modal-card,.raffle-detail-modal{
+  overflow-y:auto !important;
+  -webkit-overflow-scrolling:touch !important;
+}
+
+/* Make the app itself the scrolling element with a real, fixed viewport
+   height, instead of relying on the outer page/iframe to scroll. Telegram's
+   embeds don't always scroll the outer page reliably, which is what caused
+   content (like the end of the Profile view) to stay hidden behind the fixed
+   bottom nav no matter how much bottom padding was added. */
+html,body{height:100%;overflow:hidden}
+.app{
+  height:100vh;
+  height:100dvh;
+  overflow-y:auto !important;
+  overflow-x:hidden;
+  -webkit-overflow-scrolling:touch;
+  padding-bottom:130px !important;
+}

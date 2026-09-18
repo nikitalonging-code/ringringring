@@ -911,7 +911,7 @@ function renderAdminPromos(promos) {
     el.innerHTML = `
       <div>
         <div class="admin-promo-code">${escapeHtml(p.code)}</div>
-        <div class="admin-promo-meta">+${Number(p.bonus).toFixed(0)} ⭐ · ${Number(p.uses_count)}/${Number(p.max_uses)} активаций</div>
+        <div class="admin-promo-meta">+${Number(p.bonus).toFixed(0)} ⭐ · ${Number(p.uses_count)}/${Number(p.max_uses)} активаций${Number(p.wager) > 0 ? ` · вагер x${Number(p.wager)}` : ""}</div>
       </div>
       <button class="promo-toggle ${active ? "active" : ""}">${active ? "ВКЛ" : "ВЫКЛ"}</button>
     `;
@@ -1018,7 +1018,9 @@ async function activatePromo() {
     if (!r.ok) throw new Error(data.error || "Не удалось активировать промокод.");
     setBalance(data.balance);
     input.value = "";
-    toast(`Промокод активирован: +${Number(data.bonus).toFixed(0)} ⭐`);
+    toast(data.wager > 0
+      ? `Промокод активирован: +${Number(data.bonus).toFixed(0)} ⭐. Нужно поставить ${(Number(data.bonus) * Number(data.wager)).toFixed(0)} ⭐ перед выводом.`
+      : `Промокод активирован: +${Number(data.bonus).toFixed(0)} ⭐`);
     loadProfile();
   } catch (e) { toast(e.message); }
 }
@@ -1032,18 +1034,22 @@ $("#createPromo").onclick = async () => {
   const code = $("#adminPromoCode").value.trim();
   const bonus = Number($("#adminPromoBonus").value);
   const maxUses = Number($("#adminPromoUses").value);
+  const wagerInput = $("#adminPromoWager");
+  const wager = wagerInput && wagerInput.value.trim() !== "" ? Number(wagerInput.value) : 0;
   if (!code) return toast("Введите код промокода.");
   if (!Number.isInteger(bonus) || bonus <= 0) return toast("Введите целый бонус.");
   if (!Number.isInteger(maxUses) || maxUses <= 0) return toast("Введите лимит активаций.");
+  if (!Number.isFinite(wager) || wager < 0) return toast("Вагер должен быть числом от 0 и выше.");
   try {
     await adminFetch("/api/admin/promos", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code, bonus, maxUses })
+      body: JSON.stringify({ code, bonus, maxUses, wager })
     });
     $("#adminPromoCode").value = "";
     $("#adminPromoBonus").value = "";
     $("#adminPromoUses").value = "";
+    if (wagerInput) wagerInput.value = "";
     toast("Промокод создан.");
     refreshAdmin();
   } catch (e) { toast(e.message); }

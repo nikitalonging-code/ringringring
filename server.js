@@ -496,6 +496,23 @@ async function debitBalance(userId, amount, meta = {}) {
       throw new Error("Недостаточно Stars на балансе.");
     }
     const balanceAfter = Number(r.rows[0].balance);
+
+    // Wagering: a real bet (PVP or Upgrade) works off any outstanding promo
+    // wager requirement, stake-for-stake, win or lose. If the balance is
+    // fully drained while a requirement is still open, the requirement is
+    // cleared right away — there's nothing left of the bonus to protect,
+    // and leaving it open would otherwise trap the player's later, unrelated
+    // deposits behind a stale requirement.
+    if (meta.countsAsWager) {
+      await client.query(
+        `UPDATE users SET wager_remaining = GREATEST(0, wager_remaining - $2) WHERE telegram_id=$1`,
+        [String(userId), amount]
+      );
+      if (balanceAfter <= 0) {
+        await client.query(`UPDATE users SET wager_remaining=0 WHERE telegram_id=$1`, [String(userId)]);
+      }
+    }
+
     await client.query(
       `INSERT INTO balance_transactions
        (telegram_user_id, type, amount, balance_after, description)
@@ -766,7 +783,7 @@ async function placeBet(playerId, amount) {
 
   p.betLocked = true;
   try {
-    const balance = await debitBalance(playerId, amount);
+    const balance = await debitBalance(playerId, amount, { countsAsWager: true });
     p.bet = amount;
     p.betLocked = false;
     broadcast();
@@ -796,7 +813,8 @@ async function playUpgrade(playerId, bet, target) {
 
   let balance = await debitBalance(playerId, bet, {
     type: "upgrade_bet",
-    description: `Апгрейд ${bet} → ${target} ⭐`
+    description: `Апгрейд ${bet} → ${target} ⭐`,
+    countsAsWager: true
   });
 
   // Cryptographically secure random in [0,1).
@@ -1824,7 +1842,7 @@ app.post("/api/profile/promo/redeem", async (req, res) => {
     const session = await authenticatedUserFromInitData(req.headers["x-telegram-init-data"]);
     const result = await redeemPromoCode(session.telegram.id, req.body?.code);
     io.to(`user:${session.telegram.id}`).emit("balance_updated", { balance: result.balance });
-    res.json({ ok: true, code: result.code, bonus: result.bonus, balance: result.balance });
+    res.json({ ok: true, code: result.code, bonus: result.bonus, wager: result.wager, balance: result.balance });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
@@ -2080,7 +2098,7 @@ async function redeemPromoCode(userId, rawCode) {
   try {
     await client.query("BEGIN");
     const promo = await client.query(
-      `SELECT id, code, bonus::float AS bonus, max_uses, uses_count, active
+      `SELECT id, code, bonus::float AS bonus, wager::float AS wager, max_uses, uses_count, active
        FROM promo_codes WHERE code=$1 FOR UPDATE`,
       [code]
     );
@@ -2100,6 +2118,17 @@ async function redeemPromoCode(userId, rawCode) {
       description: `Активация промокода ${p.code}`
     });
 
+    // A promo with a wager multiplier adds bonus*wager to the amount the
+    // player must stake (in PVP and/or Upgrade, win or lose) before they can
+    // withdraw again. Multiple such promos stack on top of each other.
+    const wagerMultiplier = Number(p.wager || 0);
+    if (wagerMultiplier > 0) {
+      await client.query(
+        `UPDATE users SET wager_remaining = wager_remaining + $2 WHERE telegram_id=$1`,
+        [String(userId), Number(p.bonus) * wagerMultiplier]
+      );
+    }
+
     await client.query(
       `INSERT INTO promo_redemptions (promo_code_id, telegram_user_id, bonus) VALUES ($1,$2,$3)`,
       [p.id, String(userId), Number(p.bonus)]
@@ -2109,7 +2138,7 @@ async function redeemPromoCode(userId, rawCode) {
       [p.id]
     );
     await client.query("COMMIT");
-    return { code: p.code, bonus: Number(p.bonus), balance: balanceAfter };
+    return { code: p.code, bonus: Number(p.bonus), wager: wagerMultiplier, balance: balanceAfter };
   } catch (e) {
     try { await client.query("ROLLBACK"); } catch {}
     throw e;
@@ -2118,20 +2147,22 @@ async function redeemPromoCode(userId, rawCode) {
   }
 }
 
-async function createPromoCode(adminId, rawCode, bonus, maxUses) {
+async function createPromoCode(adminId, rawCode, bonus, maxUses, wager) {
   requireDatabase();
   const code = normalizePromoCode(rawCode);
   if (!/^[A-Z0-9_-]{3,32}$/.test(code)) throw new Error("Промокод должен содержать 3–32 символа: A-Z, 0-9, _ или -.");
   const amount = Number(bonus);
   const uses = Number(maxUses);
+  const wagerMultiplier = wager === undefined || wager === null || wager === "" ? 0 : Number(wager);
   if (!Number.isInteger(amount) || amount <= 0 || amount > 1_000_000_000) throw new Error("Бонус должен быть целым числом от 1 до 1 000 000 000.");
   if (!Number.isInteger(uses) || uses <= 0 || uses > 1_000_000_000) throw new Error("Количество активаций должно быть от 1 до 1 000 000 000.");
+  if (!Number.isFinite(wagerMultiplier) || wagerMultiplier < 0 || wagerMultiplier > 1000) throw new Error("Вагер должен быть числом от 0 до 1000 (0 — без вагера).");
 
   try {
     const r = await pool.query(
-      `INSERT INTO promo_codes (code, bonus, max_uses, created_by) VALUES ($1,$2,$3,$4)
-       RETURNING id, code, bonus::float AS bonus, max_uses, uses_count, active, created_at`,
-      [code, amount, uses, String(adminId)]
+      `INSERT INTO promo_codes (code, bonus, max_uses, created_by, wager) VALUES ($1,$2,$3,$4,$5)
+       RETURNING id, code, bonus::float AS bonus, wager::float AS wager, max_uses, uses_count, active, created_at`,
+      [code, amount, uses, String(adminId), wagerMultiplier]
     );
     return r.rows[0];
   } catch (e) {
@@ -2263,7 +2294,7 @@ app.get("/api/admin/promos", async (req, res) => {
   try {
     await requireAdminRequest(req);
     const r = await pool.query(
-      `SELECT id, code, bonus::float AS bonus, max_uses, uses_count, active, created_by, created_at
+      `SELECT id, code, bonus::float AS bonus, wager::float AS wager, max_uses, uses_count, active, created_by, created_at
        FROM promo_codes ORDER BY created_at DESC LIMIT 200`
     );
     res.json({ promos: r.rows });
@@ -2275,7 +2306,7 @@ app.get("/api/admin/promos", async (req, res) => {
 app.post("/api/admin/promos", async (req, res) => {
   try {
     const admin = await requireAdminRequest(req);
-    const promo = await createPromoCode(admin.id, req.body?.code, req.body?.bonus, req.body?.maxUses);
+    const promo = await createPromoCode(admin.id, req.body?.code, req.body?.bonus, req.body?.maxUses, req.body?.wager);
     res.json({ ok: true, promo });
   } catch (e) {
     res.status(400).json({ error: e.message });
