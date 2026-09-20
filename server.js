@@ -2290,6 +2290,81 @@ app.get("/api/admin/transactions", async (req, res) => {
   }
 });
 
+// One summary shape (total + count, breakdown "by method", recent list)
+// reused across the Пополнения/Ставки/Выводы/Рефералы admin tabs, in the
+// spirit of the "Статистика" screen the client asked to match.
+const ADMIN_SUMMARY_METHOD_LABELS = {
+  balance_topup: "Stars", ton_topup: "TON / GRAM",
+  pvp_bet: "PVP", upgrade_bet: "Upgrade",
+  STAR: "Stars", GRAM: "GRAM", TON: "TON",
+  true: "Выплачено", false: "Не выплачено"
+};
+
+app.get("/api/admin/summary/:category", async (req, res) => {
+  try {
+    await requireAdminRequest(req);
+    const category = String(req.params.category);
+    let rows;
+    if (category === "topups") {
+      rows = (await pool.query(
+        `SELECT t.type AS method, t.amount::float AS amount, t.created_at,
+                COALESCE(NULLIF(u.username,''), u.first_name) AS name, u.username
+         FROM balance_transactions t JOIN users u ON u.telegram_id=t.telegram_user_id
+         WHERE t.type IN ('balance_topup','ton_topup') ORDER BY t.created_at DESC LIMIT 500`
+      )).rows;
+    } else if (category === "bets") {
+      rows = (await pool.query(
+        `SELECT t.type AS method, ABS(t.amount::float) AS amount, t.created_at,
+                COALESCE(NULLIF(u.username,''), u.first_name) AS name, u.username
+         FROM balance_transactions t JOIN users u ON u.telegram_id=t.telegram_user_id
+         WHERE t.type IN ('pvp_bet','upgrade_bet') ORDER BY t.created_at DESC LIMIT 500`
+      )).rows;
+    } else if (category === "withdrawals") {
+      rows = (await pool.query(
+        `SELECT w.currency AS method, w.amount::float AS amount, w.status, w.created_at,
+                COALESCE(NULLIF(u.username,''), u.first_name) AS name, u.username
+         FROM withdrawal_requests w JOIN users u ON u.telegram_id=w.telegram_user_id
+         ORDER BY w.created_at DESC LIMIT 500`
+      )).rows;
+    } else if (category === "referrals") {
+      rows = (await pool.query(
+        `SELECT r.claimed AS method, r.reward_amount::float AS amount, r.created_at,
+                COALESCE(NULLIF(u.username,''), u.first_name) AS name, u.username
+         FROM referral_earnings r JOIN users u ON u.telegram_id=r.referrer_id
+         ORDER BY r.created_at DESC LIMIT 500`
+      )).rows;
+    } else {
+      throw new Error("Неизвестная категория статистики.");
+    }
+
+    const byMethod = {};
+    let totalAmount = 0;
+    for (const row of rows) {
+      const key = String(row.method);
+      if (!byMethod[key]) byMethod[key] = { method: ADMIN_SUMMARY_METHOD_LABELS[key] || key, count: 0, amount: 0 };
+      byMethod[key].count += 1;
+      byMethod[key].amount += Number(row.amount);
+      totalAmount += Number(row.amount);
+    }
+
+    res.json({
+      totalAmount,
+      count: rows.length,
+      byMethod: Object.values(byMethod),
+      recent: rows.slice(0, 30).map(row => ({
+        name: row.name,
+        username: row.username || null,
+        method: ADMIN_SUMMARY_METHOD_LABELS[String(row.method)] || String(row.method),
+        status: row.status || null,
+        amount: Number(row.amount),
+        createdAt: row.created_at
+      }))
+    });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 app.get("/api/admin/promos", async (req, res) => {
   try {
     await requireAdminRequest(req);

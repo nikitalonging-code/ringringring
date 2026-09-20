@@ -889,6 +889,52 @@ async function refreshAdmin() {
   }
 }
 
+const ADMIN_SUMMARY_TABS = { topups: "adminSummaryTopups", bets: "adminSummaryBets", withdrawals: "adminSummaryWithdrawals", referrals: "adminSummaryReferrals" };
+const adminSummaryLoaded = new Set();
+
+function renderAdminSummary(elId, data) {
+  const unit = "⭐";
+  const methods = (data.byMethod || []).map(m => `
+    <div class="admin-summary-method">
+      <div><b>${escapeHtml(m.method)}</b><span>${m.count} шт.</span></div>
+      <div class="admin-summary-amount">${Number(m.amount).toFixed(2)} ${unit}</div>
+    </div>`).join("") || `<div class="empty-players">Пока пусто</div>`;
+  const recent = (data.recent || []).map(r => `
+    <div class="admin-summary-row">
+      <div><b>${escapeHtml(r.name || "Игрок")}${r.username ? " · @" + escapeHtml(r.username) : ""}</b><span>${escapeHtml(r.method)}${r.status ? " · " + escapeHtml(r.status) : ""} · ${formatHistoryDateTime(r.createdAt)}</span></div>
+      <div class="admin-summary-amount">${Number(r.amount).toFixed(2)} ${unit}</div>
+    </div>`).join("") || `<div class="empty-players">Пока пусто</div>`;
+  $(elId).innerHTML = `
+    <div class="admin-summary-total">За всё время: <b>${Number(data.totalAmount).toFixed(2)} ${unit}</b> · ${Number(data.count)} шт.</div>
+    <div class="admin-summary-title">По способу</div>
+    <div class="admin-summary-methods">${methods}</div>
+    <div class="admin-summary-title">Последние</div>
+    <div class="admin-summary-recent">${recent}</div>
+  `;
+}
+
+async function loadAdminSummary(category, force = false) {
+  if (!force && adminSummaryLoaded.has(category)) return;
+  try {
+    const data = await adminFetch(`/api/admin/summary/${encodeURIComponent(category)}`);
+    renderAdminSummary("#" + ADMIN_SUMMARY_TABS[category], data);
+    adminSummaryLoaded.add(category);
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+document.querySelectorAll(".admin-tab").forEach(btn => {
+  btn.onclick = () => {
+    const tab = btn.dataset.adminTab;
+    document.querySelectorAll(".admin-tab").forEach(b => b.classList.toggle("active", b === btn));
+    document.querySelectorAll(".admin-tab-panel").forEach(p => p.classList.add("hidden"));
+    const panelId = tab === "users" ? "adminTabUsers" : tab === "promos" ? "adminTabPromos" : "adminTab" + tab[0].toUpperCase() + tab.slice(1);
+    $("#" + panelId).classList.remove("hidden");
+    if (ADMIN_SUMMARY_TABS[tab]) loadAdminSummary(tab);
+  };
+});
+
 function renderAdminStats(s) {
   $("#adminStats").innerHTML = `
     <div class="admin-stat"><b>${s.users}</b><span>Пользователи</span></div>
@@ -1119,25 +1165,25 @@ function spinUpgradePointer(data) {
   const pointerOrbit = $("#upgradePointerOrbit");
   const current = upgradeAccumDeg % 360;
   const chance = Math.max(0, Math.min(100, Number(data?.chance) || 0));
-  const isWin = data?.win === true;
 
   // Redraw the wheel using the SERVER's own chance value right before we
-  // animate, so the yellow/gray boundary the player actually sees can never
-  // drift out of sync with the value used to decide win/loss (e.g. if the
+  // animate, so the yellow/gray boundary the player sees can never drift out
+  // of sync with the boundary the server used to judge the roll (e.g. if the
   // bet/target inputs changed between placing the bet and the result coming
-  // back, the wheel drawn from stale local input values would no longer
-  // match what the server rolled against).
+  // back, a wheel drawn from stale local input values would no longer match
+  // what the server actually rolled against).
   $("#upgradeWheel").style.background = `conic-gradient(from 0deg at 50% 50%, #ffc915 0%, #ffc915 ${chance}%, #141517 ${chance}%, #141517 100%)`;
 
-  // Land dead-center inside the correct zone instead of reproducing the
-  // exact dice-roll position. The server is the only source of truth for
-  // win/lose — the player can never see or verify the raw roll number
-  // anyway — so there is no upside to placing the pointer near the seam
-  // between colors, only downside (any tiny rendering/rounding difference
-  // between browsers could visually land a pixel on the wrong side of the
-  // line). Landing safely in the middle of the zone makes a color/outcome
-  // mismatch structurally impossible, regardless of screen size or engine.
-  const landingPercent = isWin ? chance / 2 : chance + (100 - chance) / 2;
+  // The result IS where the pointer lands — not the other way around. The
+  // server rolls one real random number (0–100) and derives both the win
+  // flag and this exact landing percentage from it, so the pointer must be
+  // taken to this precise position, not nudged to the "safe" middle of
+  // whichever zone the server says is correct. If it stops on yellow, that's
+  // a win because it's on yellow; if it stops on gray, that's a loss because
+  // it's on gray — the color under the pointer is the single source of truth.
+  let landingPercent = Number(data?.rollPercent);
+  if (!Number.isFinite(landingPercent)) landingPercent = data?.win ? chance / 2 : chance + (100 - chance) / 2;
+  landingPercent = Math.max(0, Math.min(99.999999, landingPercent));
 
   const targetAngle = landingPercent * 3.6;
   pointerOrbit.style.opacity = "1";

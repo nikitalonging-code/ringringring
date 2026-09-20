@@ -180,23 +180,42 @@
         <h2>АДМИН-ПАНЕЛЬ</h2>
         <span class="admin-badge">ADMIN</span>
       </div>
-      <div class="admin-stats" id="adminStats"></div>
-      <div class="admin-search-row">
-        <input id="adminSearch" placeholder="Поиск по ID, username или имени">
-        <button id="adminRefresh">↻</button>
+      <div class="admin-tabs" id="adminTabs">
+        <button class="admin-tab active" data-admin-tab="users">Игроки</button>
+        <button class="admin-tab" data-admin-tab="topups">Пополнения</button>
+        <button class="admin-tab" data-admin-tab="bets">Ставки</button>
+        <button class="admin-tab" data-admin-tab="withdrawals">Выводы</button>
+        <button class="admin-tab" data-admin-tab="referrals">Рефералы</button>
+        <button class="admin-tab" data-admin-tab="promos">Промокоды</button>
       </div>
-      <div class="promo-admin">
-        <div class="promo-admin-title">СОЗДАТЬ ПРОМОКОД</div>
-        <div class="promo-admin-grid">
-          <input id="adminPromoCode" maxlength="32" autocomplete="off" placeholder="КОД (например RING100)">
-          <input id="adminPromoBonus" type="number" min="1" step="1" inputmode="numeric" placeholder="Бонус ⭐">
-          <input id="adminPromoUses" type="number" min="1" step="1" inputmode="numeric" placeholder="Лимит активаций">
-          <input id="adminPromoWager" type="number" min="0" step="0.5" inputmode="decimal" placeholder="Вагер x (0 — без)">
-          <button id="createPromo">СОЗДАТЬ</button>
+
+      <div class="admin-tab-panel" id="adminTabUsers">
+        <div class="admin-stats" id="adminStats"></div>
+        <div class="admin-search-row">
+          <input id="adminSearch" placeholder="Поиск по ID, username или имени">
+          <button id="adminRefresh">↻</button>
         </div>
+        <div id="adminUsers" class="admin-users"></div>
       </div>
-      <div id="adminPromos" class="admin-promos"></div>
-      <div id="adminUsers" class="admin-users"></div>
+
+      <div class="admin-tab-panel hidden" id="adminTabTopups"><div class="admin-summary" id="adminSummaryTopups"></div></div>
+      <div class="admin-tab-panel hidden" id="adminTabBets"><div class="admin-summary" id="adminSummaryBets"></div></div>
+      <div class="admin-tab-panel hidden" id="adminTabWithdrawals"><div class="admin-summary" id="adminSummaryWithdrawals"></div></div>
+      <div class="admin-tab-panel hidden" id="adminTabReferrals"><div class="admin-summary" id="adminSummaryReferrals"></div></div>
+
+      <div class="admin-tab-panel hidden" id="adminTabPromos">
+        <div class="promo-admin">
+          <div class="promo-admin-title">СОЗДАТЬ ПРОМОКОД</div>
+          <div class="promo-admin-grid">
+            <input id="adminPromoCode" maxlength="32" autocomplete="off" placeholder="КОД (например RING100)">
+            <input id="adminPromoBonus" type="number" min="1" step="1" inputmode="numeric" placeholder="Бонус ⭐">
+            <input id="adminPromoUses" type="number" min="1" step="1" inputmode="numeric" placeholder="Лимит активаций">
+            <input id="adminPromoWager" type="number" min="0" step="0.5" inputmode="decimal" placeholder="Вагер x (0 — без)">
+            <button id="createPromo">СОЗДАТЬ</button>
+          </div>
+        </div>
+        <div id="adminPromos" class="admin-promos"></div>
+      </div>
     </section>
 
       </section>
