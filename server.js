@@ -1063,6 +1063,144 @@ async function notifyAdmins(text) {
   ));
 }
 
+// Same as notifyAdmins, but with an inline keyboard attached (used for the
+// withdrawal Принять/Отклонить buttons).
+async function notifyAdminsWithButtons(text, inlineKeyboard) {
+  const ids = getAdminIds();
+  if (!ids.length || !process.env.TELEGRAM_BOT_TOKEN) return;
+  await Promise.all(ids.map(id =>
+    telegramApi("sendMessage", { chat_id: id, text, reply_markup: { inline_keyboard: inlineKeyboard } }).catch(e =>
+      console.error(`Admin notify error (${id}):`, e.message)
+    )
+  ));
+}
+
+// Admin telegram_id (string) -> { requestId, chatId } while the bot is
+// waiting for that admin's next message to use as the rejection reason.
+// In-memory is fine here: worst case of a restart mid-flow is the admin
+// just presses "Отклонить" again — no money or data is at risk.
+const pendingWithdrawalRejections = new Map();
+
+// Marks a withdrawal request approved or rejected. Approving is just a
+// status flag (the Stars were already debited when the request was made,
+// and are now confirmed sent outside the app). Rejecting refunds the
+// player's balance, since the request debited it up front.
+async function resolveWithdrawal(requestId, approve, reason) {
+  requireDatabase();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const r = await client.query(`SELECT * FROM withdrawal_requests WHERE id=$1 FOR UPDATE`, [requestId]);
+    if (!r.rowCount) throw new Error("Заявка не найдена.");
+    const wr = r.rows[0];
+    if (wr.status !== "pending") throw new Error(`Заявка №${requestId} уже обработана (${wr.status}).`);
+
+    let balanceAfter = null;
+    if (approve) {
+      await client.query(`UPDATE withdrawal_requests SET status='approved' WHERE id=$1`, [requestId]);
+    } else {
+      await client.query(`UPDATE withdrawal_requests SET status='rejected' WHERE id=$1`, [requestId]);
+      const upd = await client.query(
+        `UPDATE users SET balance = balance + $2, updated_at=NOW() WHERE telegram_id=$1 RETURNING balance::float AS balance`,
+        [wr.telegram_user_id, Number(wr.amount)]
+      );
+      balanceAfter = Number(upd.rows[0]?.balance || 0);
+      await client.query(
+        `INSERT INTO balance_transactions (telegram_user_id, type, amount, balance_after, description)
+         VALUES ($1,'withdraw_rejected_refund',$2,$3,$4)`,
+        [wr.telegram_user_id, Number(wr.amount), balanceAfter, `Возврат по отклонённой заявке №${requestId}` + (reason ? `: ${reason}` : "")]
+      );
+    }
+    await client.query("COMMIT");
+    return { ...wr, balanceAfter };
+  } catch (e) {
+    try { await client.query("ROLLBACK"); } catch {}
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+async function finalizeWithdrawalRejection(requestId, reason, adminChatId) {
+  const wr = await resolveWithdrawal(requestId, false, reason);
+  if (wr.balanceAfter !== null) {
+    io.to(`user:${wr.telegram_user_id}`).emit("balance_updated", { balance: wr.balanceAfter });
+  }
+  await telegramApi("sendMessage", {
+    chat_id: wr.telegram_user_id,
+    text: `❌ Ваша заявка на вывод ${Number(wr.amount).toFixed(2)} ⭐ отклонена` +
+      (reason ? `.\nПричина: ${reason}` : ", без указания причины.") +
+      `\nСредства возвращены на баланс.`
+  }).catch(() => {});
+  if (adminChatId) {
+    await telegramApi("sendMessage", {
+      chat_id: adminChatId,
+      text: `Заявка №${requestId} отклонена` + (reason ? ` с причиной: ${reason}` : " без причины.")
+    }).catch(() => {});
+  }
+}
+
+async function handleWithdrawalCallback(cq) {
+  const data = String(cq.data || "");
+  const adminId = String(cq.from?.id || "");
+  const chatId = cq.message?.chat?.id;
+  const messageId = cq.message?.message_id;
+
+  if (!isAdmin(adminId)) {
+    return telegramApi("answerCallbackQuery", { callback_query_id: cq.id, text: "Нет доступа.", show_alert: true }).catch(() => {});
+  }
+
+  const acceptMatch = data.match(/^wd_accept:(\d+)$/);
+  const rejectMatch = data.match(/^wd_reject:(\d+)$/);
+  const noReasonMatch = data.match(/^wd_reject_noreason:(\d+)$/);
+
+  try {
+    if (acceptMatch) {
+      const requestId = Number(acceptMatch[1]);
+      const wr = await resolveWithdrawal(requestId, true);
+      await telegramApi("sendMessage", {
+        chat_id: wr.telegram_user_id,
+        text: `✅ Ваш вывод на ${Number(wr.amount).toFixed(2)} ⭐ выполнен.`
+      }).catch(() => {});
+      if (chatId && messageId) {
+        await telegramApi("editMessageText", {
+          chat_id: chatId, message_id: messageId,
+          text: (cq.message?.text || "") + `\n\n✅ Принято администратором.`
+        }).catch(() => {});
+      }
+      await telegramApi("answerCallbackQuery", { callback_query_id: cq.id, text: "Принято." }).catch(() => {});
+      return;
+    }
+
+    if (rejectMatch) {
+      const requestId = Number(rejectMatch[1]);
+      pendingWithdrawalRejections.set(adminId, { requestId, chatId });
+      await telegramApi("sendMessage", {
+        chat_id: chatId,
+        text: `Напишите причину отказа для заявки №${requestId} следующим сообщением, либо нажмите кнопку ниже.`,
+        reply_markup: { inline_keyboard: [[{ text: "Без объяснения причин", callback_data: `wd_reject_noreason:${requestId}` }]] }
+      }).catch(() => {});
+      await telegramApi("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
+      return;
+    }
+
+    if (noReasonMatch) {
+      const requestId = Number(noReasonMatch[1]);
+      pendingWithdrawalRejections.delete(adminId);
+      await finalizeWithdrawalRejection(requestId, null, chatId);
+      if (chatId && messageId) {
+        await telegramApi("editMessageText", { chat_id: chatId, message_id: messageId, text: "Отклонено без причины." }).catch(() => {});
+      }
+      await telegramApi("answerCallbackQuery", { callback_query_id: cq.id, text: "Отклонено." }).catch(() => {});
+      return;
+    }
+
+    await telegramApi("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
+  } catch (e) {
+    await telegramApi("answerCallbackQuery", { callback_query_id: cq.id, text: e.message, show_alert: true }).catch(() => {});
+  }
+}
+
 
 // ---------------- RAFFLES ----------------
 let botInfoCache = null;
@@ -1663,6 +1801,26 @@ app.post("/api/telegram/webhook", async (req, res) => {
     const incomingMessage = update.message;
     const incomingText = String(incomingMessage?.text || "").trim();
 
+    // An admin who pressed "Отклонить" is now expected to send the reason as
+    // their next plain message — catch that here before anything else.
+    const fromAdminId = incomingMessage?.from?.id ? String(incomingMessage.from.id) : null;
+    if (incomingMessage && fromAdminId && pendingWithdrawalRejections.has(fromAdminId)) {
+      const pending = pendingWithdrawalRejections.get(fromAdminId);
+      pendingWithdrawalRejections.delete(fromAdminId);
+      res.json({ ok: true, handled: "withdraw_reject_reason" });
+      setImmediate(() =>
+        finalizeWithdrawalRejection(pending.requestId, incomingText || null, pending.chatId)
+          .catch(e => console.error("finalizeWithdrawalRejection error:", e.message))
+      );
+      return;
+    }
+
+    if (update.callback_query) {
+      res.json({ ok: true });
+      setImmediate(() => handleWithdrawalCallback(update.callback_query).catch(e => console.error("callback_query error:", e.message)));
+      return;
+    }
+
     if (/^\/start(?:@\w+)?(?:\s+.+)?$/i.test(incomingText)) {
       res.json({ ok: true, handled: "start" });
       setImmediate(() => handleTelegramStart(incomingMessage).catch(e => console.error("Telegram /start async error:", e.message)));
@@ -2006,13 +2164,17 @@ app.post("/api/profile/withdraw", async (req, res) => {
       ? `@${session.telegram.username}`
       : session.telegram.first_name;
 
-    notifyAdmins(
+    notifyAdminsWithButtons(
       `📤 Новая заявка на вывод\n` +
       `Пользователь: ${displayName} (ID: ${userId})\n` +
       `Направление: ${currency === "GRAM" ? "GRAM" : "Telegram Stars"}\n` +
       `Сумма списания: ${amount} ⭐\n` +
       (currency === "GRAM" ? `Эквивалент: ≈ $${gramUsd.toFixed(2)}\nTON / GRAM кошелёк: ${wallet}\n` : "") +
-      `Заявка №${ins.rows[0].id}`
+      `Заявка №${ins.rows[0].id}`,
+      [[
+        { text: "✅ Принять", callback_data: `wd_accept:${ins.rows[0].id}` },
+        { text: "❌ Отклонить", callback_data: `wd_reject:${ins.rows[0].id}` }
+      ]]
     ).catch(() => {});
 
     io.to(`user:${userId}`).emit("balance_updated", { balance: balanceAfter });
