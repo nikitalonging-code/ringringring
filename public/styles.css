@@ -156,8 +156,7 @@ button{cursor:pointer}
 .upgrade-back{border:0;background:#1c1f22;color:#fff;font-weight:800;border-radius:12px;padding:9px 13px;font-size:14px}
 .upgrade-title{flex:1;text-align:center;margin-right:52px;color:#fff;font-weight:900;font-size:16px;letter-spacing:.5px}
 .upgrade-wheel-wrap{margin:2px auto 26px}
-.upgrade-wheel{background:#141517}
-.upgrade-wheel-svg{position:absolute;inset:0;width:100%;height:100%;border-radius:50%;display:block}
+.upgrade-wheel{background:linear-gradient(160deg,#eceef0,#b9bcc0)}
 .upgrade-wheel .wheel-inner{background:#0c0d0f}
 .upgrade-inputs{display:block;margin-bottom:0}
 .upgrade-inputs .input-row{margin-bottom:12px}
@@ -755,23 +754,25 @@ button{cursor:pointer}
   -webkit-overflow-scrolling:touch !important;
 }
 
-/* Never let any ancestor hard-clip the page — auto height + no overflow:hidden
-   anywhere in the html→body→.app chain, so no matter which layer actually
-   ends up doing the scrolling (the page itself, Telegram Desktop's iframe
-   auto-resizing to content, or a mobile WebView), the content always has
-   somewhere to go instead of being cut off behind the fixed bottom nav. An
-   earlier attempt pinned .app to a fixed 100vh with its own internal scroll,
-   which assumes .app always sits inside a correctly-sized viewport — that
-   doesn't hold for every embedding (e.g. Telegram Desktop's panel), so it
-   could end up clipping instead of fixing anything. */
-html,body{height:auto;overflow:visible}
+/* Make the app itself the scrolling element with a real, fixed viewport
+   height, instead of relying on the outer page/iframe to scroll. Telegram's
+   embeds don't always scroll the outer page reliably, which is what caused
+   content (like the end of the Profile view) to stay hidden behind the fixed
+   bottom nav no matter how much bottom padding was added. */
+html,body{height:100%;overflow:hidden}
 .app{
-  height:auto;
-  min-height:100vh;
-  min-height:100dvh;
-  overflow:visible !important;
-  padding-bottom:150px !important;
+  height:100vh;
+  height:100dvh;
+  overflow-y:auto !important;
+  overflow-x:hidden;
+  -webkit-overflow-scrolling:touch;
+  padding-bottom:130px !important;
 }
+
+/* The navigation is fixed over the viewport, so reserve its full height in
+   the profile's own scroll area. This keeps the last profile/admin card
+   reachable above the bar on short Telegram WebView screens. */
+#profileView{padding-bottom:calc(150px + env(safe-area-inset-bottom)) !important;}
 
 /* ---------- Admin: tabs + Пополнения/Ставки/Выводы/Рефералы summary ---------- */
 .admin-tabs{display:flex;gap:6px;overflow-x:auto;margin:12px 0 14px;padding-bottom:2px;-webkit-overflow-scrolling:touch}

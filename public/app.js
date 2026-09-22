@@ -332,7 +332,16 @@ socket.on("unbanned", () => {
   $("#betBtn").disabled = false;
   $("#topupBtn").disabled = false;
 });
-socket.on("error_message", message => toast(message));
+socket.on("error_message", message => {
+  // An Upgrade error used to leave its inputs disabled forever because the
+  // result event never arrives in that case.
+  if (upgradeSpinning) {
+    upgradeSpinning = false;
+    setUpgradeControlsDisabled(false);
+    $("#upgradePointerOrbit").style.opacity = "0";
+  }
+  toast(message);
+});
 socket.on("bet_accepted", data => {
   setBalance(data.balance);
   closeModal(betModal);
@@ -1112,28 +1121,10 @@ function upgradeChance() {
   return { bet, target, valid, chance: valid ? (bet / target) * 100 : 0 };
 }
 
-// Draws the yellow win-zone as an SVG pie wedge from 12 o'clock, clockwise,
-// covering exactly `pct` percent of the circle. This is the same clockwise-
-// from-top convention the pointer's CSS rotation uses, but expressed as
-// plain, unambiguous arc geometry (basic trigonometry + one SVG arc command)
-// instead of a conic-gradient — conic-gradient direction handling has a
-// history of small inconsistencies across older WebView engines, which is
-// exactly the kind of thing that would make "which color it lands on" look
-// wrong on some phones and not others. This removes that variable entirely.
-function setUpgradeWheelPct(pct) {
-  const p = Math.max(0, Math.min(99.999, Number(pct) || 0));
-  const angle = (p / 100) * 360 * (Math.PI / 180);
-  const x = 50 + 50 * Math.sin(angle);
-  const y = 50 - 50 * Math.cos(angle);
-  const largeArc = p > 50 ? 1 : 0;
-  const d = p <= 0 ? "" : `M50 50 L50 0 A50 50 0 ${largeArc} 1 ${x} ${y} Z`;
-  $("#upgradeWheelArc").setAttribute("d", d);
-}
-
 function renderUpgradeWheel() {
   const { valid, chance } = upgradeChance();
   const pct = valid ? chance : 0;
-  setUpgradeWheelPct(pct);
+  $("#upgradeWheel").style.background = `conic-gradient(from 0deg at 50% 50%, #ffc915 0%, #ffc915 ${pct}%, #141517 ${pct}%, #141517 100%)`;
   $("#upgradeChanceValue").textContent = pct.toFixed(2) + "%";
   // The colored arc just changed shape (new bet/target), so a pointer left
   // over from a previous spin no longer points at anything meaningful for
@@ -1170,15 +1161,6 @@ function setUpgradeControlsDisabled(disabled) {
   $("#upgradeTarget").disabled = disabled;
 }
 
-function upgradeSecureRandom() {
-  if (window.crypto?.getRandomValues) {
-    const buf = new Uint32Array(1);
-    window.crypto.getRandomValues(buf);
-    return buf[0] / 4294967296;
-  }
-  return Math.random();
-}
-
 function spinUpgradePointer(data) {
   const pointerOrbit = $("#upgradePointerOrbit");
   const current = upgradeAccumDeg % 360;
@@ -1190,7 +1172,7 @@ function spinUpgradePointer(data) {
   // bet/target inputs changed between placing the bet and the result coming
   // back, a wheel drawn from stale local input values would no longer match
   // what the server actually rolled against).
-  setUpgradeWheelPct(chance);
+  $("#upgradeWheel").style.background = `conic-gradient(from 0deg at 50% 50%, #ffc915 0%, #ffc915 ${chance}%, #141517 ${chance}%, #141517 100%)`;
 
   // The result IS where the pointer lands — not the other way around. The
   // server rolls one real random number (0–100) and derives both the win
@@ -1256,6 +1238,14 @@ socket.on("upgrade_result", data => {
     setUpgradeControlsDisabled(false);
     showUpgradeBanner(data);
   }, 6350);
+});
+
+socket.on("disconnect", () => {
+  if (!upgradeSpinning) return;
+  upgradeSpinning = false;
+  setUpgradeControlsDisabled(false);
+  $("#upgradePointerOrbit").style.opacity = "0";
+  toast("Соединение потеряно. Попробуйте ещё раз.");
 });
 
 function escapeHtml(value) {
