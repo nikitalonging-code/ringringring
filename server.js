@@ -412,6 +412,25 @@ async function initDb() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       credited_at TIMESTAMPTZ
     )`,
+    `CREATE TABLE IF NOT EXISTS tasks (
+      id UUID PRIMARY KEY,
+      created_by TEXT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+      task_type TEXT NOT NULL CHECK (task_type IN ('channel_subscription','bot_start')),
+      target_username TEXT NOT NULL,
+      target_chat_id TEXT NOT NULL DEFAULT '',
+      reward NUMERIC(20,2) NOT NULL CHECK (reward > 0),
+      max_activations INTEGER NOT NULL CHECK (max_activations > 0),
+      completions INTEGER NOT NULL DEFAULT 0,
+      price NUMERIC(20,2) NOT NULL CHECK (price > 0),
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','finished','cancelled')),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS task_completions (
+      task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      telegram_user_id TEXT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+      completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (task_id, telegram_user_id)
+    )`,
 
     // Migrate an already-existing database without wiping users.
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT NOT NULL DEFAULT ''`,
@@ -438,6 +457,7 @@ async function initDb() {
     `CREATE INDEX IF NOT EXISTS withdrawal_requests_user_idx ON withdrawal_requests(telegram_user_id, created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS withdrawal_requests_status_idx ON withdrawal_requests(status, created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS ton_topup_intents_pending_idx ON ton_topup_intents(status, created_at)`,
+    `CREATE INDEX IF NOT EXISTS tasks_active_idx ON tasks(status, created_at DESC)`,
     `DO $$ BEGIN
        ALTER TABLE withdrawal_requests DROP CONSTRAINT IF EXISTS withdrawal_requests_currency_check;
        ALTER TABLE withdrawal_requests ADD CONSTRAINT withdrawal_requests_currency_check CHECK (currency IN ('STAR','GRAM','TON'));
@@ -973,7 +993,9 @@ io.on("connection", socket => {
       const target = Number(data?.target);
       const result = await playUpgrade(id, bet, target);
       socket.emit("upgrade_result", result);
-      socket.emit("balance_updated", { balance: result.balance });
+      // The balance itself reveals the result, so keep it hidden until the
+      // arrow has visibly stopped on its yellow or gray sector.
+      setTimeout(() => socket.emit("balance_updated", { balance: result.balance }), 6350);
     } catch (e) { socket.emit("error_message", e.message); }
   });
 
@@ -2549,6 +2571,84 @@ app.post('/api/raffles/:id/check-boost', async (req,res) => {
     const result = await checkRaffleBoost(session.telegram.id, req.params.id);
     res.json({ok:true,...result,detail:await getRaffleDetails(req.params.id,session.telegram.id)});
   } catch(e) { res.status(400).json({error:e.message}); }
+});
+
+// ---------------- TASKS ----------------
+async function verifyTaskChannel(channelUsername, userId = null) {
+  const username = normalizeChannelRef(channelUsername);
+  if (!username) throw new Error("Укажите username канала, например @my_channel.");
+  const chat = await telegramApi("getChat", { chat_id: `@${username}` });
+  const bot = await getBotInfoCached();
+  const botMember = await telegramApi("getChatMember", { chat_id: chat.id, user_id: Number(bot.id) });
+  if (!["creator", "administrator"].includes(String(botMember.status))) throw new Error("Добавьте бота администратором канала, чтобы он мог проверять подписку.");
+  if (userId != null) {
+    const member = await telegramApi("getChatMember", { chat_id: chat.id, user_id: Number(userId) });
+    const joined = ["creator", "administrator", "member"].includes(String(member.status)) || (String(member.status) === "restricted" && member.is_member === true);
+    if (!joined) throw new Error("Сначала подпишитесь на канал, затем повторите проверку.");
+  }
+  return { id: String(chat.id), username: `@${username}` };
+}
+
+function taskPrice(reward, activations) { return Number((Number(reward) * Number(activations) * 1.5).toFixed(2)); }
+
+app.get("/api/tasks", async (req, res) => {
+  try {
+    const session = await authenticatedUserFromInitData(req.headers["x-telegram-init-data"]);
+    const result = await pool.query(
+      `SELECT t.id, t.task_type, t.target_username, t.reward::float AS reward, t.max_activations, t.completions,
+              EXISTS(SELECT 1 FROM task_completions c WHERE c.task_id=t.id AND c.telegram_user_id=$1) AS completed
+       FROM tasks t WHERE t.status='active' ORDER BY t.created_at DESC`, [String(session.telegram.id)]
+    );
+    res.json({ tasks: result.rows });
+  } catch (e) { res.status(400).json({ error: e.message || "Не удалось загрузить задания." }); }
+});
+
+app.post("/api/tasks/:id/complete", async (req, res) => {
+  try {
+    const session = await authenticatedUserFromInitData(req.headers["x-telegram-init-data"]);
+    const taskId = String(req.params.id);
+    const preview = await pool.query(`SELECT * FROM tasks WHERE id=$1 AND status='active'`, [taskId]);
+    if (!preview.rowCount) throw new Error("Задание недоступно.");
+    if (preview.rows[0].task_type !== "channel_subscription") throw new Error("Этот вид задания пока недоступен.");
+    await verifyTaskChannel(preview.rows[0].target_username, session.telegram.id);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const locked = await client.query(`SELECT * FROM tasks WHERE id=$1 AND status='active' FOR UPDATE`, [taskId]);
+      if (!locked.rowCount || Number(locked.rows[0].completions) >= Number(locked.rows[0].max_activations)) throw new Error("Лимит активаций задания исчерпан.");
+      const inserted = await client.query(`INSERT INTO task_completions (task_id, telegram_user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING RETURNING task_id`, [taskId, String(session.telegram.id)]);
+      if (!inserted.rowCount) throw new Error("Вы уже получили награду за это задание.");
+      const balance = await creditBalance(session.telegram.id, Number(locked.rows[0].reward), client, { type: "task_reward", description: `Награда за задание ${taskId}` });
+      await client.query(`UPDATE tasks SET completions=completions+1, status=CASE WHEN completions+1 >= max_activations THEN 'finished' ELSE 'active' END WHERE id=$1`, [taskId]);
+      await client.query("COMMIT");
+      io.to(`user:${session.telegram.id}`).emit("balance_updated", { balance });
+      res.json({ ok: true, balance });
+    } catch (e) { try { await client.query("ROLLBACK"); } catch {} throw e; } finally { client.release(); }
+  } catch (e) { res.status(400).json({ error: e.message || "Не удалось выполнить задание." }); }
+});
+
+app.post("/api/admin/tasks", async (req, res) => {
+  try {
+    const admin = await requireAdminRequest(req);
+    const reward = Number(req.body?.reward);
+    const activations = Number(req.body?.activations);
+    if (!Number.isFinite(reward) || reward <= 0 || !Number.isInteger(activations) || activations <= 0) throw new Error("Укажите награду и целое количество активаций.");
+    const channel = await verifyTaskChannel(req.body?.channel);
+    const price = taskPrice(reward, activations);
+    const id = crypto.randomUUID();
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const debited = await client.query(`UPDATE users SET balance=balance-$2, updated_at=NOW() WHERE telegram_id=$1 AND banned=false AND balance >= $2 RETURNING balance::float AS balance`, [String(admin.id), price]);
+      if (!debited.rowCount) throw new Error("Недостаточно Stars на балансе для оплаты задания.");
+      const balance = Number(debited.rows[0].balance);
+      await client.query(`INSERT INTO balance_transactions (telegram_user_id,type,amount,balance_after,description) VALUES ($1,'task_purchase',$2,$3,$4)`, [String(admin.id), -price, balance, `Создание задания ${channel.username}`]);
+      await client.query(`INSERT INTO tasks (id, created_by, task_type, target_username, target_chat_id, reward, max_activations, price) VALUES ($1,$2,'channel_subscription',$3,$4,$5,$6,$7)`, [id, String(admin.id), channel.username, channel.id, reward, activations, price]);
+      await client.query("COMMIT");
+      invalidateUserCache(admin.id);
+      res.json({ ok: true, id, price, balance });
+    } catch (e) { try { await client.query("ROLLBACK"); } catch {} throw e; } finally { client.release(); }
+  } catch (e) { res.status(400).json({ error: e.message || "Не удалось создать задание." }); }
 });
 
 // ---------------- ADMIN API ----------------

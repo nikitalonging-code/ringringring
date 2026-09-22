@@ -166,6 +166,12 @@
         <div><span>Реферальные начисления</span><b>10%</b></div>
       </section>
 
+      <section class="tasks-card">
+        <div class="tasks-title">ЗАДАНИЯ</div>
+        <div class="tasks-subtitle">Подпишитесь на канал и получите Stars.</div>
+        <div id="tasksList" class="tasks-list"></div>
+      </section>
+
       <section class="promo-card">
         <div class="promo-title">ПРОМОКОД</div>
         <div class="promo-subtitle">Введи промокод, чтобы получить бонус на баланс.</div>
@@ -187,6 +193,7 @@
         <button class="admin-tab" data-admin-tab="withdrawals">Выводы</button>
         <button class="admin-tab" data-admin-tab="referrals">Рефералы</button>
         <button class="admin-tab" data-admin-tab="promos">Промокоды</button>
+        <button class="admin-tab" data-admin-tab="tasks">Задания</button>
       </div>
 
       <div class="admin-tab-panel" id="adminTabUsers">
@@ -216,6 +223,19 @@
         </div>
         <div id="adminPromos" class="admin-promos"></div>
       </div>
+      <div class="admin-tab-panel hidden" id="adminTabTasks">
+        <div class="task-admin-create">
+          <div class="promo-admin-title">СОЗДАТЬ СВОЁ ЗАДАНИЕ</div>
+          <div class="task-admin-hint">Бот должен быть администратором указанного канала.</div>
+          <input id="adminTaskChannel" placeholder="@username_канала" autocomplete="off">
+          <div class="task-admin-row">
+            <input id="adminTaskReward" type="number" min="1" step="1" placeholder="Награда ⭐">
+            <input id="adminTaskActivations" type="number" min="1" step="1" placeholder="Активации">
+          </div>
+          <div class="task-admin-price">Стоимость: <b id="adminTaskPrice">0.00 ⭐</b></div>
+          <button id="createTask">СОЗДАТЬ И ОПЛАТИТЬ</button>
+        </div>
+      </div>
     </section>
 
       </section>
@@ -224,8 +244,8 @@
     <nav class="bottom-nav" aria-label="Main navigation">
       <button class="nav-item" data-view="raffles" aria-label="Giveaways"></button>
       <button class="nav-item" data-view="games" aria-label="Games"></button>
-      <button class="nav-item" data-view="profile" aria-label="Profile"></button>
       <button class="nav-item active" data-view="pvp" aria-label="PVP"></button>
+      <button class="nav-item" data-view="profile" aria-label="Profile"></button>
     </nav>
   </main>
 

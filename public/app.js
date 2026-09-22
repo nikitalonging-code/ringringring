@@ -537,6 +537,7 @@ async function loadProfile() {
     const st = data.stats || {};
     const ref = data.referral || {};
     if (isAdmin) refreshAdmin();
+    loadTasks();
 
     $("#profileName").textContent = u.first_name || "Игрок";
     $("#profileUsername").textContent = u.username ? "@" + u.username.replace(/^@/, "") : "Без username";
@@ -563,6 +564,36 @@ async function loadProfile() {
   } catch (e) {
     toast(e.message);
   }
+}
+
+async function loadTasks() {
+  const root = $("#tasksList");
+  if (!root || !initData) return;
+  try {
+    const response = await fetch("/api/tasks", { headers: authHeaders() });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "Не удалось загрузить задания.");
+    const tasks = data.tasks || [];
+    root.innerHTML = tasks.length ? "" : '<div class="tasks-empty">Сейчас нет активных заданий.</div>';
+    for (const task of tasks) {
+      const el = document.createElement("div");
+      el.className = "task-item";
+      const completed = !!task.completed;
+      el.innerHTML = `<div><b>Подписка на ${escapeHtml(task.target_username)}</b><span>${Number(task.completions)}/${Number(task.max_activations)} активаций</span></div><div class="task-reward">+${Number(task.reward).toFixed(2)} ⭐</div><div class="task-actions"><a href="https://t.me/${escapeHtml(String(task.target_username).replace(/^@/, ""))}" target="_blank" rel="noopener">Открыть</a><button ${completed ? "disabled" : ""}>${completed ? "Выполнено" : "Проверить"}</button></div>`;
+      const button = el.querySelector("button");
+      button.onclick = async () => {
+        try {
+          const complete = await fetch(`/api/tasks/${encodeURIComponent(task.id)}/complete`, { method: "POST", headers: authHeaders() });
+          const result = await complete.json().catch(() => ({}));
+          if (!complete.ok) throw new Error(result.error || "Не удалось проверить задание.");
+          setBalance(result.balance);
+          toast("Задание выполнено: награда зачислена.");
+          loadTasks();
+        } catch (e) { toast(e.message); }
+      };
+      root.appendChild(el);
+    }
+  } catch (e) { root.innerHTML = `<div class="tasks-empty">${escapeHtml(e.message)}</div>`; }
 }
 
 $("#copyReferral").onclick = async () => {
@@ -943,6 +974,32 @@ document.querySelectorAll(".admin-tab").forEach(btn => {
   };
 });
 
+function updateTaskPrice() {
+  const reward = Number($("#adminTaskReward")?.value || 0);
+  const activations = Number($("#adminTaskActivations")?.value || 0);
+  $("#adminTaskPrice").textContent = `${Math.max(0, reward * activations * 1.5).toFixed(2)} ⭐`;
+}
+["adminTaskReward", "adminTaskActivations"].forEach(id => $("#" + id)?.addEventListener("input", updateTaskPrice));
+$("#createTask")?.addEventListener("click", async () => {
+  const channel = $("#adminTaskChannel").value.trim();
+  const reward = Number($("#adminTaskReward").value);
+  const activations = Number($("#adminTaskActivations").value);
+  try {
+    const result = await adminFetch("/api/admin/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ channel, reward, activations })
+    });
+    setBalance(result.balance);
+    $("#adminTaskChannel").value = "";
+    $("#adminTaskReward").value = "";
+    $("#adminTaskActivations").value = "";
+    updateTaskPrice();
+    toast(`Задание создано. Списано ${Number(result.price).toFixed(2)} ⭐.`);
+    loadTasks();
+  } catch (e) { toast(e.message); }
+});
+
 function renderAdminStats(s) {
   $("#adminStats").innerHTML = `
     <div class="admin-stat"><b>${s.users}</b><span>Пользователи</span></div>
@@ -1190,7 +1247,12 @@ function spinUpgradePointer(data) {
   pointerOrbit.style.transform = `rotate(${current}deg)`;
   void pointerOrbit.offsetWidth;
 
-  const next = current + 360 * 6 + targetAngle;
+  // `targetAngle` is an absolute point on the wheel. On later spins the
+  // arrow begins at the previous point, so add only the clockwise distance
+  // TO the new point. Adding both angles made later results land visibly in
+  // the wrong sector even though the server had selected the correct one.
+  const distanceToTarget = (targetAngle - current + 360) % 360;
+  const next = current + 360 * 6 + distanceToTarget;
   pointerOrbit.style.transition = "transform 6.2s cubic-bezier(.10,.72,.12,1)";
   pointerOrbit.style.transform = `rotate(${next}deg)`;
   upgradeAccumDeg = next;
