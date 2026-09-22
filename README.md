@@ -37,6 +37,8 @@
 
 `ADMIN_TELEGRAM_IDS` — числовой Telegram ID администратора. Несколько ID можно перечислить через запятую.
 
+`TONAPI_KEY` — ключ TonAPI для автоматической проверки входящих TON-переводов. Его нужно добавить на Render вместе с `TON_TOPUP_WALLET_ADDRESS` и `TON_PER_STAR`: приложение прикладывает к каждому переводу одноразовый комментарий и зачисляет Stars после подтверждения транзакции сетью.
+
 `DATABASE_URL` Render подставляет автоматически из PostgreSQL по `render.yaml`.
 
 ## Telegram Mini App authorization

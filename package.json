@@ -12,6 +12,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@ton/core": "^0.63.0",
     "express": "^4.21.2",
     "socket.io": "^4.8.1",
     "pg": "^8.13.1"

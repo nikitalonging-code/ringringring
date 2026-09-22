@@ -59,7 +59,6 @@ function handleNotTelegram() {
 $("#betBtn").onclick = () => {
   if (!initData) return handleNotTelegram();
   if (currentState?.status === "SPINNING" || currentState?.status === "RESULT") return toast("Ставки уже закрыты.");
-  if (currentState?.players?.some(p => p.id === String(user?.id) && p.bet > 0)) return toast("Вы уже сделали ставку в этом раунде.");
   $("#betAmount").value = "";
   $("#modalBalance").textContent = currentBalance.toFixed(2) + " ⭐";
   openModal(betModal);
@@ -199,19 +198,19 @@ $("#createGramTopup").onclick = async () => {
     if (!cfgR.ok) throw new Error(cfg.error || "GRAM пополнение не настроено.");
     const nanoTon = String(Math.round(amount * Number(cfg.tonPerStar || 0) * 1e9));
     if (!nanoTon || nanoTon === "0") throw new Error("Не задан курс TON/Star на Render.");
-    await tonConnectUI.sendTransaction({
-      validUntil: Math.floor(Date.now() / 1000) + 600,
-      messages: [{ address: cfg.recipient, amount: nanoTon }]
-    });
-    const r = await fetch("/api/gram/topup-request", {
+    const intentR = await fetch("/api/gram/topup-intent", {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ amount, wallet: tonWalletAddress })
+      body: JSON.stringify({ amount })
     });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.error || "Транзакция отправлена, но заявку создать не удалось.");
+    const intent = await intentR.json().catch(() => ({}));
+    if (!intentR.ok) throw new Error(intent.error || "Не удалось подготовить TON-пополнение.");
+    await tonConnectUI.sendTransaction({
+      validUntil: Math.floor(Date.now() / 1000) + 600,
+      messages: [{ address: cfg.recipient, amount: nanoTon, payload: intent.payload }]
+    });
     closeModal(topupModal);
-    toast("Транзакция отправлена. Заявка поступила администратору.");
+    toast("Транзакция отправлена. Баланс будет зачислен автоматически после подтверждения сети.");
   } catch (e) { toast(e.message || "Не удалось выполнить GRAM пополнение."); }
 };
 
@@ -1212,7 +1211,9 @@ $("#upgradeSpinBtn").onclick = () => {
 };
 
 function showUpgradeBanner(data) {
-  const isWin = data?.win === true;
+  // The banner follows the exact sector under the arrow, rather than a
+  // separate result flag. The server uses this same comparison to pay out.
+  const isWin = Number(data?.rollPercent) < Number(data?.chance);
   const card = $("#upgradeBannerCard");
   card.classList.toggle("win", isWin);
   card.classList.toggle("lose", !isWin);

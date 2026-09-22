@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const path = require("path");
 const { Server } = require("socket.io");
 const { Pool } = require("pg");
+const { beginCell } = require("@ton/core");
 
 const PORT = Number(process.env.PORT || 10000);
 const app = express();
@@ -400,6 +401,17 @@ async function initDb() {
       status TEXT NOT NULL DEFAULT 'pending',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
+    `CREATE TABLE IF NOT EXISTS ton_topup_intents (
+      id UUID PRIMARY KEY,
+      telegram_user_id TEXT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+      expected_nano_ton NUMERIC(30,0) NOT NULL,
+      stars INTEGER NOT NULL CHECK (stars > 0),
+      comment TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL DEFAULT 'pending',
+      transaction_hash TEXT UNIQUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      credited_at TIMESTAMPTZ
+    )`,
 
     // Migrate an already-existing database without wiping users.
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT NOT NULL DEFAULT ''`,
@@ -425,6 +437,7 @@ async function initDb() {
     `CREATE INDEX IF NOT EXISTS referral_referrer_idx ON referral_earnings(referrer_id, claimed, created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS withdrawal_requests_user_idx ON withdrawal_requests(telegram_user_id, created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS withdrawal_requests_status_idx ON withdrawal_requests(status, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS ton_topup_intents_pending_idx ON ton_topup_intents(status, created_at)`,
     `DO $$ BEGIN
        ALTER TABLE withdrawal_requests DROP CONSTRAINT IF EXISTS withdrawal_requests_currency_check;
        ALTER TABLE withdrawal_requests ADD CONSTRAINT withdrawal_requests_currency_check CHECK (currency IN ('STAR','GRAM','TON'));
@@ -628,6 +641,7 @@ async function finishRound() {
   }
 
   state.winnerId = winner.id;
+  let winnerBalanceAfter = null;
   const bank = totalBank();
 
   // The server settles the outcome, but the UI will not reveal the winner
@@ -700,7 +714,8 @@ async function finishRound() {
         [state.roomId, bank, winner.id, winner.bet, payout, commission, JSON.stringify(publicState().players), roundSeed, roundSeedHash]
       );
       await client.query("COMMIT");
-      io.to(`user:${winner.id}`).emit("balance_updated", { balance: balanceAfter });
+      winnerBalanceAfter = balanceAfter;
+      invalidateUserCache(winner.id);
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error("Round settlement error:", e.message);
@@ -718,6 +733,11 @@ async function finishRound() {
     if (state.status === "SPINNING") {
       state.status = "RESULT";
       broadcast();
+      // Do not reveal the winner via their balance while the arrow is still
+      // moving. Everyone receives this update only after the visible result.
+      if (winnerBalanceAfter != null) {
+        io.to(`user:${winner.id}`).emit("balance_updated", { balance: winnerBalanceAfter });
+      }
     }
   }, 6350);
 
@@ -782,12 +802,12 @@ async function placeBet(playerId, amount) {
     });
   }
 
-  if (p.bet > 0 || p.betLocked) throw new Error("Вы уже сделали ставку в этом раунде.");
+  if (p.betLocked) throw new Error("Предыдущая ставка ещё обрабатывается.");
 
   p.betLocked = true;
   try {
     const balance = await debitBalance(playerId, amount, { countsAsWager: true });
-    p.bet = amount;
+    p.bet += amount;
     p.betLocked = false;
     broadcast();
     startCountdownIfNeeded();
@@ -820,12 +840,13 @@ async function playUpgrade(playerId, bet, target) {
     countsAsWager: true
   });
 
-  // Cryptographically secure random in [0,1).
+  // The random value is the position where the arrow will stop around the
+  // circle. Yellow occupies [0, chance), therefore the result is determined
+  // exclusively by the sector under that final arrow position.
   const max = 1_000_000_000;
   const r = Number(BigInt("0x" + crypto.randomBytes(8).toString("hex")) % BigInt(max));
-  const roll = r / max;
-  const win = roll < bet / target;
-  const rollPercent = Number((roll * 100).toFixed(6));
+  const rollPercent = Number(((r / max) * 100).toFixed(6));
+  const win = rollPercent < chance;
 
   // The server is authoritative about both the outcome and the exact visual
   // landing point. The client uses this same roll percentage, so the pointer
@@ -1004,6 +1025,8 @@ app.post("/api/stars/create-invoice", async (req, res) => {
     const session = await authenticatedUserFromInitData(req.headers["x-telegram-init-data"]);
     const amount = Number(req.body?.amount);
     if (!Number.isInteger(amount) || amount <= 0) return res.status(400).json({ error: "Неверная сумма Stars." });
+    // Telegram's XTR invoice API accepts at most 2,500 Stars per invoice.
+    if (amount > 2500) return res.status(400).json({ error: "За один платёж можно пополнить не более 2500 Stars." });
     if (!process.env.TELEGRAM_BOT_TOKEN) return res.status(503).json({ error: "TELEGRAM_BOT_TOKEN не настроен." });
 
     const payload = JSON.stringify({
@@ -1151,7 +1174,7 @@ async function rejectWithdrawal(requestId, adminId, reason = "") {
       `SELECT id, telegram_user_id, amount::float AS amount, currency
        FROM withdrawal_requests
        WHERE id=$1 AND status='decline_reason_pending' AND reviewed_by=$2 FOR UPDATE`,
-      [requestId, String(adminId)]
+      [Number(requestId), String(adminId)]
     );
     if (!request.rowCount) throw new Error("Заявка уже обработана или ожидает другого администратора.");
     const withdrawal = request.rows[0];
@@ -1163,9 +1186,9 @@ async function rejectWithdrawal(requestId, adminId, reason = "") {
     });
     await client.query(
       `UPDATE withdrawal_requests
-       SET status='rejected', reviewed_at=NOW(), decline_reason=$3
+       SET status='rejected', reviewed_at=NOW(), reviewed_by=$2, decline_reason=$3
        WHERE id=$1`,
-      [requestId, String(adminId), cleanReason]
+      [Number(requestId), String(adminId), cleanReason]
     );
     await client.query("COMMIT");
     return { ...withdrawal, balance, reason: cleanReason };
@@ -2087,6 +2110,85 @@ app.get("/api/gram/topup-config", async (req, res) => {
   }
 });
 
+app.post("/api/gram/topup-intent", async (req, res) => {
+  try {
+    const session = await authenticatedUserFromInitData(req.headers["x-telegram-init-data"]);
+    const amount = Number(req.body?.amount);
+    const tonPerStar = Number(String(process.env.TON_PER_STAR || "").trim().replace(",", "."));
+    if (!Number.isInteger(amount) || amount <= 0) throw new Error("Введите целую сумму Stars больше 0.");
+    if (!(tonPerStar > 0)) throw new Error("TON_PER_STAR не настроен.");
+
+    const id = crypto.randomUUID();
+    const comment = `RING:${id}`;
+    const expectedNanoTon = Math.round(amount * tonPerStar * 1e9);
+    if (!Number.isSafeInteger(expectedNanoTon) || expectedNanoTon <= 0) throw new Error("Сумма TON некорректна.");
+    await pool.query(
+      `INSERT INTO ton_topup_intents (id, telegram_user_id, expected_nano_ton, stars, comment)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [id, String(session.telegram.id), String(expectedNanoTon), amount, comment]
+    );
+    const payload = beginCell().storeUint(0, 32).storeStringTail(comment).endCell().toBoc().toString("base64");
+    res.json({ ok: true, payload, comment });
+  } catch (e) {
+    res.status(400).json({ error: e.message || "Не удалось подготовить TON-пополнение." });
+  }
+});
+
+function tonMessageComment(message) {
+  const decoded = message?.message_content?.decoded || message?.decoded || {};
+  return String(decoded.text || decoded.comment || "").trim();
+}
+
+async function settleTonTopups() {
+  if (!pool || !process.env.TONAPI_KEY) return;
+  const recipient = String(process.env.TON_TOPUP_WALLET_ADDRESS || process.env.TON_CONNECT_WALLET_ADDRESS || "").trim();
+  if (!recipient) return;
+  try {
+    const response = await fetch(`https://tonapi.io/v2/blockchain/accounts/${encodeURIComponent(recipient)}/transactions?limit=50`, {
+      headers: { Authorization: `Bearer ${process.env.TONAPI_KEY}` }
+    });
+    if (!response.ok) throw new Error(`TonAPI ${response.status}`);
+    const data = await response.json();
+    for (const transaction of data.transactions || []) {
+      const comment = tonMessageComment(transaction.in_msg);
+      if (!/^RING:[0-9a-f-]{36}$/i.test(comment)) continue;
+      const hash = String(transaction.hash || transaction.transaction_id?.hash || "");
+      const value = BigInt(String(transaction.in_msg?.value || "0"));
+      if (!hash || value <= 0n) continue;
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const intent = await client.query(
+          `SELECT * FROM ton_topup_intents WHERE comment=$1 AND status='pending' FOR UPDATE`,
+          [comment]
+        );
+        if (!intent.rowCount || value < BigInt(intent.rows[0].expected_nano_ton)) {
+          await client.query("ROLLBACK");
+          continue;
+        }
+        const row = intent.rows[0];
+        const balance = await creditBalance(row.telegram_user_id, Number(row.stars), client, {
+          type: "ton_topup",
+          description: `Автопополнение TON, транзакция ${hash}`
+        });
+        await client.query(
+          `UPDATE ton_topup_intents SET status='credited', transaction_hash=$2, credited_at=NOW() WHERE id=$1`,
+          [row.id, hash]
+        );
+        await client.query("COMMIT");
+        io.to(`user:${row.telegram_user_id}`).emit("balance_updated", { balance });
+      } catch (e) {
+        try { await client.query("ROLLBACK"); } catch {}
+        console.error("TON top-up settlement error:", e.message);
+      } finally {
+        client.release();
+      }
+    }
+  } catch (e) {
+    console.error("TON top-up polling error:", e.message);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // TODO: AUTOMATIC TON TOP-UPS (currently manual — admin approves by hand)
 // ---------------------------------------------------------------------------
@@ -2745,6 +2847,8 @@ async function start() {
   await initDb();
   await settleExpiredRaffles();
   setInterval(settleExpiredRaffles, 5000).unref();
+  await settleTonTopups();
+  setInterval(settleTonTopups, 20000).unref();
 
   server.listen(PORT, "0.0.0.0", async () => {
     console.log(`PVP wheel listening on ${PORT}`);

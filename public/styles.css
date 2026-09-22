@@ -766,6 +766,8 @@ html,body{height:100%;overflow:hidden}
   overflow-y:auto !important;
   overflow-x:hidden;
   -webkit-overflow-scrolling:touch;
+  overscroll-behavior-y:contain;
+  touch-action:pan-y;
   padding-bottom:130px !important;
 }
 
@@ -774,10 +776,13 @@ html,body{height:100%;overflow:hidden}
    reachable above the bar on short Telegram WebView screens. */
 #profileView{padding-bottom:calc(150px + env(safe-area-inset-bottom)) !important;}
 
+/* Every view is scrollable above the fixed navigation; this also makes the
+   PVP player list reachable instead of being hidden behind the bottom bar. */
+.view{padding-bottom:calc(150px + env(safe-area-inset-bottom)) !important;}
+
 /* ---------- Admin: tabs + Пополнения/Ставки/Выводы/Рефералы summary ---------- */
-.admin-tabs{display:flex;gap:6px;overflow-x:auto;margin:12px 0 14px;padding-bottom:2px;-webkit-overflow-scrolling:touch}
-.admin-tabs::-webkit-scrollbar{display:none}
-.admin-tab{flex:none;border:1px solid rgba(255,255,255,.1);background:#141516;color:#9a9ca1;border-radius:12px;padding:9px 14px;font-weight:800;font-size:12px;white-space:nowrap}
+.admin-tabs{display:flex;flex-wrap:wrap;gap:6px;overflow:visible;margin:12px 0 14px;padding-bottom:2px}
+.admin-tab{flex:1 1 calc(33.333% - 6px);border:1px solid rgba(255,255,255,.1);background:#141516;color:#9a9ca1;border-radius:12px;padding:9px 8px;font-weight:800;font-size:12px;white-space:nowrap}
 .admin-tab.active{background:var(--yellow);color:#111;border-color:var(--yellow)}
 .admin-tab-panel{min-height:40px}
 .admin-summary-total{text-align:center;color:#c9c4ac;font-size:13px;font-weight:700;margin-bottom:14px}

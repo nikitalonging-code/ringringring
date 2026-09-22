@@ -53,6 +53,10 @@ services:
         sync: false
       - key: TON_PER_STAR
         sync: false
+      # API key from tonapi.io; needed to verify incoming TON transfers and
+      # credit the balance automatically.
+      - key: TONAPI_KEY
+        sync: false
       - key: GRAM_USD_PER_STAR
         value: "0.015"
 
