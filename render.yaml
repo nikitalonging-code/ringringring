@@ -24,6 +24,23 @@ services:
       - key: TELEGRAM_BOT_USERNAME
         sync: false
 
+      # Optional bot welcome customization.
+      - key: WELCOME_TEXT
+        sync: false
+      - key: WELCOME_IMAGE_URL
+        sync: false
+      - key: WELCOME_APP_URL
+        sync: false
+      - key: WELCOME_CHANNEL_URL
+        sync: false
+      - key: WELCOME_SUPPORT_URL
+        sync: false
+
+      # Public task creation pricing: reward × activations × multiplier.
+      # Admins create tasks for free.
+      - key: TASK_PRICE_MULTIPLIER
+        value: "1.5"
+
       # Render generates this securely for the Blueprint.
       - key: TELEGRAM_WEBHOOK_SECRET
         generateValue: true

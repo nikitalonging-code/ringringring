@@ -170,6 +170,17 @@
         <div class="tasks-title">ЗАДАНИЯ</div>
         <div class="tasks-subtitle">Подпишитесь на канал и получите Stars.</div>
         <div id="tasksList" class="tasks-list"></div>
+        <div class="task-admin-create task-create-public">
+          <div class="promo-admin-title">СОЗДАТЬ СВОЁ ЗАДАНИЕ</div>
+          <div class="task-admin-hint">Бот должен быть администратором указанного канала.</div>
+          <input id="adminTaskChannel" placeholder="@username_канала" autocomplete="off">
+          <div class="task-admin-row">
+            <input id="adminTaskReward" type="number" min="1" step="1" placeholder="Награда ⭐">
+            <input id="adminTaskActivations" type="number" min="1" step="1" placeholder="Активации">
+          </div>
+          <div class="task-admin-price">Стоимость: <b id="adminTaskPrice">0.00 ⭐</b></div>
+          <button id="createTask">СОЗДАТЬ ЗАДАНИЕ</button>
+        </div>
       </section>
 
       <section class="promo-card">
@@ -193,7 +204,6 @@
         <button class="admin-tab" data-admin-tab="withdrawals">Выводы</button>
         <button class="admin-tab" data-admin-tab="referrals">Рефералы</button>
         <button class="admin-tab" data-admin-tab="promos">Промокоды</button>
-        <button class="admin-tab" data-admin-tab="tasks">Задания</button>
       </div>
 
       <div class="admin-tab-panel" id="adminTabUsers">
@@ -223,29 +233,16 @@
         </div>
         <div id="adminPromos" class="admin-promos"></div>
       </div>
-      <div class="admin-tab-panel hidden" id="adminTabTasks">
-        <div class="task-admin-create">
-          <div class="promo-admin-title">СОЗДАТЬ СВОЁ ЗАДАНИЕ</div>
-          <div class="task-admin-hint">Бот должен быть администратором указанного канала.</div>
-          <input id="adminTaskChannel" placeholder="@username_канала" autocomplete="off">
-          <div class="task-admin-row">
-            <input id="adminTaskReward" type="number" min="1" step="1" placeholder="Награда ⭐">
-            <input id="adminTaskActivations" type="number" min="1" step="1" placeholder="Активации">
-          </div>
-          <div class="task-admin-price">Стоимость: <b id="adminTaskPrice">0.00 ⭐</b></div>
-          <button id="createTask">СОЗДАТЬ И ОПЛАТИТЬ</button>
-        </div>
-      </div>
     </section>
 
       </section>
     </section>
 
     <nav class="bottom-nav" aria-label="Main navigation">
-      <button class="nav-item" data-view="raffles" aria-label="Giveaways"></button>
-      <button class="nav-item" data-view="games" aria-label="Games"></button>
-      <button class="nav-item active" data-view="pvp" aria-label="PVP"></button>
       <button class="nav-item" data-view="profile" aria-label="Profile"></button>
+      <button class="nav-item" data-view="pvp" aria-label="PVP"></button>
+      <button class="nav-item" data-view="games" aria-label="Games"></button>
+      <button class="nav-item" data-view="raffles" aria-label="Giveaways"></button>
     </nav>
   </main>
 
@@ -411,6 +408,17 @@
     <div class="modal-card raffle-detail-modal">
       <button class="modal-close" id="raffleDetailClose">×</button>
       <div id="raffleDetailRoot"></div>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="freebetModal">
+    <div class="modal-card freebet-modal-card">
+      <button class="modal-close" id="freebetClose">×</button>
+      <div class="freebet-icon">🎁</div>
+      <div class="freebet-title">ТЫ ПОЛУЧИЛ ФРИБЕТ!</div>
+      <div class="freebet-amount" id="freebetAmount">+0 ⭐</div>
+      <div class="freebet-info" id="freebetInfo">Фрибет зачислен на баланс.</div>
+      <button class="confirm" id="freebetCloseBtn">ПОНЯТНО</button>
     </div>
   </div>
 

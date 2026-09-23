@@ -24,6 +24,7 @@ let isAdmin = false;
 const betModal = $("#betModal");
 const topupModal = $("#topupModal");
 const withdrawModal = $("#withdrawModal");
+const freebetModal = $("#freebetModal");
 let withdrawCurrency = "STAR";
 let topupCurrency = "STAR";
 let GRAM_USD_PER_STAR = Number(window.__RING_GRAM_USD_PER_STAR || 0.015);
@@ -39,6 +40,38 @@ function toast(message) {
 }
 function openModal(el) { el.classList.remove("hidden"); }
 function closeModal(el) { el.classList.add("hidden"); }
+
+function showFreebetPopup(data) {
+  const bonus = Number(data?.bonus || 0);
+  const wager = Number(data?.wager || 0);
+  $("#freebetAmount").textContent = `+${bonus.toFixed(0)} ⭐`;
+  $("#freebetInfo").textContent = wager > 0
+    ? `Фрибет зачислен на баланс. Вагер: x${wager}. Перед выводом нужно отыграть ${Math.round(bonus * wager)} ⭐.`
+    : "Фрибет зачислен на баланс без обязательного вагера.";
+  openModal(freebetModal);
+}
+
+let freebetClaimAttempted = false;
+async function claimFreebetFromStartParam() {
+  const token = String(startParam || "").trim();
+  if (!/^fb_[0-9a-f-]{36}$/i.test(token) || freebetClaimAttempted || !initData) return;
+  freebetClaimAttempted = true;
+  try {
+    const r = await fetch("/api/freebets/claim", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ token })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || "Не удалось активировать фрибет.");
+    setBalance(data.balance);
+    if (data.claimed) showFreebetPopup(data);
+    else if (data.alreadyClaimed) toast("Ты уже активировал этот фрибет.");
+  } catch (e) {
+    // A claimed/expired link should not block opening the rest of the Mini App.
+    toast(e.message || "Не удалось активировать фрибет.");
+  }
+}
 
 function authHeaders(extra = {}) {
   return { ...extra, "X-Telegram-Init-Data": initData };
@@ -166,6 +199,8 @@ $("#withdrawBtn").onclick = () => {
   openModal(withdrawModal);
 };
 $("#withdrawClose").onclick = () => closeModal(withdrawModal);
+$("#freebetClose").onclick = () => closeModal(freebetModal);
+$("#freebetCloseBtn").onclick = () => closeModal(freebetModal);
 
 $("#confirmWithdraw").onclick = async () => {
   const amount = Number($("#withdrawAmount").value);
@@ -285,10 +320,12 @@ socket.on("connect", () => {
 socket.on("joined", data => {
   setBalance(data.balance);
   isAdmin = !!data.isAdmin;
+  updateTaskPrice();
   if (isAdmin) {
     $("#adminPanel").classList.remove("hidden");
     scheduleAdminRefresh();
   }
+  claimFreebetFromStartParam();
   if (raffleFromUrl) { setView("raffles"); }
 });
 
@@ -305,11 +342,13 @@ socket.on("joined", data => {
       GRAM_USD_PER_STAR = Number(data.gramUsdPerStar);
     }
     isAdmin = !!data.isAdmin;
+    updateTaskPrice();
     if (isAdmin) {
       $("#adminPanel").classList.remove("hidden");
       scheduleAdminRefresh();
     }
     if (data.state) render(data.state);
+    claimFreebetFromStartParam();
     if (raffleFromUrl) { setView("raffles"); }
   } catch (e) {
     // Socket join may still succeed; don't block the app on this request.
@@ -977,28 +1016,48 @@ document.querySelectorAll(".admin-tab").forEach(btn => {
 function updateTaskPrice() {
   const reward = Number($("#adminTaskReward")?.value || 0);
   const activations = Number($("#adminTaskActivations")?.value || 0);
-  $("#adminTaskPrice").textContent = `${Math.max(0, reward * activations * 1.5).toFixed(2)} ⭐`;
+  const price = reward > 0 && activations > 0 ? reward * activations * 1.5 : 0;
+  const priceEl = $("#adminTaskPrice");
+  const card = $(".task-create-public");
+  const button = $("#createTask");
+  if (!priceEl || !button) return;
+
+  if (isAdmin) {
+    priceEl.textContent = "БЕСПЛАТНО";
+    card?.classList.add("is-free");
+    button.textContent = "СОЗДАТЬ БЕСПЛАТНО";
+  } else {
+    priceEl.textContent = `${Math.max(0, price).toFixed(2)} ⭐`;
+    card?.classList.remove("is-free");
+    button.textContent = "СОЗДАТЬ И ОПЛАТИТЬ";
+  }
 }
 ["adminTaskReward", "adminTaskActivations"].forEach(id => $("#" + id)?.addEventListener("input", updateTaskPrice));
 $("#createTask")?.addEventListener("click", async () => {
   const channel = $("#adminTaskChannel").value.trim();
   const reward = Number($("#adminTaskReward").value);
   const activations = Number($("#adminTaskActivations").value);
+  if (!channel) return toast("Укажите @username канала.");
+  if (!Number.isFinite(reward) || reward <= 0) return toast("Укажите награду больше 0.");
+  if (!Number.isInteger(activations) || activations <= 0) return toast("Укажите целое количество активаций.");
   try {
-    const result = await adminFetch("/api/admin/tasks", {
+    const r = await fetch("/api/tasks", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ channel, reward, activations })
     });
+    const result = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(result.error || "Не удалось создать задание.");
     setBalance(result.balance);
     $("#adminTaskChannel").value = "";
     $("#adminTaskReward").value = "";
     $("#adminTaskActivations").value = "";
     updateTaskPrice();
-    toast(`Задание создано. Списано ${Number(result.price).toFixed(2)} ⭐.`);
+    toast(result.free ? "Задание создано бесплатно для администратора." : `Задание создано. Списано ${Number(result.price).toFixed(2)} ⭐.`);
     loadTasks();
   } catch (e) { toast(e.message); }
 });
+updateTaskPrice();
 
 function renderAdminStats(s) {
   $("#adminStats").innerHTML = `

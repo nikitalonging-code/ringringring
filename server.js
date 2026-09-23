@@ -341,6 +341,26 @@ async function initDb() {
       redeemed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       PRIMARY KEY (promo_code_id, telegram_user_id)
     )`,
+    `CREATE TABLE IF NOT EXISTS freebets (
+      id UUID PRIMARY KEY,
+      created_by TEXT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+      bonus NUMERIC(20,2) NOT NULL CHECK (bonus > 0),
+      max_uses INTEGER NOT NULL CHECK (max_uses > 0),
+      uses_count INTEGER NOT NULL DEFAULT 0,
+      wager NUMERIC(10,2) NOT NULL DEFAULT 0 CHECK (wager >= 0),
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS freebet_claims (
+      freebet_id UUID NOT NULL REFERENCES freebets(id) ON DELETE CASCADE,
+      telegram_user_id TEXT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+      bonus NUMERIC(20,2) NOT NULL,
+      wager NUMERIC(10,2) NOT NULL DEFAULT 0,
+      claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (freebet_id, telegram_user_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS freebets_active_idx ON freebets(active, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS freebet_claims_user_idx ON freebet_claims(telegram_user_id, claimed_at DESC)`,
     `CREATE TABLE IF NOT EXISTS raffles (
       id TEXT PRIMARY KEY,
       creator_id TEXT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
@@ -1079,6 +1099,260 @@ app.post("/api/stars/create-invoice", async (req, res) => {
 
 
 // ---------------- TELEGRAM BOT ----------------
+const freebetWizard = new Map();
+
+function freebetStartParam(id) {
+  return `fb_${String(id)}`;
+}
+
+function parseFreebetStartParam(value) {
+  const raw = String(value || "").trim();
+  const m = raw.match(/^fb_([0-9a-f-]{36})$/i);
+  return m ? m[1] : null;
+}
+
+function welcomeConfig() {
+  return {
+    text: String(process.env.WELCOME_TEXT || "🎉 <b>Добро пожаловать в RING!</b>\n\nОткрывай приложение, участвуй в играх и розыгрышах.").trim(),
+    imageUrl: String(process.env.WELCOME_IMAGE_URL || "").trim(),
+    appUrl: String(process.env.WELCOME_APP_URL || buildMiniAppOpenUrl()).trim(),
+    channelUrl: String(process.env.WELCOME_CHANNEL_URL || "").trim(),
+    supportUrl: String(process.env.WELCOME_SUPPORT_URL || "").trim()
+  };
+}
+
+function welcomeKeyboard() {
+  const cfg = welcomeConfig();
+  const rows = [];
+  if (cfg.appUrl) rows.push([{ text: "🎮 ОТКРЫТЬ ПРИЛОЖЕНИЕ", web_app: { url: cfg.appUrl } }]);
+  const links = [];
+  if (cfg.channelUrl) links.push({ text: "📢 КАНАЛ", url: cfg.channelUrl });
+  if (cfg.supportUrl) links.push({ text: "💬 ПОДДЕРЖКА", url: cfg.supportUrl });
+  if (links.length) rows.push(links);
+  return rows.length ? { inline_keyboard: rows } : undefined;
+}
+
+async function sendWelcome(message) {
+  if (!message?.chat?.id) return;
+  const cfg = welcomeConfig();
+  const reply_markup = welcomeKeyboard();
+  if (cfg.imageUrl) {
+    return telegramApi("sendPhoto", {
+      chat_id: message.chat.id,
+      photo: cfg.imageUrl,
+      caption: cfg.text,
+      parse_mode: "HTML",
+      ...(reply_markup ? { reply_markup } : {})
+    });
+  }
+  return telegramApi("sendMessage", {
+    chat_id: message.chat.id,
+    text: cfg.text,
+    parse_mode: "HTML",
+    ...(reply_markup ? { reply_markup } : {})
+  });
+}
+
+async function createFreebet(adminId, activations, bonus, wager) {
+  requireDatabase();
+  if (!isAdmin(adminId)) throw new Error("Нет доступа.");
+  const uses = Number(activations);
+  const amount = Number(bonus);
+  const wagerMultiplier = Number(wager);
+  if (!Number.isInteger(uses) || uses <= 0 || uses > 1_000_000_000) throw new Error("Количество активаций должно быть целым числом от 1 до 1 000 000 000.");
+  if (!Number.isInteger(amount) || amount <= 0 || amount > 1_000_000_000) throw new Error("Сумма Stars должна быть целым числом от 1 до 1 000 000 000.");
+  if (!Number.isFinite(wagerMultiplier) || wagerMultiplier < 0 || wagerMultiplier > 1000) throw new Error("Вагер должен быть числом от 0 до 1000.");
+
+  const id = crypto.randomUUID();
+  const r = await pool.query(
+    `INSERT INTO freebets (id, created_by, bonus, max_uses, wager) VALUES ($1,$2,$3,$4,$5)
+     RETURNING id, bonus::float AS bonus, max_uses, uses_count, wager::float AS wager, active, created_at`,
+    [id, String(adminId), amount, uses, wagerMultiplier]
+  );
+  return r.rows[0];
+}
+
+async function claimFreebet(userId, freebetId) {
+  requireDatabase();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const fb = await client.query(
+      `SELECT id, bonus::float AS bonus, max_uses, uses_count, wager::float AS wager, active
+       FROM freebets WHERE id=$1 FOR UPDATE`,
+      [String(freebetId)]
+    );
+    if (!fb.rowCount) throw new Error("Фрибет не найден.");
+    const row = fb.rows[0];
+    if (!row.active || Number(row.uses_count) >= Number(row.max_uses)) throw new Error("Этот фрибет уже закончился.");
+
+    const inserted = await client.query(
+      `INSERT INTO freebet_claims (freebet_id, telegram_user_id, bonus, wager)
+       VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING RETURNING freebet_id`,
+      [String(freebetId), String(userId), Number(row.bonus), Number(row.wager || 0)]
+    );
+    if (!inserted.rowCount) {
+      const existingUser = await getUser(userId, { fresh: true });
+      await client.query("ROLLBACK");
+      return { claimed: false, alreadyClaimed: true, balance: Number(existingUser?.balance || 0), bonus: Number(row.bonus), wager: Number(row.wager || 0) };
+    }
+
+    const balance = await creditBalance(userId, Number(row.bonus), client, {
+      type: "freebet",
+      description: `Активация фрибета ${freebetId}`
+    });
+    const wagerMultiplier = Number(row.wager || 0);
+    if (wagerMultiplier > 0) {
+      await client.query(
+        `UPDATE users SET wager_remaining = wager_remaining + $2 WHERE telegram_id=$1`,
+        [String(userId), Number(row.bonus) * wagerMultiplier]
+      );
+    }
+
+    const updated = await client.query(
+      `UPDATE freebets SET uses_count=uses_count+1, active=(uses_count+1 < max_uses)
+       WHERE id=$1
+       RETURNING uses_count, max_uses, active`,
+      [String(freebetId)]
+    );
+
+    await client.query("COMMIT");
+    invalidateUserCache(userId);
+    return {
+      claimed: true,
+      alreadyClaimed: false,
+      bonus: Number(row.bonus),
+      wager: wagerMultiplier,
+      balance,
+      usesCount: Number(updated.rows[0].uses_count),
+      maxUses: Number(updated.rows[0].max_uses),
+      active: !!updated.rows[0].active
+    };
+  } catch (e) {
+    try { await client.query("ROLLBACK"); } catch {}
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+function freebetLinkForBot(botUsername, freebetId) {
+  return buildTelegramMiniAppLink(botUsername, freebetStartParam(freebetId));
+}
+
+async function sendFreebetQuestion(chatId, text) {
+  await telegramApi("sendMessage", { chat_id: chatId, text, reply_markup: { inline_keyboard: [[{ text: "❌ Отмена", callback_data: "freebet:cancel" }]] } });
+}
+
+async function handleFreebetCommand(message) {
+  if (!message?.chat?.id) return;
+  const adminId = String(message.from?.id || "");
+  if (!isAdmin(adminId)) {
+    await telegramApi("sendMessage", { chat_id: message.chat.id, text: "Команда доступна только администраторам." });
+    return;
+  }
+  if (String(message.chat.type) !== "private") {
+    await telegramApi("sendMessage", { chat_id: message.chat.id, text: "Создание фрибета доступно в личных сообщениях с ботом." });
+    return;
+  }
+  try {
+    await upsertUser({
+      id: adminId,
+      username: String(message.from?.username || ""),
+      first_name: safeName(message.from?.first_name || "Администратор"),
+      photo_url: ""
+    });
+  } catch (e) {
+    console.error("Freebet admin sync error:", e.message);
+    await telegramApi("sendMessage", { chat_id: message.chat.id, text: "Не удалось подготовить профиль администратора. Проверь DATABASE_URL." });
+    return;
+  }
+  freebetWizard.set(adminId, { step: "activations" });
+  await telegramApi("sendMessage", { chat_id: message.chat.id, text: "🎁 Создание фрибета\n\nСколько активаций?\nНапиши целое число, например: 100\n\nДля отмены: /cancel" });
+}
+
+async function handleFreebetWizardMessage(message) {
+  const adminId = String(message?.from?.id || "");
+  if (!adminId || !isAdmin(adminId) || String(message?.chat?.type) !== "private") return false;
+  const draft = freebetWizard.get(adminId);
+  if (!draft) return false;
+
+  const text = String(message.text || "").trim();
+  if (/^\/cancel(?:@\w+)?$/i.test(text)) {
+    freebetWizard.delete(adminId);
+    await telegramApi("sendMessage", { chat_id: message.chat.id, text: "Создание фрибета отменено." });
+    return true;
+  }
+  if (!text || text.startsWith("/")) return false;
+
+  if (draft.step === "activations") {
+    const activations = Number(text);
+    if (!Number.isInteger(activations) || activations <= 0) {
+      await telegramApi("sendMessage", { chat_id: message.chat.id, text: "Нужно целое число активаций больше 0." });
+      return true;
+    }
+    draft.activations = activations;
+    draft.step = "bonus";
+    await telegramApi("sendMessage", { chat_id: message.chat.id, text: "✅ Активаций: " + activations + "\n\nСколько Stars даёт фрибет?" });
+    return true;
+  }
+
+  if (draft.step === "bonus") {
+    const bonus = Number(text);
+    if (!Number.isInteger(bonus) || bonus <= 0) {
+      await telegramApi("sendMessage", { chat_id: message.chat.id, text: "Сумма Stars должна быть целым числом больше 0." });
+      return true;
+    }
+    draft.bonus = bonus;
+    draft.step = "wager";
+    await telegramApi("sendMessage", { chat_id: message.chat.id, text: "⭐ Stars: " + bonus + "\n\nКакой wager?\nНапример: 5 — бонус нужно отыграть x5.\n0 — без вагера." });
+    return true;
+  }
+
+  if (draft.step === "wager") {
+    const wager = Number(String(text).replace(",", "."));
+    if (!Number.isFinite(wager) || wager < 0) {
+      await telegramApi("sendMessage", { chat_id: message.chat.id, text: "Вагер должен быть числом от 0 и выше." });
+      return true;
+    }
+    try {
+      const fb = await createFreebet(adminId, draft.activations, draft.bonus, wager);
+      const bot = await getBotInfoCached();
+      const link = freebetLinkForBot(bot.username, fb.id);
+      freebetWizard.delete(adminId);
+      await telegramApi("sendMessage", {
+        chat_id: message.chat.id,
+        text: `🎁 <b>Фрибет создан</b>\n\n⭐ Выдача: <b>${Number(fb.bonus).toFixed(0)} Stars</b>\n👥 Активаций: <b>${Number(fb.max_uses)}</b>\n🎯 Вагер: <b>x${Number(fb.wager)}</b>\n\nСсылка для раздачи:`,
+        parse_mode: "HTML",
+        reply_markup: link ? { inline_keyboard: [[{ text: "🎁 ПОЛУЧИТЬ ФРИБЕТ", url: link }]] } : undefined
+      });
+      if (!link) {
+        await telegramApi("sendMessage", { chat_id: message.chat.id, text: "Не удалось собрать ссылку. Проверь TELEGRAM_BOT_USERNAME / настройки Mini App на Render." });
+      }
+    } catch (e) {
+      await telegramApi("sendMessage", { chat_id: message.chat.id, text: `Ошибка: ${e.message}` });
+    }
+    return true;
+  }
+
+  return false;
+}
+
+async function handleFreebetCallback(callback) {
+  if (String(callback?.data || "") !== "freebet:cancel") return false;
+  const adminId = String(callback?.from?.id || "");
+  if (!isAdmin(adminId)) {
+    await answerCallbackQuery(callback.id, "Нет доступа.");
+    return true;
+  }
+  freebetWizard.delete(adminId);
+  await answerCallbackQuery(callback.id, "Создание фрибета отменено.");
+  if (callback.message?.chat?.id) {
+    await telegramApi("sendMessage", { chat_id: callback.message.chat.id, text: "Создание фрибета отменено." }).catch(() => {});
+  }
+  return true;
+}
+
 function telegramApiUrl(method) {
   return `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/${method}`;
 }
@@ -1736,7 +2010,8 @@ async function configureTelegramBot() {
     await telegramApi("setMyCommands", {
       commands: [
         { command: "start", description: "Открыть приложение" },
-        { command: "help", description: "Помощь" }
+        { command: "help", description: "Помощь" },
+        { command: "freebet", description: "Создать фрибет (админ)" }
       ]
     });
 
@@ -1770,27 +2045,13 @@ async function handleTelegramStart(message) {
   const text = String(message.text || "").trim();
   const match = text.match(/^\/start(?:@\w+)?(?:\s+(.+))?$/i);
   const parameter = match?.[1] ? String(match[1]).trim() : "";
-  const appUrl = buildMiniAppOpenUrl(parameter);
 
-  // Reply to /start first. A slow DB operation must never make the bot look dead.
   try {
-    await telegramApi("sendMessage", {
-      chat_id: message.chat.id,
-      text: appUrl
-        ? "🎮 Добро пожаловать в RING PVP!\n\nНажми кнопку ниже, чтобы открыть игру."
-        : "🎮 Добро пожаловать в RING PVP!\n\nПриложение пока не настроено: администратору нужно указать APP_PUBLIC_URL на Render.",
-      reply_markup: appUrl ? {
-        inline_keyboard: [[{
-          text: "🚀 ЗАЙТИ В ПРИЛОЖЕНИЕ",
-          web_app: { url: appUrl }
-        }]]
-      } : undefined
-    });
+    await sendWelcome(message);
   } catch (e) {
-    console.error("Telegram /start reply error:", e.message);
+    console.error("Telegram /start welcome error:", e.message);
   }
 
-  // Track the user after the reply so referral/database problems do not block /start.
   if (message.from?.id) {
     try {
       await upsertUser({
@@ -1807,17 +2068,7 @@ async function handleTelegramStart(message) {
 
 async function handleTelegramHelp(message) {
   if (!message?.chat?.id) return;
-  const appUrl = buildMiniAppOpenUrl();
-  await telegramApi("sendMessage", {
-    chat_id: message.chat.id,
-    text: "🎮 RING PVP\n\nОткрывай приложение кнопкой ниже.",
-    reply_markup: appUrl ? {
-      inline_keyboard: [[{
-        text: "🚀 ЗАЙТИ В ПРИЛОЖЕНИЕ",
-        web_app: { url: appUrl }
-      }]]
-    } : undefined
-  });
+  await sendWelcome(message);
 }
 
 function activeWebhookSecret() {
@@ -1907,6 +2158,10 @@ app.post("/api/telegram/webhook", async (req, res) => {
     const update = req.body || {};
 
     if (update.callback_query) {
+      if (await handleFreebetCallback(update.callback_query)) {
+        res.json({ ok: true, handled: "freebet_callback" });
+        return;
+      }
       res.json({ ok: true, handled: "callback" });
       setImmediate(() => handleWithdrawalCallback(update.callback_query).catch(e => console.error("Withdrawal callback error:", e.message)));
       return;
@@ -1914,6 +2169,12 @@ app.post("/api/telegram/webhook", async (req, res) => {
 
     const incomingMessage = update.message;
     const incomingText = String(incomingMessage?.text || "").trim();
+
+    if (/^\/freebet(?:@\w+)?$/i.test(incomingText)) {
+      res.json({ ok: true, handled: "freebet" });
+      setImmediate(() => handleFreebetCommand(incomingMessage).catch(e => console.error("Telegram /freebet async error:", e.message)));
+      return;
+    }
 
     if (/^\/start(?:@\w+)?(?:\s+.+)?$/i.test(incomingText)) {
       res.json({ ok: true, handled: "start" });
@@ -1928,6 +2189,9 @@ app.post("/api/telegram/webhook", async (req, res) => {
     }
 
     if (incomingMessage?.text && isAdmin(incomingMessage.from?.id)) {
+      const freebetHandled = await handleFreebetWizardMessage(incomingMessage);
+      if (freebetHandled) return res.json({ ok: true, handled: "freebet_wizard" });
+
       const handled = await handleWithdrawalDeclineReason(incomingMessage);
       if (handled) return res.json({ ok: true, handled: "withdrawal_decline_reason" });
     }
@@ -2030,6 +2294,23 @@ app.post("/api/telegram/webhook", async (req, res) => {
   } catch (e) {
     console.error("Telegram webhook error:", e.message);
     res.status(500).json({ ok: false });
+  }
+});
+
+
+app.post("/api/freebets/claim", async (req, res) => {
+  try {
+    const session = await authenticatedUserFromInitData(req.headers["x-telegram-init-data"]);
+    const raw = String(req.body?.token || "").trim();
+    const freebetId = parseFreebetStartParam(raw)?.replace(/^fb_/, "") || (raw.match(/^[0-9a-f-]{36}$/i)?.[0] || "");
+    if (!freebetId) throw new Error("Некорректная ссылка фрибета.");
+    const result = await claimFreebet(session.telegram.id, freebetId);
+    if (result.claimed) {
+      io.to(`user:${session.telegram.id}`).emit("balance_updated", { balance: result.balance });
+    }
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    res.status(400).json({ error: e.message || "Не удалось активировать фрибет." });
   }
 });
 
@@ -2575,21 +2856,100 @@ app.post('/api/raffles/:id/check-boost', async (req,res) => {
 
 // ---------------- TASKS ----------------
 async function verifyTaskChannel(channelUsername, userId = null) {
-  const username = normalizeChannelRef(channelUsername);
-  if (!username) throw new Error("Укажите username канала, например @my_channel.");
-  const chat = await telegramApi("getChat", { chat_id: `@${username}` });
+  const channel = normalizeChannelRef(channelUsername);
+  if (!channel?.username) throw new Error("Укажите username канала, например @my_channel.");
+
+  let chat;
+  try {
+    chat = await telegramApi("getChat", { chat_id: channel.chatId });
+  } catch (e) {
+    if (/chat not found|bad request/i.test(String(e.message || ""))) {
+      throw new Error(`Канал ${channel.chatId} не найден. Проверь @username канала.`);
+    }
+    throw e;
+  }
+  if (chat.type !== "channel") throw new Error("Нужен именно Telegram-канал, а не группа.");
+
   const bot = await getBotInfoCached();
   const botMember = await telegramApi("getChatMember", { chat_id: chat.id, user_id: Number(bot.id) });
-  if (!["creator", "administrator"].includes(String(botMember.status))) throw new Error("Добавьте бота администратором канала, чтобы он мог проверять подписку.");
+  if (!["creator", "administrator"].includes(String(botMember.status))) {
+    throw new Error("Добавьте бота администратором канала, чтобы он мог проверять подписку.");
+  }
   if (userId != null) {
     const member = await telegramApi("getChatMember", { chat_id: chat.id, user_id: Number(userId) });
     const joined = ["creator", "administrator", "member"].includes(String(member.status)) || (String(member.status) === "restricted" && member.is_member === true);
     if (!joined) throw new Error("Сначала подпишитесь на канал, затем повторите проверку.");
   }
-  return { id: String(chat.id), username: `@${username}` };
+  return { id: String(chat.id), username: `@${String(chat.username || channel.username)}` };
 }
 
-function taskPrice(reward, activations) { return Number((Number(reward) * Number(activations) * 1.5).toFixed(2)); }
+function taskPrice(reward, activations) {
+  const multiplierRaw = String(process.env.TASK_PRICE_MULTIPLIER || "1.5").replace(",", ".");
+  const multiplier = Number(multiplierRaw);
+  const safeMultiplier = Number.isFinite(multiplier) && multiplier >= 0 ? multiplier : 1.5;
+  return Number((Number(reward) * Number(activations) * safeMultiplier).toFixed(2));
+}
+
+async function createTaskForUser(userId, body) {
+  requireDatabase();
+  const reward = Number(body?.reward);
+  const activations = Number(body?.activations);
+  if (!Number.isFinite(reward) || reward <= 0 || reward > 1_000_000_000) {
+    throw new Error("Укажите награду больше 0.");
+  }
+  if (!Number.isInteger(activations) || activations <= 0 || activations > 1_000_000_000) {
+    throw new Error("Укажите целое количество активаций больше 0.");
+  }
+
+  const channel = await verifyTaskChannel(body?.channel);
+  const adminCreator = isAdmin(userId);
+  const price = adminCreator ? 0 : taskPrice(reward, activations);
+  const id = crypto.randomUUID();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    if (price > 0) {
+      const debited = await client.query(
+        `UPDATE users SET balance=balance-$2, updated_at=NOW()
+         WHERE telegram_id=$1 AND banned=false AND balance >= $2
+         RETURNING balance::float AS balance`,
+        [String(userId), price]
+      );
+      if (!debited.rowCount) throw new Error("Недостаточно Stars для оплаты задания.");
+    }
+
+    const balanceRow = await client.query(
+      `SELECT balance::float AS balance FROM users WHERE telegram_id=$1 FOR UPDATE`,
+      [String(userId)]
+    );
+    if (!balanceRow.rowCount) throw new Error("Пользователь не найден.");
+    const balance = Number(balanceRow.rows[0].balance);
+
+    if (price > 0) {
+      await client.query(
+        `INSERT INTO balance_transactions (telegram_user_id,type,amount,balance_after,description)
+         VALUES ($1,'task_purchase',$2,$3,$4)`,
+        [String(userId), -price, balance, `Создание задания ${channel.username}`]
+      );
+    }
+
+    await client.query(
+      `INSERT INTO tasks (id, created_by, task_type, target_username, target_chat_id, reward, max_activations, price)
+       VALUES ($1,$2,'channel_subscription',$3,$4,$5,$6,$7)`,
+      [id, String(userId), channel.username, channel.id, reward, activations, price]
+    );
+
+    await client.query("COMMIT");
+    invalidateUserCache(userId);
+    return { ok: true, id, price, balance, free: adminCreator };
+  } catch (e) {
+    try { await client.query("ROLLBACK"); } catch {}
+    throw e;
+  } finally {
+    client.release();
+  }
+}
 
 app.get("/api/tasks", async (req, res) => {
   try {
@@ -2627,28 +2987,26 @@ app.post("/api/tasks/:id/complete", async (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message || "Не удалось выполнить задание." }); }
 });
 
+app.post("/api/tasks", async (req, res) => {
+  try {
+    const session = await authenticatedUserFromInitData(req.headers["x-telegram-init-data"]);
+    const result = await createTaskForUser(session.telegram.id, req.body || {});
+    io.to(`user:${session.telegram.id}`).emit("balance_updated", { balance: result.balance });
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: e.message || "Не удалось создать задание." });
+  }
+});
+
 app.post("/api/admin/tasks", async (req, res) => {
   try {
     const admin = await requireAdminRequest(req);
-    const reward = Number(req.body?.reward);
-    const activations = Number(req.body?.activations);
-    if (!Number.isFinite(reward) || reward <= 0 || !Number.isInteger(activations) || activations <= 0) throw new Error("Укажите награду и целое количество активаций.");
-    const channel = await verifyTaskChannel(req.body?.channel);
-    const price = taskPrice(reward, activations);
-    const id = crypto.randomUUID();
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      const debited = await client.query(`UPDATE users SET balance=balance-$2, updated_at=NOW() WHERE telegram_id=$1 AND banned=false AND balance >= $2 RETURNING balance::float AS balance`, [String(admin.id), price]);
-      if (!debited.rowCount) throw new Error("Недостаточно Stars на балансе для оплаты задания.");
-      const balance = Number(debited.rows[0].balance);
-      await client.query(`INSERT INTO balance_transactions (telegram_user_id,type,amount,balance_after,description) VALUES ($1,'task_purchase',$2,$3,$4)`, [String(admin.id), -price, balance, `Создание задания ${channel.username}`]);
-      await client.query(`INSERT INTO tasks (id, created_by, task_type, target_username, target_chat_id, reward, max_activations, price) VALUES ($1,$2,'channel_subscription',$3,$4,$5,$6,$7)`, [id, String(admin.id), channel.username, channel.id, reward, activations, price]);
-      await client.query("COMMIT");
-      invalidateUserCache(admin.id);
-      res.json({ ok: true, id, price, balance });
-    } catch (e) { try { await client.query("ROLLBACK"); } catch {} throw e; } finally { client.release(); }
-  } catch (e) { res.status(400).json({ error: e.message || "Не удалось создать задание." }); }
+    const result = await createTaskForUser(admin.id, req.body || {});
+    io.to(`user:${admin.id}`).emit("balance_updated", { balance: result.balance });
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: e.message || "Не удалось создать задание." });
+  }
 });
 
 // ---------------- ADMIN API ----------------
