@@ -212,3 +212,10 @@ Flow:
 ## Поддержка
 
 Добавлен отдельный Telegram-бот поддержки. В Render задаются `SUPPORT_BOT_TOKEN`, при необходимости `SUPPORT_BOT_USERNAME` или `SUPPORT_BOT_URL`, а также `SUPPORT_ADMIN_TELEGRAM_IDS` (если пусто, используются `ADMIN_TELEGRAM_IDS`). Сервер автоматически регистрирует webhook `/api/support/webhook`. Пользователь открывает бота через кнопку поддержки, отправляет сообщение, а запрос пересылается администраторам; ответ можно отправить через кнопку `↩️ Ответить`. Токен бота не хранится в исходниках.
+
+### Support bot
+The support bot is hosted by the same Node/Express service. Set `SUPPORT_BOT_TOKEN` and `SUPPORT_ADMIN_TELEGRAM_IDS` in Render. The service automatically registers `/api/support/webhook`, configures the support bot commands, and the Profile support button resolves the bot URL from `getMe()`.
+
+### Bottom navigation
+The original active-state highlight from the initial task zip has been restored. Only PVP/Profile artwork order remains swapped; the highlight is aligned to the corresponding swapped icon positions.
+

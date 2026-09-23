@@ -809,19 +809,25 @@ html,body{height:100%;overflow:hidden}
 .freebet-amount{margin-top:10px;font-size:30px;font-weight:950;color:#ffd21c}
 .freebet-info{margin:8px 0 20px;color:#aab8ca;font-size:13px;line-height:1.45}
 
-/* ---------- Active bottom-nav indicator: overlay only, artwork unchanged ---------- */
-.nav-item.active::after{
+/* ---------- Active bottom-nav indicator: restored from the original artwork zip ---------- */
+.nav-item.active{background:transparent !important;box-shadow:none !important;position:relative !important;color:inherit !important}
+.nav-item.active::before{
   content:"";
   position:absolute;
-  width:34px;
-  height:34px;
-  left:50%;
   top:50%;
+  width:46px;
+  height:44px;
+  background:rgba(255,201,21,.16);
+  border:1px solid rgba(255,201,21,.4);
+  border-radius:14px;
   transform:translate(-50%,-50%);
-  border-radius:50%;
+  z-index:0;
   pointer-events:none;
-  background:radial-gradient(circle,rgba(255,201,21,.26) 0%,rgba(255,201,21,.12) 46%,rgba(255,201,21,0) 74%);
-  box-shadow:0 0 18px rgba(255,201,21,.44), inset 0 0 0 1px rgba(255,201,21,.24);
-  opacity:.98;
 }
-.nav-item.active{position:relative!important;color:inherit!important}
+/* The supplied navigation artwork is the swapped version: PVP and Profile
+   exchange the third/fourth visual positions. Keep the original highlight
+   proportions/shape, but place it over the matching icon centers. */
+.nav-item:nth-child(1).active::before{left:86.15%}
+.nav-item:nth-child(2).active::before{left:72.69%}
+.nav-item:nth-child(3).active::before{left:49.23%}
+.nav-item:nth-child(4).active::before{left:25%}

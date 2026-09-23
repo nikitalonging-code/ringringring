@@ -9,3 +9,15 @@ Render Dashboard
 
 Do NOT create only a Web Service if you expect render.yaml to create PostgreSQL.
 The Blueprint contains both the web service and the Postgres database.
+
+SUPPORT BOT (same Render host)
+- This project runs the main bot and support bot from the SAME Node/Express service.
+- Render Environment must contain SUPPORT_BOT_TOKEN with the support bot token.
+- SUPPORT_BOT_USERNAME / SUPPORT_BOT_URL are optional; when omitted, the service calls getMe() and builds the support link automatically.
+- SUPPORT_ADMIN_TELEGRAM_IDS should contain the Telegram IDs that receive incoming support requests.
+- On startup the service registers https://<your-render-domain>/api/support/webhook for the support bot and keeps the existing main-bot webhook separate.
+- The Profile -> Support button loads /api/support/config and opens the support bot discovered from the configured token.
+
+SECURITY
+- Keep SUPPORT_BOT_TOKEN only in Render Environment / secret storage; do not commit it to GitHub.
+
