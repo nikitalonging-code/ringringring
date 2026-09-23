@@ -89,6 +89,25 @@ function handleNotTelegram() {
   }
 }
 
+let supportBotUrl = "";
+async function loadSupportBotUrl() {
+  try {
+    const r = await fetch("/api/support/config", { cache: "no-store" });
+    const data = await r.json().catch(() => ({}));
+    if (r.ok && data?.url) supportBotUrl = String(data.url);
+  } catch {}
+}
+
+function openSupportBot() {
+  const url = supportBotUrl;
+  if (!url) return toast("Поддержка пока недоступна.");
+  try { tg?.openTelegramLink ? tg.openTelegramLink(url) : window.open(url, "_blank"); } catch { window.open(url, "_blank"); }
+}
+
+const supportBtn = $("#supportBtn");
+if (supportBtn) supportBtn.onclick = openSupportBot;
+loadSupportBotUrl();
+
 $("#betBtn").onclick = () => {
   if (!initData) return handleNotTelegram();
   if (currentState?.status === "SPINNING" || currentState?.status === "RESULT") return toast("Ставки уже закрыты.");

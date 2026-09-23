@@ -441,7 +441,7 @@ async function initDb() {
       reward NUMERIC(20,2) NOT NULL CHECK (reward > 0),
       max_activations INTEGER NOT NULL CHECK (max_activations > 0),
       completions INTEGER NOT NULL DEFAULT 0,
-      price NUMERIC(20,2) NOT NULL CHECK (price > 0),
+      price NUMERIC(20,2) NOT NULL CHECK (price >= 0),
       status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','finished','cancelled')),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
@@ -467,6 +467,8 @@ async function initDb() {
     `ALTER TABLE pvp_rounds ADD COLUMN IF NOT EXISTS round_number SERIAL`,
     `ALTER TABLE pvp_rounds ADD COLUMN IF NOT EXISTS server_seed TEXT`,
     `ALTER TABLE pvp_rounds ADD COLUMN IF NOT EXISTS server_seed_hash TEXT`,
+    `ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_price_check`,
+    `ALTER TABLE tasks ADD CONSTRAINT tasks_price_check CHECK (price >= 0)`,
 
     `CREATE INDEX IF NOT EXISTS promo_codes_active_idx ON promo_codes(active, created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS promo_redemptions_user_idx ON promo_redemptions(telegram_user_id, redeemed_at DESC)`,
@@ -1117,7 +1119,7 @@ function welcomeConfig() {
     imageUrl: String(process.env.WELCOME_IMAGE_URL || "").trim(),
     appUrl: String(process.env.WELCOME_APP_URL || buildMiniAppOpenUrl()).trim(),
     channelUrl: String(process.env.WELCOME_CHANNEL_URL || "").trim(),
-    supportUrl: String(process.env.WELCOME_SUPPORT_URL || "").trim()
+    supportUrl: String(process.env.WELCOME_SUPPORT_URL || buildSupportChatUrl()).trim()
   };
 }
 
@@ -1373,6 +1375,179 @@ async function telegramApi(method, body) {
   return data.result;
 }
 
+function supportTelegramApiUrl(method) {
+  return `https://api.telegram.org/bot${process.env.SUPPORT_BOT_TOKEN}/${method}`;
+}
+
+async function supportTelegramApi(method, body) {
+  if (!process.env.SUPPORT_BOT_TOKEN) {
+    throw new Error("SUPPORT_BOT_TOKEN не настроен.");
+  }
+  const response = await fetch(supportTelegramApiUrl(method), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {})
+  });
+  const data = await response.json();
+  if (!data.ok) throw new Error(data.description || `Support Telegram ${method} failed`);
+  return data.result;
+}
+
+async function getSupportBotInfoCached() {
+  if (supportBotInfoCache && Date.now() - supportBotInfoCacheAt < 60 * 60 * 1000) return supportBotInfoCache;
+  supportBotInfoCache = await supportTelegramApi("getMe", {});
+  supportBotInfoCacheAt = Date.now();
+  return supportBotInfoCache;
+}
+
+function getSupportAdminIds() {
+  const raw = String(process.env.SUPPORT_ADMIN_TELEGRAM_IDS || process.env.ADMIN_TELEGRAM_IDS || "");
+  return raw.split(/[\s,;]+/).map(v => v.trim()).filter(Boolean);
+}
+
+function buildSupportChatUrl() {
+  const explicit = String(process.env.SUPPORT_BOT_URL || "").trim();
+  if (explicit) return explicit;
+  const username = String(supportBotInfoCache?.username || process.env.SUPPORT_BOT_USERNAME || "").replace(/^@/, "");
+  return username ? `https://t.me/${username}` : "";
+}
+
+async function ensureSupportBotUser(user) {
+  if (!pool || !user?.id) return;
+  try {
+    await upsertUser({
+      id: String(user.id),
+      username: String(user.username || ""),
+      first_name: safeName(user.first_name || "Игрок"),
+      photo_url: ""
+    }, "");
+  } catch (e) {
+    console.error("Support user sync error:", e.message);
+  }
+}
+
+async function sendSupportRequestToAdmins(message) {
+  const admins = getSupportAdminIds();
+  if (!admins.length) return;
+  const from = message?.from || {};
+  const username = from.username ? `@${from.username}` : "без username";
+  const name = [from.first_name, from.last_name].filter(Boolean).join(" ") || "Пользователь";
+  const header = `🆘 <b>Новый запрос в поддержку</b>\n\n👤 ${escapeHtmlTelegram(name)}\n🔗 ${escapeHtmlTelegram(username)}\n🆔 <code>${escapeHtmlTelegram(from.id)}</code>`;
+  await Promise.all(admins.map(async adminId => {
+    try {
+      const sentHeader = await supportTelegramApi("sendMessage", {
+        chat_id: adminId,
+        text: header,
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: [[{ text: "↩️ Ответить", callback_data: `support:reply:${String(from.id)}` }]] }
+      });
+      await supportTelegramApi("copyMessage", {
+        chat_id: adminId,
+        from_chat_id: message.chat.id,
+        message_id: message.message_id,
+        reply_to_message_id: sentHeader.message_id
+      });
+    } catch (e) {
+      console.error(`Support forward error (${adminId}):`, e.message);
+    }
+  }));
+}
+
+function escapeHtmlTelegram(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;");
+}
+
+async function handleSupportBotCallback(callback) {
+  const data = String(callback?.data || "");
+  const match = data.match(/^support:reply:(\d+)$/);
+  if (!match) return false;
+  const adminId = String(callback?.from?.id || "");
+  if (!getSupportAdminIds().includes(adminId)) {
+    await supportTelegramApi("answerCallbackQuery", { callback_query_id: callback.id, text: "Нет доступа." }).catch(() => {});
+    return true;
+  }
+  const userId = match[1];
+  supportReplyWizard.set(adminId, userId);
+  await supportTelegramApi("answerCallbackQuery", { callback_query_id: callback.id, text: "Напиши сообщение — оно уйдёт пользователю." }).catch(() => {});
+  await supportTelegramApi("sendMessage", { chat_id: adminId, text: `✍️ Режим ответа включён для пользователя ${userId}. Отправь следующее сообщение.` });
+  return true;
+}
+
+async function handleSupportBotMessage(message) {
+  if (!message?.chat?.id) return false;
+  const userId = String(message.from?.id || "");
+  if (!userId) return false;
+  const admins = getSupportAdminIds();
+  if (admins.includes(userId)) {
+    const target = supportReplyWizard.get(userId);
+    if (target && message.chat.type === "private" && !String(message.text || "").startsWith("/")) {
+      await supportTelegramApi("copyMessage", {
+        chat_id: target,
+        from_chat_id: message.chat.id,
+        message_id: message.message_id
+      });
+      supportReplyWizard.delete(userId);
+      await supportTelegramApi("sendMessage", { chat_id: userId, text: "✅ Ответ отправлен пользователю." });
+      return true;
+    }
+    return false;
+  }
+
+  if (message.chat.type !== "private") return false;
+  await ensureSupportBotUser(message.from);
+  if (/^\/start(?:@\w+)?$/i.test(String(message.text || "").trim())) {
+    await supportTelegramApi("sendMessage", {
+      chat_id: message.chat.id,
+      text: "👋 <b>Поддержка RING</b>\n\nНапишите ваш вопрос одним сообщением. Мы передадим его оператору.",
+      parse_mode: "HTML"
+    });
+    return true;
+  }
+  if (/^\/help(?:@\w+)?$/i.test(String(message.text || "").trim())) {
+    await supportTelegramApi("sendMessage", {
+      chat_id: message.chat.id,
+      text: "💬 Просто отправьте сюда свой вопрос, и он поступит в поддержку.",
+      parse_mode: "HTML"
+    });
+    return true;
+  }
+  await sendSupportRequestToAdmins(message);
+  await supportTelegramApi("sendMessage", { chat_id: message.chat.id, text: "✅ Запрос отправлен в поддержку. Ожидайте ответа." });
+  return true;
+}
+
+async function configureSupportBot() {
+  if (!process.env.SUPPORT_BOT_TOKEN) {
+    console.warn("Support bot is not configured: SUPPORT_BOT_TOKEN is missing.");
+    return;
+  }
+  try {
+    const info = await getSupportBotInfoCached();
+    console.log(`Support bot connected: @${String(info?.username || "UNKNOWN")}`);
+    const appUrl = buildMiniAppOpenUrl();
+    if (!appUrl) return;
+    const secret = activeWebhookSecret();
+    await supportTelegramApi("setWebhook", {
+      url: `${appUrl}/api/support/webhook`,
+      ...(secret ? { secret_token: secret } : {}),
+      allowed_updates: ["message", "callback_query"]
+    });
+    await supportTelegramApi("setMyCommands", {
+      commands: [
+        { command: "start", description: "Начать" },
+        { command: "help", description: "Помощь" }
+      ]
+    });
+    console.log(`Support webhook configured: ${appUrl}/api/support/webhook`);
+  } catch (e) {
+    console.error("Support Telegram setup error:", e.message);
+  }
+}
+
 // Sends a plain-text DM to every configured admin. Failures for one admin
 // (blocked bot, never started a chat with it, etc.) never stop the others.
 async function notifyAdmins(text) {
@@ -1516,6 +1691,9 @@ async function notifyWithdrawalRejected(withdrawal) {
 // ---------------- RAFFLES ----------------
 let botInfoCache = null;
 let botInfoCacheAt = 0;
+let supportBotInfoCache = null;
+let supportBotInfoCacheAt = 0;
+const supportReplyWizard = new Map();
 
 async function getBotInfoCached() {
   if (botInfoCache && Date.now() - botInfoCacheAt < 60 * 60 * 1000) return botInfoCache;
@@ -2146,6 +2324,37 @@ async function handleWithdrawalDeclineReason(message) {
   });
   return true;
 }
+
+app.get("/api/support/config", async (req, res) => {
+  try {
+    if (!process.env.SUPPORT_BOT_TOKEN) return res.json({ ok: false, url: "" });
+    const info = await getSupportBotInfoCached();
+    res.json({ ok: true, url: buildSupportChatUrl(), username: String(info?.username || "") });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || "Support bot unavailable." });
+  }
+});
+
+app.post("/api/support/webhook", async (req, res) => {
+  const expectedSecret = activeWebhookSecret();
+  if (expectedSecret && req.headers["x-telegram-bot-api-secret-token"] !== expectedSecret) return res.status(401).end();
+  if (!process.env.SUPPORT_BOT_TOKEN) return res.status(503).json({ ok: false });
+  try {
+    const update = req.body || {};
+    if (update.callback_query) {
+      const handled = await handleSupportBotCallback(update.callback_query);
+      return res.json({ ok: true, handled });
+    }
+    if (update.message) {
+      const handled = await handleSupportBotMessage(update.message);
+      return res.json({ ok: true, handled });
+    }
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("Support webhook error:", e.message);
+    return res.status(200).json({ ok: true });
+  }
+});
 
 app.post("/api/telegram/webhook", async (req, res) => {
   const expectedSecret = activeWebhookSecret();
@@ -3311,6 +3520,7 @@ async function start() {
   server.listen(PORT, "0.0.0.0", async () => {
     console.log(`PVP wheel listening on ${PORT}`);
     await configureTelegramBot();
+    await configureSupportBot();
     await verifyTelegramWebhook();
     setInterval(verifyTelegramWebhook, 10 * 60 * 1000).unref();
   });

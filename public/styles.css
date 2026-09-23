@@ -176,7 +176,7 @@ button{cursor:pointer}
 .profile-balance{display:flex;justify-content:center;gap:6px;margin-top:6px;color:#d9d4bd;font-size:14px;font-weight:700}
 .profile-balance span{display:none}
 .profile-balance b{color:#fff;font-weight:800}
-.profile-icon-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:18px}
+.profile-icon-row{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:18px}
 .profile-icon-btn{border:0;border-radius:18px;background:linear-gradient(160deg,#5c4c16,#3f3410);color:#fff;padding:16px;display:flex;align-items:center;justify-content:center}
 .profile-icon-btn svg{width:26px;height:26px}
 .withdraw-btn{display:none}
@@ -352,7 +352,7 @@ button{cursor:pointer}
   .avatar-large{width:48px;height:48px;margin-bottom:8px;}
   .profile-username{font-size:18px;}
   .profile-balance{font-size:13px;margin-top:4px;}
-  .profile-icon-row{gap:14px;margin-top:14px;}
+  .profile-icon-row{grid-template-columns:repeat(3,1fr);gap:14px;margin-top:14px;}
   .profile-icon-btn{padding:11px;border-radius:999px;}
   .profile-icon-btn svg{width:25px;height:25px;}
   .stats-grid{gap:7px;padding:12px;margin-top:9px;border-radius:27px;}
@@ -461,7 +461,7 @@ button{cursor:pointer}
   .avatar-large{width:78px;height:78px;margin-bottom:10px}
   .profile-username{font-size:18px}
   .profile-balance{font-size:13px;margin-top:5px}
-  .profile-icon-row{gap:11px;margin-top:14px}
+  .profile-icon-row{grid-template-columns:repeat(3,1fr);gap:11px;margin-top:14px}
   .profile-icon-btn{padding:13px;border-radius:17px}
   .profile-stat{padding:10px 5px}
 
@@ -520,7 +520,7 @@ button{cursor:pointer}
   .avatar-large{width:68px;height:68px;margin-bottom:8px;}
   .profile-username{font-size:17px;}
   .profile-balance{font-size:12px;}
-  .profile-icon-row{gap:10px;margin-top:12px;}
+  .profile-icon-row{grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px;}
   .profile-icon-btn{padding:11px;}
   .profile-icon-btn svg{width:23px;height:23px;}
   .stats-grid{padding:10px;margin-top:8px;}
@@ -576,7 +576,7 @@ button{cursor:pointer}
 
 /* Exact bottom navigation artwork supplied by the user; buttons remain clickable overlays. */
 .bottom-nav{width:min(390px,calc(100% - 12px)) !important;height:54px !important;padding:0 !important;grid-template-columns:repeat(4,1fr) !important;
-  background:transparent url('/assets/group-6-nav-swapped.png') center/100% 100% no-repeat !important;
+  background:transparent url('/assets/group-6-nav-swapped.svg') center/100% 100% no-repeat !important;
   border:0 !important;box-shadow:none !important;backdrop-filter:none !important;-webkit-backdrop-filter:none !important;
   border-radius:27px !important;overflow:visible !important}
 .nav-item{min-height:54px !important;height:54px !important;padding:0 !important;margin:0 !important;background:transparent !important;border:0 !important;color:transparent !important}
@@ -695,12 +695,6 @@ button{cursor:pointer}
 .nav-item.active{background:transparent !important;box-shadow:none !important}
 .bottom-nav{overflow:hidden !important}
 .nav-item{position:relative !important}
-.nav-item.active::before{content:"";position:absolute;top:50%;width:46px;height:44px;background:rgba(255,201,21,.16);border:1px solid rgba(255,201,21,.4);border-radius:14px;transform:translate(-50%,-50%);z-index:0}
-/* Active marker follows the visible order of the swapped navigation artwork. */
-.nav-item:nth-child(1).active::before{left:25%}
-.nav-item:nth-child(2).active::before{left:50%}
-.nav-item:nth-child(3).active::before{left:75%}
-.nav-item:nth-child(4).active::before{left:87%}
 #profileView{padding-bottom:60px !important}
 .promo-card{margin-bottom:40px !important}
 .referral-card{margin-bottom:16px !important}

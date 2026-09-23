@@ -36,6 +36,16 @@ services:
       - key: WELCOME_SUPPORT_URL
         sync: false
 
+      # Support bot token. Never hardcode the token into source; put the supplied token in Render Environment.
+      - key: SUPPORT_BOT_TOKEN
+        sync: false
+      - key: SUPPORT_BOT_USERNAME
+        sync: false
+      - key: SUPPORT_BOT_URL
+        sync: false
+      - key: SUPPORT_ADMIN_TELEGRAM_IDS
+        sync: false
+
       # Public task creation pricing: reward × activations × multiplier.
       # Admins create tasks for free.
       - key: TASK_PRICE_MULTIPLIER
