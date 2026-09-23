@@ -286,6 +286,28 @@ async function initDb() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
+    `CREATE TABLE IF NOT EXISTS account_security_signals (
+      telegram_user_id TEXT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+      fingerprint_hash TEXT NOT NULL DEFAULT '',
+      ip_hash TEXT NOT NULL DEFAULT '',
+      user_agent_hash TEXT NOT NULL DEFAULT '',
+      telegram_platform TEXT NOT NULL DEFAULT '',
+      first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      hits INTEGER NOT NULL DEFAULT 1,
+      PRIMARY KEY (telegram_user_id, fingerprint_hash, ip_hash)
+    )`,
+    `CREATE INDEX IF NOT EXISTS account_security_fingerprint_idx ON account_security_signals(fingerprint_hash, last_seen_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS account_security_ip_idx ON account_security_signals(ip_hash, last_seen_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS account_security_user_idx ON account_security_signals(telegram_user_id, last_seen_at DESC)`,
+    `CREATE TABLE IF NOT EXISTS account_security_flags (
+      telegram_user_id TEXT PRIMARY KEY REFERENCES users(telegram_id) ON DELETE CASCADE,
+      risk_score INTEGER NOT NULL DEFAULT 0,
+      linked_accounts INTEGER NOT NULL DEFAULT 0,
+      exact_device_matches INTEGER NOT NULL DEFAULT 0,
+      shared_ip_matches INTEGER NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
     `CREATE TABLE IF NOT EXISTS payments (
       telegram_payment_charge_id TEXT PRIMARY KEY,
       telegram_user_id TEXT NOT NULL,
@@ -493,6 +515,95 @@ async function initDb() {
       console.error("DB migration statement failed:", e.message, "\nSQL:", sql.split("\n")[0].trim());
     }
   }
+}
+
+function hashSecurityValue(value) {
+  const salt = String(process.env.SECURITY_FINGERPRINT_SALT || process.env.TELEGRAM_BOT_TOKEN || 'ring-security').trim();
+  return crypto.createHmac('sha256', salt).update(String(value || '')).digest('hex');
+}
+
+function getRequestIp(req) {
+  const forwarded = String(req?.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
+  return forwarded || String(req?.ip || req?.socket?.remoteAddress || '');
+}
+
+async function recordSecuritySignal(userId, { fingerprint = '', ip = '', userAgent = '', platform = '' } = {}) {
+  if (!pool) return { riskScore: 0, linkedAccounts: 0, exactDeviceMatches: 0, sharedIpMatches: 0 };
+  const uid = String(userId);
+  const fp = String(fingerprint || '').trim().slice(0, 512);
+  const ua = String(userAgent || '').trim().slice(0, 1024);
+  const ipRaw = String(ip || '').trim().slice(0, 128);
+  const fingerprintHash = fp ? hashSecurityValue(`fp:${fp}`) : '';
+  const ipHash = ipRaw ? hashSecurityValue(`ip:${ipRaw}`) : '';
+  const uaHash = ua ? hashSecurityValue(`ua:${ua}`) : '';
+
+  // Never store raw fingerprint/IP/UA. Only keyed hashes are persisted.
+  await pool.query(
+    `INSERT INTO account_security_signals
+       (telegram_user_id, fingerprint_hash, ip_hash, user_agent_hash, telegram_platform, hits, last_seen_at)
+     VALUES ($1,$2,$3,$4,$5,1,NOW())
+     ON CONFLICT (telegram_user_id, fingerprint_hash, ip_hash) DO UPDATE SET
+       user_agent_hash=EXCLUDED.user_agent_hash,
+       telegram_platform=EXCLUDED.telegram_platform,
+       hits=account_security_signals.hits+1,
+       last_seen_at=NOW()`,
+    [uid, fingerprintHash, ipHash, String(platform || '').slice(0, 64)]
+  );
+
+  const byFingerprint = fingerprintHash ? await pool.query(
+    `SELECT COUNT(DISTINCT telegram_user_id)::int AS count
+     FROM account_security_signals
+     WHERE fingerprint_hash=$1 AND telegram_user_id<>$2`,
+    [fingerprintHash, uid]
+  ) : { rows: [{ count: 0 }] };
+  const byIp = ipHash ? await pool.query(
+    `SELECT COUNT(DISTINCT telegram_user_id)::int AS count
+     FROM account_security_signals
+     WHERE ip_hash=$1 AND telegram_user_id<>$2`,
+    [ipHash, uid]
+  ) : { rows: [{ count: 0 }] };
+
+  const exactDeviceMatches = Number(byFingerprint.rows[0]?.count || 0);
+  const sharedIpMatches = Number(byIp.rows[0]?.count || 0);
+  // Heuristic only: exact client fingerprint is a much stronger signal than
+  // shared IP (families, schools, offices and VPNs can legitimately share IPs).
+  const riskScore = Math.min(100,
+    (exactDeviceMatches > 0 ? 70 : 0) +
+    Math.min(20, sharedIpMatches * 10) +
+    (exactDeviceMatches > 1 ? 10 : 0)
+  );
+  const linkedAccounts = Math.max(exactDeviceMatches, sharedIpMatches);
+
+  await pool.query(
+    `INSERT INTO account_security_flags
+       (telegram_user_id, risk_score, linked_accounts, exact_device_matches, shared_ip_matches, updated_at)
+     VALUES ($1,$2,$3,$4,$5,NOW())
+     ON CONFLICT (telegram_user_id) DO UPDATE SET
+       risk_score=EXCLUDED.risk_score,
+       linked_accounts=EXCLUDED.linked_accounts,
+       exact_device_matches=EXCLUDED.exact_device_matches,
+       shared_ip_matches=EXCLUDED.shared_ip_matches,
+       updated_at=NOW()`,
+    [uid, riskScore, linkedAccounts, exactDeviceMatches, sharedIpMatches]
+  );
+
+  return { riskScore, linkedAccounts, exactDeviceMatches, sharedIpMatches };
+}
+
+async function getSecuritySignalForUser(userId) {
+  if (!pool) return { riskScore: 0, linkedAccounts: 0, exactDeviceMatches: 0, sharedIpMatches: 0 };
+  const r = await pool.query(
+    `SELECT risk_score, linked_accounts, exact_device_matches, shared_ip_matches
+     FROM account_security_flags WHERE telegram_user_id=$1`,
+    [String(userId)]
+  );
+  const row = r.rows[0] || {};
+  return {
+    riskScore: Number(row.risk_score || 0),
+    linkedAccounts: Number(row.linked_accounts || 0),
+    exactDeviceMatches: Number(row.exact_device_matches || 0),
+    sharedIpMatches: Number(row.shared_ip_matches || 0)
+  };
 }
 
 async function getUser(userId, { fresh = false } = {}) {
@@ -968,6 +1079,13 @@ io.on("connection", socket => {
     try {
       const session = await authenticatedUserFromInitData(data?.initData, data?.referralCode);
       const tgUser = session.telegram;
+      const socketIp = String(socket.handshake?.headers?.['x-forwarded-for'] || '').split(',')[0].trim() || String(socket.handshake?.address || '');
+      recordSecuritySignal(tgUser.id, {
+        fingerprint: data?.clientFingerprint,
+        ip: socketIp,
+        userAgent: socket.handshake?.headers?.['user-agent'],
+        platform: data?.telegramPlatform
+      }).catch(e => console.error('Security signal error:', e.message));
       const p = addOrUpdatePlayer({
         id: tgUser.id,
         name: tgUser.username ? "@" + tgUser.username : tgUser.first_name,
@@ -2185,11 +2303,13 @@ async function configureTelegramBot() {
       drop_pending_updates: false
     });
 
+    // /freebet remains a hidden admin-only command: it still works when typed
+    // manually, but Telegram must not advertise it in the slash-command list.
+    await telegramApi("deleteMyCommands", {});
     await telegramApi("setMyCommands", {
       commands: [
         { command: "start", description: "Открыть приложение" },
-        { command: "help", description: "Помощь" },
-        { command: "freebet", description: "Создать фрибет (админ)" }
+        { command: "help", description: "Помощь" }
       ]
     });
 
@@ -2528,9 +2648,16 @@ app.post("/api/freebets/claim", async (req, res) => {
 app.get("/api/bootstrap", async (req, res) => {
   try {
     const session = await authenticatedUserFromInitData(req.headers["x-telegram-init-data"]);
+    const security = await recordSecuritySignal(session.telegram.id, {
+      fingerprint: req.headers['x-client-fingerprint'],
+      ip: getRequestIp(req),
+      userAgent: req.headers['user-agent'],
+      platform: req.headers['x-telegram-platform']
+    });
     res.json({
       user: session.db,
       isAdmin: isAdmin(session.telegram.id),
+      security,
       state: publicState(),
       gramUsdPerStar: Number(process.env.GRAM_USD_PER_STAR || 0.015)
     });
@@ -2572,12 +2699,19 @@ app.get("/api/profile", async (req, res) => {
     const s = r.rows[0] || {};
     const gamesPlayed = Number(user.games_played || 0);
     const gamesWon = Number(user.games_won || 0);
+    const security = await recordSecuritySignal(session.telegram.id, {
+      fingerprint: req.headers['x-client-fingerprint'],
+      ip: getRequestIp(req),
+      userAgent: req.headers['user-agent'],
+      platform: req.headers['x-telegram-platform']
+    });
     res.json({
       user: { id: user.telegram_id, username: user.username, first_name: user.first_name, avatar_url: user.avatar_url, balance: Number(user.balance || 0) },
       stats: { gamesPlayed, gamesWon, winrate: gamesPlayed ? Number(((gamesWon / gamesPlayed) * 100).toFixed(2)) : 0, totalWagered: Number(user.total_wagered || 0) },
       referral: {
         invited: Number(s.invited || 0), totalEarned: Number(s.total_earned || 0), pending: Number(s.pending || 0), claimed: Number(s.claimed || 0), percent: 10, link: buildReferralLink(user.telegram_id)
-      }
+      },
+      security
     });
   } catch (e) {
     res.status(401).json({ error: e.message });
@@ -3249,11 +3383,39 @@ app.get("/api/admin/users", async (req, res) => {
     }
     values.push(limit);
     const r = await pool.query(
-      `SELECT telegram_id, username, first_name, balance::float AS balance, banned, created_at
-       FROM users ${where} ORDER BY created_at DESC LIMIT $${values.length}`,
+      `SELECT u.telegram_id, u.username, u.first_name, u.balance::float AS balance, u.banned, u.created_at,
+              COALESCE(f.risk_score,0)::int AS risk_score,
+              COALESCE(f.linked_accounts,0)::int AS linked_accounts,
+              COALESCE(f.exact_device_matches,0)::int AS exact_device_matches,
+              COALESCE(f.shared_ip_matches,0)::int AS shared_ip_matches
+       FROM users u
+       LEFT JOIN account_security_flags f ON f.telegram_user_id=u.telegram_id
+       ${where ? where.replaceAll('telegram_id','u.telegram_id').replaceAll('username','u.username').replaceAll('first_name','u.first_name') : ''}
+       ORDER BY u.created_at DESC LIMIT $${values.length}`,
       values
     );
     res.json({ users: r.rows });
+  } catch (e) {
+    res.status(403).json({ error: e.message });
+  }
+});
+
+app.get("/api/admin/security/multiaccounts", async (req, res) => {
+  try {
+    await requireAdminRequest(req);
+    const limit = Math.min(Math.max(Number(req.query.limit || 100), 1), 250);
+    const r = await pool.query(`
+      SELECT s.fingerprint_hash,
+             COUNT(DISTINCT s.telegram_user_id)::int AS accounts,
+             ARRAY_AGG(DISTINCT s.telegram_user_id ORDER BY s.telegram_user_id) AS telegram_ids,
+             MAX(s.last_seen_at) AS last_seen
+      FROM account_security_signals s
+      WHERE s.fingerprint_hash <> ''
+      GROUP BY s.fingerprint_hash
+      HAVING COUNT(DISTINCT s.telegram_user_id) > 1
+      ORDER BY accounts DESC, last_seen DESC
+      LIMIT $1`, [limit]);
+    res.json({ clusters: r.rows });
   } catch (e) {
     res.status(403).json({ error: e.message });
   }

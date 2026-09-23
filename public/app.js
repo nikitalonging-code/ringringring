@@ -12,6 +12,54 @@ const initData = tg?.initData || "";
 const user = tg?.initDataUnsafe?.user || null;
 const queryParams = new URLSearchParams(location.search);
 const startParam = tg?.initDataUnsafe?.start_param || queryParams.get("ref") || "";
+
+// Lightweight client fingerprint used only as an anti-abuse signal. The
+// server stores only a keyed hash and never persists the raw device values.
+async function buildClientFingerprint() {
+  // A stable random browser/WebView key is the strongest local signal we can
+  // get from a Telegram Mini App without accessing private device identifiers.
+  // Unlike a plain User-Agent/screen fingerprint, this does not mark every
+  // player on the same phone model as a multi-account.
+  let deviceKey = '';
+  try {
+    deviceKey = localStorage.getItem('ring_device_key') || '';
+    if (!deviceKey) {
+      deviceKey = window.crypto?.randomUUID
+        ? window.crypto.randomUUID()
+        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+      localStorage.setItem('ring_device_key', deviceKey);
+    }
+  } catch {}
+
+  const parts = [
+    deviceKey,
+    tg?.platform || '',
+    navigator.userAgent || '',
+    navigator.language || '',
+    Intl.DateTimeFormat().resolvedOptions().timeZone || '',
+    String(screen?.width || ''), String(screen?.height || ''),
+    String(window.devicePixelRatio || ''),
+    String(navigator.maxTouchPoints || '')
+  ];
+  const raw = parts.join('|');
+  try {
+    if (window.crypto?.subtle) {
+      const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
+      return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+    }
+  } catch {}
+  let h1 = 2166136261, h2 = 16777619;
+  for (let i = 0; i < raw.length; i++) {
+    h1 ^= raw.charCodeAt(i); h1 = Math.imul(h1, 16777619);
+    h2 ^= raw.charCodeAt(i) + i; h2 = Math.imul(h2, 2246822519);
+  }
+  return (h1 >>> 0).toString(16).padStart(8,'0') + (h2 >>> 0).toString(16).padStart(8,'0');
+}
+const clientFingerprintPromise = buildClientFingerprint();
+async function securityHeaders(extra = {}) {
+  const fp = await clientFingerprintPromise;
+  return { ...extra, 'X-Client-Fingerprint': fp, 'X-Telegram-Platform': String(tg?.platform || '') };
+}
 const raffleFromUrl = queryParams.get("raffle") || (startParam.match(/^rg_([0-9a-f-]{36})_\d+$/i)?.[1] || startParam.match(/^raffle_([0-9a-f-]{36})$/i)?.[1] || "");
 
 let lastWinner = null;
@@ -333,7 +381,9 @@ $("#createInvoice").onclick = async () => {
 };
 
 socket.on("connect", () => {
-  socket.emit("join_room", { initData, referralCode: startParam });
+  clientFingerprintPromise.then(clientFingerprint => {
+    socket.emit("join_room", { initData, referralCode: startParam, clientFingerprint, telegramPlatform: String(tg?.platform || '') });
+  });
 });
 
 socket.on("joined", data => {
@@ -353,7 +403,7 @@ socket.on("joined", data => {
 (async function bootstrap() {
   if (!initData) return handleNotTelegram();
   try {
-    const r = await fetch("/api/bootstrap", { headers: authHeaders(), cache: "no-store" });
+    const r = await fetch("/api/bootstrap", { headers: await securityHeaders(authHeaders()), cache: "no-store" });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.error || "Не удалось загрузить приложение.");
     setBalance(data.user?.balance);
@@ -410,7 +460,9 @@ socket.on("new_round", data => {
   lastWinner = null;
   previousStatus = null;
   closeModal($("#winnerOverlay"));
-  socket.emit("join_room", { initData, referralCode: startParam });
+  clientFingerprintPromise.then(clientFingerprint => {
+    socket.emit("join_room", { initData, referralCode: startParam, clientFingerprint, telegramPlatform: String(tg?.platform || '') });
+  });
   toast("Новый раунд запущен.");
 });
 
@@ -587,7 +639,7 @@ document.querySelectorAll(".nav-item").forEach(btn => {
 async function loadProfile() {
   if (!initData) return handleNotTelegram();
   try {
-    const r = await fetch("/api/profile", { headers: authHeaders() });
+    const r = await fetch("/api/profile", { headers: await securityHeaders(authHeaders()) });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.error || "Не удалось загрузить профиль.");
 
@@ -1137,7 +1189,7 @@ function renderAdminUsers(users) {
           <div class="admin-user-name">${title}</div>
           <div class="admin-user-id">ID: ${escapeHtml(u.telegram_id)}</div>
         </div>
-        <div>${u.banned ? "🔴 БАН" : "🟢 ОК"}</div>
+        <div>${u.risk_score >= 70 ? `⚠️ МУЛЬТИ ×${Number(u.linked_accounts || 0)}` : (u.risk_score >= 20 ? `🟠 РИСК ${Number(u.risk_score)}` : (u.banned ? "🔴 БАН" : "🟢 ОК"))}</div>
       </div>
       <div class="admin-balance">${Number(u.balance).toFixed(2)} ⭐</div>
       <div class="admin-actions">
