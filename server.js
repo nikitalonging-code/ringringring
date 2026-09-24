@@ -521,6 +521,8 @@ async function initDb() {
     `ALTER TABLE pvp_rounds ADD COLUMN IF NOT EXISTS server_seed_hash TEXT`,
     `ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_price_check`,
     `ALTER TABLE tasks ADD CONSTRAINT tasks_price_check CHECK (price >= 0)`,
+    `ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_status_check`,
+    `ALTER TABLE tasks ADD CONSTRAINT tasks_status_check CHECK (status IN ('pending','active','finished','cancelled'))`,
 
     `CREATE INDEX IF NOT EXISTS promo_codes_active_idx ON promo_codes(active, created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS promo_redemptions_user_idx ON promo_redemptions(telegram_user_id, redeemed_at DESC)`,
@@ -3162,6 +3164,10 @@ app.post("/api/telegram/webhook", async (req, res) => {
         res.json({ ok: true, handled: "admin_broadcast_callback" });
         return;
       }
+      if (await handleTaskApprovalCallback(update.callback_query)) {
+        res.json({ ok: true, handled: "task_approval_callback" });
+        return;
+      }
       if (await handleFreebetCallback(update.callback_query)) {
         res.json({ ok: true, handled: "freebet_callback" });
         return;
@@ -3928,7 +3934,8 @@ async function verifyTaskChannel(channelUsername, userId = null) {
   try {
     chat = await telegramApi("getChat", { chat_id: channel.chatId });
   } catch (e) {
-    if (/chat not found|bad request/i.test(String(e.message || ""))) {
+    const msg = String(e.message || "");
+    if (/chat not found|bad request/i.test(msg)) {
       throw new Error(`Канал ${channel.chatId} не найден. Проверь @username канала.`);
     }
     throw e;
@@ -3936,12 +3943,31 @@ async function verifyTaskChannel(channelUsername, userId = null) {
   if (chat.type !== "channel") throw new Error("Нужен именно Telegram-канал, а не группа.");
 
   const bot = await getBotInfoCached();
-  const botMember = await telegramApi("getChatMember", { chat_id: chat.id, user_id: Number(bot.id) });
+  let botMember;
+  try {
+    botMember = await telegramApi("getChatMember", { chat_id: chat.id, user_id: Number(bot.id) });
+  } catch (e) {
+    const msg = String(e.message || "");
+    if (/member list is inaccessible|user not found|chat member/i.test(msg)) {
+      throw new Error("Не удалось проверить права бота в канале. Добавьте бота администратором канала и дайте право проверять подписку.");
+    }
+    throw e;
+  }
   if (!["creator", "administrator"].includes(String(botMember.status))) {
     throw new Error("Добавьте бота администратором канала, чтобы он мог проверять подписку.");
   }
+
   if (userId != null) {
-    const member = await telegramApi("getChatMember", { chat_id: chat.id, user_id: Number(userId) });
+    let member;
+    try {
+      member = await telegramApi("getChatMember", { chat_id: chat.id, user_id: Number(userId) });
+    } catch (e) {
+      const msg = String(e.message || "");
+      if (/member list is inaccessible|user not found|chat member/i.test(msg)) {
+        throw new Error("Telegram не дал проверить подписку. Убедись, что бот остаётся администратором канала, затем повтори проверку.");
+      }
+      throw e;
+    }
     const joined = ["creator", "administrator", "member"].includes(String(member.status)) || (String(member.status) === "restricted" && member.is_member === true);
     if (!joined) throw new Error("Сначала подпишитесь на канал, затем повторите проверку.");
   }
@@ -3953,6 +3979,15 @@ function taskPrice(reward, activations) {
   const multiplier = Number(multiplierRaw);
   const safeMultiplier = Number.isFinite(multiplier) && multiplier >= 0 ? multiplier : 1.5;
   return Number((Number(reward) * Number(activations) * safeMultiplier).toFixed(2));
+}
+
+function taskApprovalButtons(taskId) {
+  return {
+    inline_keyboard: [[
+      { text: "✅ Принять", callback_data: `task:approve:${taskId}` },
+      { text: "❌ Отклонить", callback_data: `task:reject:${taskId}` }
+    ]]
+  };
 }
 
 async function notifyTaskCreationAttempt(telegramUser, body) {
@@ -3975,6 +4010,174 @@ async function notifyTaskCreationAttempt(telegramUser, body) {
   await notifyAdmins(text);
 }
 
+async function notifyTaskPendingAdmins(telegramUser, body, taskResult) {
+  const ids = getAdminIds();
+  if (!ids.length || !process.env.TELEGRAM_BOT_TOKEN) return;
+  const channel = String(body?.channel || taskResult?.channel || '—').trim();
+  const reward = Number(body?.reward || 0);
+  const activations = Number(body?.activations || 0);
+  const price = Number(taskResult?.price || taskPrice(reward, activations));
+  const username = telegramUser?.username ? `@${telegramUser.username}` : 'без username';
+  const taskId = String(taskResult?.id || '');
+  const text = [
+    '🟠 <b>Новое задание на проверку</b>',
+    '',
+    `👤 Пользователь: <b>${escapeHtmlTelegram(username)}</b>`,
+    `🆔 ID: <code>${escapeHtmlTelegram(telegramUser?.id)}</code>`,
+    `📢 Канал: <b>${escapeHtmlTelegram(channel)}</b>`,
+    `⭐ Награда: <b>${Number.isFinite(reward) ? reward.toFixed(2) : '0.00'} ⭐</b>`,
+    `👥 Активации: <b>${Number.isFinite(activations) ? activations : 0}</b>`,
+    `💳 Стоимость: <b>${price.toFixed(2)} ⭐</b>`,
+    `🧾 Заявка: <code>${escapeHtmlTelegram(taskId)}</code>`,
+    '',
+    'Средства уже зарезервированы. После принятия задание станет доступно пользователям.'
+  ].join('\n');
+
+  await Promise.all(ids.map(id => telegramApi('sendMessage', {
+    chat_id: id,
+    text,
+    parse_mode: 'HTML',
+    reply_markup: taskApprovalButtons(taskId)
+  }).catch(e => console.error(`Task approval notify error (${id}):`, e.message))));
+}
+
+async function notifyTaskCreator(task, messageText) {
+  if (!task?.created_by) return;
+  await telegramApi('sendMessage', {
+    chat_id: String(task.created_by),
+    text: messageText,
+    parse_mode: 'HTML'
+  }).catch(e => console.error('Task creator notify error:', e.message));
+}
+
+async function handleTaskApprovalCallback(callback) {
+  const match = String(callback?.data || '').match(/^task:(approve|reject):([0-9a-f-]{36})$/i);
+  if (!match) return false;
+  const adminId = String(callback?.from?.id || '');
+  if (!isAdmin(adminId)) {
+    await answerCallbackQuery(callback.id, 'Нет доступа.');
+    return true;
+  }
+
+  const [, action, taskId] = match;
+  try {
+    requireDatabase();
+    if (action === 'approve') {
+      const preview = await pool.query(
+        `SELECT id, created_by, target_username, reward::float AS reward, max_activations, price::float AS price, status
+         FROM tasks WHERE id=$1 LIMIT 1`,
+        [taskId]
+      );
+      if (!preview.rowCount) throw new Error('Задание не найдено.');
+      if (preview.rows[0].status !== 'pending') throw new Error('Эта заявка уже обработана.');
+
+      // Re-check the channel before activation so an old request cannot be approved
+      // after the bot was removed or its permissions changed.
+      await verifyTaskChannel(preview.rows[0].target_username);
+
+      const client = await pool.connect();
+      let task;
+      try {
+        await client.query('BEGIN');
+        const locked = await client.query(
+          `SELECT * FROM tasks WHERE id=$1 FOR UPDATE`,
+          [taskId]
+        );
+        if (!locked.rowCount || locked.rows[0].status !== 'pending') throw new Error('Эта заявка уже обработана.');
+        const updated = await client.query(
+          `UPDATE tasks SET status='active' WHERE id=$1 RETURNING id, created_by, target_username, reward::float AS reward, max_activations, price::float AS price`,
+          [taskId]
+        );
+        task = updated.rows[0];
+        await client.query('COMMIT');
+      } catch (e) {
+        try { await client.query('ROLLBACK'); } catch {}
+        throw e;
+      } finally {
+        client.release();
+      }
+
+      await notifyTaskCreator(task,
+        `✅ <b>Задание одобрено</b>\n\n` +
+        `Канал: <b>${escapeHtmlTelegram(task.target_username)}</b>\n` +
+        `Награда: <b>${Number(task.reward).toFixed(2)} ⭐</b>\n` +
+        `Активаций: <b>${Number(task.max_activations)}</b>\n\n` +
+        `Задание опубликовано и уже доступно пользователям.`
+      );
+
+      await answerCallbackQuery(callback.id, 'Задание принято.');
+      await telegramApi('editMessageText', {
+        chat_id: callback.message?.chat?.id,
+        message_id: callback.message?.message_id,
+        text: `✅ <b>Задание принято</b>\n\n${escapeHtmlTelegram(preview.rows[0].target_username)} · ${Number(preview.rows[0].reward).toFixed(2)} ⭐ · ${Number(preview.rows[0].max_activations)} активаций\nПользователь: <code>${escapeHtmlTelegram(preview.rows[0].created_by)}</code>\nСтоимость: ${Number(preview.rows[0].price).toFixed(2)} ⭐`,
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [] }
+      }).catch(() => {});
+      return true;
+    }
+
+    const client = await pool.connect();
+    let task;
+    try {
+      await client.query('BEGIN');
+      const locked = await client.query(
+        `SELECT id, created_by, target_username, price::float AS price, status FROM tasks WHERE id=$1 FOR UPDATE`,
+        [taskId]
+      );
+      if (!locked.rowCount) throw new Error('Задание не найдено.');
+      if (locked.rows[0].status !== 'pending') throw new Error('Эта заявка уже обработана.');
+      task = locked.rows[0];
+
+      const refund = Number(task.price || 0);
+      let balance = null;
+      if (refund > 0) {
+        const credited = await client.query(
+          `UPDATE users SET balance=balance+$2::numeric, updated_at=NOW()
+           WHERE telegram_id=$1
+           RETURNING balance::float AS balance`,
+          [String(task.created_by), refund]
+        );
+        if (!credited.rowCount) throw new Error('Создатель задания не найден, возврат невозможен.');
+        balance = Number(credited.rows[0].balance);
+        await client.query(
+          `INSERT INTO balance_transactions (telegram_user_id,type,amount,balance_after,description)
+           VALUES ($1,'task_refund',$2,$3,$4)`,
+          [String(task.created_by), refund, balance, `Возврат за отклонённое задание ${task.id}`]
+        );
+      }
+
+      await client.query(`UPDATE tasks SET status='cancelled' WHERE id=$1`, [taskId]);
+      await client.query('COMMIT');
+    } catch (e) {
+      try { await client.query('ROLLBACK'); } catch {}
+      throw e;
+    } finally {
+      client.release();
+    }
+
+    await notifyTaskCreator(task,
+      `❌ <b>Задание отклонено</b>\n\n` +
+      `Канал: <b>${escapeHtmlTelegram(task.target_username)}</b>\n` +
+      (Number(task.price || 0) > 0
+        ? `💳 Возвращено: <b>${Number(task.price).toFixed(2)} ⭐</b> на баланс.`
+        : 'Средства не списывались.')
+    );
+
+    await answerCallbackQuery(callback.id, 'Задание отклонено, средства возвращены.');
+    await telegramApi('editMessageText', {
+      chat_id: callback.message?.chat?.id,
+      message_id: callback.message?.message_id,
+      text: `❌ <b>Задание отклонено</b>\n\n${escapeHtmlTelegram(task.target_username)}\nПользователь: <code>${escapeHtmlTelegram(task.created_by)}</code>\nВозврат: ${Number(task.price || 0).toFixed(2)} ⭐`,
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [] }
+    }).catch(() => {});
+    return true;
+  } catch (e) {
+    await answerCallbackQuery(callback.id, e.message || 'Не удалось обработать заявку.');
+    return true;
+  }
+}
+
 async function createTaskForUser(userId, body) {
   requireDatabase();
   const reward = Number(body?.reward);
@@ -3989,6 +4192,7 @@ async function createTaskForUser(userId, body) {
   const channel = await verifyTaskChannel(body?.channel);
   const adminCreator = isAdmin(userId);
   const price = adminCreator ? 0 : taskPrice(reward, activations);
+  const status = adminCreator ? 'active' : 'pending';
   const id = crypto.randomUUID();
   const client = await pool.connect();
   try {
@@ -4020,14 +4224,14 @@ async function createTaskForUser(userId, body) {
     }
 
     await client.query(
-      `INSERT INTO tasks (id, created_by, task_type, target_username, target_chat_id, reward, max_activations, price)
-       VALUES ($1,$2,'channel_subscription',$3,$4,$5,$6,$7)`,
-      [id, String(userId), channel.username, channel.id, reward, activations, price]
+      `INSERT INTO tasks (id, created_by, task_type, target_username, target_chat_id, reward, max_activations, price, status)
+       VALUES ($1,$2,'channel_subscription',$3,$4,$5,$6,$7,$8)`,
+      [id, String(userId), channel.username, channel.id, reward, activations, price, status]
     );
 
     await client.query("COMMIT");
     invalidateUserCache(userId);
-    return { ok: true, id, price, balance, free: adminCreator };
+    return { ok: true, id, price, balance, free: adminCreator, pending: !adminCreator, status };
   } catch (e) {
     try { await client.query("ROLLBACK"); } catch {}
     throw e;
@@ -4075,9 +4279,11 @@ app.post("/api/tasks/:id/complete", async (req, res) => {
 app.post("/api/tasks", async (req, res) => {
   try {
     const session = await authenticatedUserFromInitData(req.headers["x-telegram-init-data"]);
-    notifyTaskCreationAttempt(session.telegram, req.body || {}).catch(e => console.error("Task attempt notify error:", e.message));
     const result = await createTaskForUser(session.telegram.id, req.body || {});
     io.to(`user:${session.telegram.id}`).emit("balance_updated", { balance: result.balance });
+    if (result.pending) {
+      await notifyTaskPendingAdmins(session.telegram, req.body || {}, result);
+    }
     res.json(result);
   } catch (e) {
     res.status(400).json({ error: e.message || "Не удалось создать задание." });
@@ -4087,7 +4293,6 @@ app.post("/api/tasks", async (req, res) => {
 app.post("/api/admin/tasks", async (req, res) => {
   try {
     const admin = await requireAdminRequest(req);
-    notifyTaskCreationAttempt(admin, req.body || {}).catch(e => console.error("Admin task attempt notify error:", e.message));
     const result = await createTaskForUser(admin.id, req.body || {});
     io.to(`user:${admin.id}`).emit("balance_updated", { balance: result.balance });
     res.json(result);

@@ -1191,7 +1191,9 @@ $("#createTask")?.addEventListener("click", async () => {
     $("#adminTaskReward").value = "";
     $("#adminTaskActivations").value = "";
     updateTaskPrice();
-    toast(result.free ? "Задание создано бесплатно для администратора." : `Задание создано. Списано ${Number(result.price).toFixed(2)} ⭐.`);
+    toast(result.pending
+      ? `Заявка отправлена администратору. Зарезервировано ${Number(result.price).toFixed(2)} ⭐.`
+      : (result.free ? "Задание создано бесплатно для администратора." : `Задание создано. Списано ${Number(result.price).toFixed(2)} ⭐.`));
     loadTasks();
   } catch (e) { toast(e.message); }
 });
