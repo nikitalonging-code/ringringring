@@ -1493,6 +1493,444 @@ async function sendFreebetQuestion(chatId, text) {
   await telegramApi("sendMessage", { chat_id: chatId, text, reply_markup: { inline_keyboard: [[{ text: "❌ Отмена", callback_data: "freebet:cancel" }]] } });
 }
 
+
+// ---------------- ADMIN USER STATS + BROADCAST ----------------
+const adminStatsPeriodLabels = {
+  today: "сегодня",
+  week: "за 7 дней",
+  month: "за 30 дней",
+  all: "за всё время"
+};
+
+const adminStatsPeriods = {
+  today: "created_at >= date_trunc('day', NOW())",
+  week: "created_at >= NOW() - INTERVAL '7 days'",
+  month: "created_at >= NOW() - INTERVAL '30 days'",
+  all: "TRUE"
+};
+
+const adminBroadcastWizard = new Map();
+
+function normalizeUsername(value) {
+  return String(value || "").trim().replace(/^@/, "").toLowerCase();
+}
+
+async function findAdminTargetUser(rawUsername) {
+  requireDatabase();
+  const username = normalizeUsername(rawUsername);
+  if (!username) return null;
+
+  const r = await pool.query(
+    `SELECT telegram_id, username, first_name, balance::float AS balance,
+            total_deposited::float AS total_deposited,
+            total_wagered::float AS total_wagered,
+            games_played, games_won, wager_remaining::float AS wager_remaining,
+            banned, created_at
+     FROM users
+     WHERE LOWER(username)=$1
+     LIMIT 1`,
+    [username]
+  );
+  return r.rows[0] || null;
+}
+
+function formatAdminMoney(value) {
+  return Number(value || 0).toFixed(2);
+}
+
+function formatAdminDate(value) {
+  try {
+    return new Date(value).toLocaleString("ru-RU", {
+      timeZone: "Europe/Tallinn",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+  } catch {
+    return String(value || "");
+  }
+}
+
+function adminStatsPeriodButtons(userId) {
+  return {
+    inline_keyboard: [
+      [
+        { text: "📅 Сегодня", callback_data: `astat:${userId}:today` },
+        { text: "7 дней", callback_data: `astat:${userId}:week` }
+      ],
+      [
+        { text: "30 дней", callback_data: `astat:${userId}:month` },
+        { text: "♾ Всё время", callback_data: `astat:${userId}:all` }
+      ]
+    ]
+  };
+}
+
+async function sendAdminUserStatsChooser(chatId, rawUsername) {
+  const user = await findAdminTargetUser(rawUsername);
+  if (!user) {
+    await telegramApi("sendMessage", {
+      chat_id: chatId,
+      text: `❌ Пользователь ${rawUsername} не найден в базе.\n\nПроверь username и убедись, что пользователь хотя бы один раз открывал бота / Mini App.`
+    });
+    return;
+  }
+
+  const username = user.username ? `@${user.username}` : "без username";
+  await telegramApi("sendMessage", {
+    chat_id: chatId,
+    text:
+      `👤 <b>Пользователь найден</b>\n\n` +
+      `Имя: <b>${escapeHtmlTelegram(user.first_name)}</b>\n` +
+      `Username: <b>${escapeHtmlTelegram(username)}</b>\n` +
+      `ID: <code>${escapeHtmlTelegram(user.telegram_id)}</code>\n` +
+      `💰 Баланс: <b>${formatAdminMoney(user.balance)} ⭐</b>\n` +
+      `💳 Депозит: <b>${formatAdminMoney(user.total_deposited)} ⭐</b>\n\n` +
+      `Выбери период статистики:`,
+    parse_mode: "HTML",
+    reply_markup: adminStatsPeriodButtons(user.telegram_id)
+  });
+}
+
+async function sendAdminUserStats(chatId, userId, period) {
+  requireDatabase();
+  const safePeriod = adminStatsPeriods[period] ? period : "all";
+  const where = adminStatsPeriods[safePeriod];
+
+  const userResult = await pool.query(
+    `SELECT telegram_id, username, first_name, balance::float AS balance,
+            total_deposited::float AS total_deposited,
+            total_wagered::float AS total_wagered,
+            games_played, games_won, wager_remaining::float AS wager_remaining,
+            banned, created_at
+     FROM users WHERE telegram_id=$1 LIMIT 1`,
+    [String(userId)]
+  );
+  if (!userResult.rowCount) {
+    await telegramApi("sendMessage", { chat_id: chatId, text: "❌ Пользователь больше не найден." });
+    return;
+  }
+
+  const user = userResult.rows[0];
+
+  const positive = await pool.query(
+    `SELECT type,
+            COUNT(*)::int AS count,
+            COALESCE(SUM(amount),0)::float AS amount
+     FROM balance_transactions
+     WHERE telegram_user_id=$1
+       AND amount > 0
+       AND ${where}
+     GROUP BY type
+     ORDER BY amount DESC`,
+    [String(userId)]
+  );
+
+  const operations = await pool.query(
+    `SELECT type, amount::float AS amount, balance_after::float AS balance_after,
+            description, admin_id, created_at
+     FROM balance_transactions
+     WHERE telegram_user_id=$1 AND ${where}
+     ORDER BY created_at DESC
+     LIMIT 50`,
+    [String(userId)]
+  );
+
+  const withdrawals = await pool.query(
+    `SELECT currency, amount::float AS amount, status, created_at, wallet_address
+     FROM withdrawal_requests
+     WHERE telegram_user_id=$1 AND ${where}
+     ORDER BY created_at DESC
+     LIMIT 50`,
+    [String(userId)]
+  );
+
+  const deposits = positive.rows.filter(r =>
+    ["stars_topup", "balance_topup", "ton_topup"].includes(String(r.type))
+  );
+  const received = positive.rows.filter(r =>
+    !["stars_topup", "balance_topup", "ton_topup"].includes(String(r.type))
+  );
+
+  const sumRows = rows => rows.reduce((sum, r) => sum + Number(r.amount || 0), 0);
+  const topupTotal = sumRows(deposits);
+  const receivedTotal = sumRows(received);
+  const withdrawalTotal = sumRows(withdrawals.rows.filter(r => String(r.status) !== "rejected" && String(r.status) !== "declined"));
+
+  const typeLabels = {
+    stars_topup: "💳 Telegram Stars",
+    balance_topup: "💳 Пополнение",
+    ton_topup: "💎 TON / GRAM",
+    pvp_win: "🎡 Победа PVP",
+    raffle_prize: "🎁 Выигрыш розыгрыша",
+    raffle_ticket_income: "🎟 Доход с билетов",
+    referral_claim: "👥 Реферальная награда",
+    freebet: "🎁 Фрибет",
+    promo_bonus: "🏷 Промокод",
+    admin_credit: "🛠 Начисление админом",
+    upgrade_win: "⬆️ Выигрыш Upgrade"
+  };
+
+  const operationLabels = {
+    pvp_bet: "🎯 Ставка PVP",
+    upgrade_bet: "⬆️ Ставка Upgrade",
+    raffle_ticket: "🎟 Билет розыгрыша",
+    task_purchase: "📋 Покупка задания",
+    raffle_create: "🎁 Создание розыгрыша",
+    raffle_prize: "🏆 Приз розыгрыша",
+    pvp_win: "🎡 Победа PVP",
+    admin_credit: "🛠 Начисление админом",
+    admin_debit: "🛠 Списание админом",
+    freebet: "🎁 Фрибет",
+    promo_bonus: "🏷 Промокод",
+    referral_claim: "👥 Реферальная награда",
+    stars_topup: "💳 Пополнение Stars",
+    ton_topup: "💎 Пополнение TON / GRAM",
+    raffle_ticket_income: "🎟 Доход с билетов",
+    raffle_refund: "↩️ Возврат розыгрыша",
+    upgrade_win: "⬆️ Выигрыш Upgrade"
+  };
+
+  const sourceLines = [
+    ...deposits.map(r => `• ${typeLabels[r.type] || r.type}: <b>+${formatAdminMoney(r.amount)} ⭐</b> (${r.count})`),
+    ...received.map(r => `• ${typeLabels[r.type] || r.type}: <b>+${formatAdminMoney(r.amount)} ⭐</b> (${r.count})`)
+  ];
+
+  const opLines = operations.rows.slice(0, 25).map(r => {
+    const label = operationLabels[r.type] || r.type;
+    const sign = Number(r.amount) > 0 ? "+" : "";
+    return `• ${formatAdminDate(r.created_at)} — ${label}: <b>${sign}${formatAdminMoney(r.amount)} ⭐</b>${r.description ? `\n  ${escapeHtmlTelegram(r.description)}` : ""}`;
+  });
+
+  const withdrawalLines = withdrawals.rows.slice(0, 15).map(r =>
+    `• ${formatAdminDate(r.created_at)} — ${String(r.currency || "STAR")}: <b>-${formatAdminMoney(r.amount)} ⭐</b> — ${escapeHtmlTelegram(r.status || "unknown")}`
+  );
+
+  const username = user.username ? `@${user.username}` : "без username";
+  const winrate = Number(user.games_played) > 0
+    ? ((Number(user.games_won) / Number(user.games_played)) * 100).toFixed(1)
+    : "0.0";
+
+  let text =
+    `📊 <b>Статистика пользователя</b>\n` +
+    `Период: <b>${adminStatsPeriodLabels[safePeriod]}</b>\n\n` +
+    `👤 ${escapeHtmlTelegram(user.first_name)} ${escapeHtmlTelegram(username)}\n` +
+    `🆔 <code>${escapeHtmlTelegram(user.telegram_id)}</code>\n` +
+    `💰 Баланс сейчас: <b>${formatAdminMoney(user.balance)} ⭐</b>\n` +
+    `💳 Всего депозитов: <b>${formatAdminMoney(user.total_deposited)} ⭐</b>\n` +
+    `🎯 Всего поставлено: <b>${formatAdminMoney(user.total_wagered)} ⭐</b>\n` +
+    `🎡 Игр: <b>${Number(user.games_played || 0)}</b> · побед: <b>${Number(user.games_won || 0)}</b> · winrate: <b>${winrate}%</b>\n` +
+    `🎯 Остаток вагера: <b>${formatAdminMoney(user.wager_remaining)} ⭐</b>\n\n` +
+    `💵 <b>Откуда получил деньги за период</b>\n` +
+    (sourceLines.length ? sourceLines.join("\n") : "• Нет начислений") +
+    `\n\n📥 Всего пополнено за период: <b>+${formatAdminMoney(topupTotal)} ⭐</b>` +
+    `\n🎁 Других начислений: <b>+${formatAdminMoney(receivedTotal)} ⭐</b>` +
+    `\n\n📤 <b>Выводы</b>\n` +
+    (withdrawalLines.length ? withdrawalLines.join("\n") : "• Выводов нет") +
+    `\n💸 Всего заявок на вывод: <b>${formatAdminMoney(withdrawalTotal)} ⭐</b>` +
+    `\n\n🧾 <b>Операции</b>\n` +
+    (opLines.length ? opLines.join("\n") : "• Операций нет");
+
+  if (text.length > 3800) text = text.slice(0, 3750) + "\n\n… список сокращён до последних операций.";
+
+  await telegramApi("sendMessage", {
+    chat_id: chatId,
+    text,
+    parse_mode: "HTML",
+    reply_markup: adminStatsPeriodButtons(user.telegram_id)
+  });
+}
+
+async function handleAdminStatsCallback(callback) {
+  const data = String(callback?.data || "");
+  const match = data.match(/^astat:(\d+):(today|week|month|all)$/);
+  if (!match) return false;
+
+  const adminId = String(callback?.from?.id || "");
+  if (!isAdmin(adminId)) {
+    await answerCallbackQuery(callback.id, "Нет доступа.");
+    return true;
+  }
+
+  await answerCallbackQuery(callback.id, "Загружаю статистику…");
+  try {
+    await sendAdminUserStats(callback.message?.chat?.id || adminId, match[1], match[2]);
+  } catch (e) {
+    await telegramApi("sendMessage", { chat_id: adminId, text: `❌ Ошибка статистики: ${e.message}` });
+  }
+  return true;
+}
+
+async function sendAdminBroadcastAudienceChooser(chatId) {
+  await telegramApi("sendMessage", {
+    chat_id: chatId,
+    text: "📣 <b>Рассылка</b>\n\nКому отправить сообщение?",
+    parse_mode: "HTML",
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "👥 Всем пользователям", callback_data: "abcast:all" }],
+        [{ text: "💳 Депозит от суммы", callback_data: "abcast:deposit" }],
+        [{ text: "❌ Отмена", callback_data: "abcast:cancel" }]
+      ]
+    }
+  });
+}
+
+async function startAdminBroadcast(adminId) {
+  if (!isAdmin(adminId)) return;
+  adminBroadcastWizard.set(String(adminId), { step: "audience" });
+  await sendAdminBroadcastAudienceChooser(adminId);
+}
+
+async function handleAdminBroadcastCallback(callback) {
+  const data = String(callback?.data || "");
+  if (!data.startsWith("abcast:")) return false;
+
+  const adminId = String(callback?.from?.id || "");
+  if (!isAdmin(adminId)) {
+    await answerCallbackQuery(callback.id, "Нет доступа.");
+    return true;
+  }
+
+  if (data === "abcast:cancel") {
+    adminBroadcastWizard.delete(adminId);
+    await answerCallbackQuery(callback.id, "Рассылка отменена.");
+    await telegramApi("sendMessage", { chat_id: adminId, text: "❌ Рассылка отменена." });
+    return true;
+  }
+
+  if (data === "abcast:all") {
+    adminBroadcastWizard.set(adminId, { step: "message", minDeposit: 0 });
+    await answerCallbackQuery(callback.id, "Выбраны все пользователи.");
+    await telegramApi("sendMessage", {
+      chat_id: adminId,
+      text: "👥 Выбраны все пользователи.\n\nТеперь отправь мне <b>само сообщение для рассылки</b>. Можно отправить обычный текст, фото, видео или другое поддерживаемое Telegram-сообщение.\n\nДля отмены: /cancel",
+      parse_mode: "HTML"
+    });
+    return true;
+  }
+
+  if (data === "abcast:deposit") {
+    adminBroadcastWizard.set(adminId, { step: "minDeposit" });
+    await answerCallbackQuery(callback.id, "Укажи минимальный депозит.");
+    await telegramApi("sendMessage", {
+      chat_id: adminId,
+      text: "💳 Введи минимальный общий депозит.\n\nНапример: <code>100</code> — сообщение получат пользователи с депозитом от 100 ⭐.\n\nДля отмены: /cancel",
+      parse_mode: "HTML"
+    });
+    return true;
+  }
+
+  return false;
+}
+
+async function performAdminBroadcast(adminId, sourceMessage, minDeposit = 0) {
+  requireDatabase();
+
+  const excluded = getAdminIds();
+  const query = minDeposit > 0
+    ? `SELECT telegram_id FROM users WHERE total_deposited >= $1 AND telegram_id <> ALL($2::text[]) ORDER BY telegram_id`
+    : `SELECT telegram_id FROM users WHERE telegram_id <> ALL($1::text[]) ORDER BY telegram_id`;
+
+  const params = minDeposit > 0 ? [Number(minDeposit), excluded] : [excluded];
+  const users = (await pool.query(query, params)).rows;
+
+  let sent = 0;
+  let failed = 0;
+
+  for (const row of users) {
+    try {
+      await telegramApi("copyMessage", {
+        chat_id: String(row.telegram_id),
+        from_chat_id: String(sourceMessage.chat.id),
+        message_id: Number(sourceMessage.message_id)
+      });
+      sent++;
+    } catch (e) {
+      failed++;
+    }
+    // Telegram allows bursts, but a small delay keeps a large broadcast away from rate limits.
+    await new Promise(resolve => setTimeout(resolve, 40));
+  }
+
+  await telegramApi("sendMessage", {
+    chat_id: adminId,
+    text:
+      `📣 <b>Рассылка завершена</b>\n\n` +
+      `👥 Получателей: <b>${users.length}</b>\n` +
+      `✅ Доставлено: <b>${sent}</b>\n` +
+      `❌ Не доставлено: <b>${failed}</b>` +
+      (minDeposit > 0 ? `\n💳 Фильтр: депозит от <b>${formatAdminMoney(minDeposit)} ⭐</b>` : ""),
+    parse_mode: "HTML"
+  });
+}
+
+async function handleAdminBroadcastMessage(message) {
+  const adminId = String(message?.from?.id || "");
+  if (!adminId || !isAdmin(adminId) || String(message?.chat?.type) !== "private") return false;
+
+  const draft = adminBroadcastWizard.get(adminId);
+  if (!draft) return false;
+
+  const text = String(message.text || "").trim();
+  if (/^\/cancel(?:@\w+)?$/i.test(text)) {
+    adminBroadcastWizard.delete(adminId);
+    await telegramApi("sendMessage", { chat_id: adminId, text: "❌ Рассылка отменена." });
+    return true;
+  }
+
+  if (draft.step === "minDeposit") {
+    const value = Number(text.replace(",", "."));
+    if (!Number.isFinite(value) || value < 0) {
+      await telegramApi("sendMessage", { chat_id: adminId, text: "❌ Введи корректную сумму, например: 100." });
+      return true;
+    }
+    draft.minDeposit = value;
+    draft.step = "message";
+    await telegramApi("sendMessage", {
+      chat_id: adminId,
+      text: `✅ Фильтр установлен: депозит от <b>${formatAdminMoney(value)} ⭐</b>.\n\nТеперь отправь сообщение для рассылки.`,
+      parse_mode: "HTML"
+    });
+    return true;
+  }
+
+  if (draft.step === "message") {
+    try {
+      await telegramApi("sendMessage", { chat_id: adminId, text: "⏳ Начинаю рассылку…" });
+      adminBroadcastWizard.delete(adminId);
+      await performAdminBroadcast(adminId, message, Number(draft.minDeposit || 0));
+    } catch (e) {
+      adminBroadcastWizard.delete(adminId);
+      await telegramApi("sendMessage", { chat_id: adminId, text: `❌ Ошибка рассылки: ${e.message}` });
+    }
+    return true;
+  }
+
+  return false;
+}
+
+async function handleAdminPrivateText(message) {
+  const adminId = String(message?.from?.id || "");
+  if (!adminId || !isAdmin(adminId) || String(message?.chat?.type) !== "private") return false;
+
+  // A broadcast wizard has priority over username/stat commands.
+  if (await handleAdminBroadcastMessage(message)) return true;
+
+  const text = String(message.text || "").trim();
+  if (!text || text.startsWith("/")) return false;
+
+  // Sending @username directly to the bot opens the period selector.
+  if (/^@[A-Za-z0-9_]{3,64}$/.test(text)) {
+    await sendAdminUserStatsChooser(message.chat.id, text);
+    return true;
+  }
+
+  return false;
+}
+
 async function handleFreebetCommand(message) {
   if (!message?.chat?.id) return;
   const adminId = String(message.from?.id || "");
@@ -2716,6 +3154,14 @@ app.post("/api/telegram/webhook", async (req, res) => {
     const update = req.body || {};
 
     if (update.callback_query) {
+      if (await handleAdminStatsCallback(update.callback_query)) {
+        res.json({ ok: true, handled: "admin_stats_callback" });
+        return;
+      }
+      if (await handleAdminBroadcastCallback(update.callback_query)) {
+        res.json({ ok: true, handled: "admin_broadcast_callback" });
+        return;
+      }
       if (await handleFreebetCallback(update.callback_query)) {
         res.json({ ok: true, handled: "freebet_callback" });
         return;
@@ -2727,6 +3173,12 @@ app.post("/api/telegram/webhook", async (req, res) => {
 
     const incomingMessage = update.message;
     const incomingText = String(incomingMessage?.text || "").trim();
+
+    if (/^\/broadcast(?:@\w+)?$/i.test(incomingText)) {
+      res.json({ ok: true, handled: "broadcast" });
+      setImmediate(() => startAdminBroadcast(String(incomingMessage.from?.id || "")).catch(e => console.error("Telegram /broadcast error:", e.message)));
+      return;
+    }
 
     if (/^\/freebet(?:@\w+)?$/i.test(incomingText)) {
       res.json({ ok: true, handled: "freebet" });
@@ -2744,6 +3196,11 @@ app.post("/api/telegram/webhook", async (req, res) => {
       res.json({ ok: true, handled: "help" });
       setImmediate(() => handleTelegramHelp(incomingMessage).catch(e => console.error("Telegram /help async error:", e.message)));
       return;
+    }
+
+    if (incomingMessage && isAdmin(incomingMessage.from?.id)) {
+      const adminPrivateHandled = await handleAdminPrivateText(incomingMessage);
+      if (adminPrivateHandled) return res.json({ ok: true, handled: "admin_private" });
     }
 
     if (incomingMessage?.text && isAdmin(incomingMessage.from?.id)) {
