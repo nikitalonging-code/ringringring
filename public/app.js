@@ -133,7 +133,7 @@ function setMaintenanceOverlay(enabled, message = "") {
   if (!overlay) return;
   overlay.classList.toggle("hidden", !clientMaintenance);
   if (message) $("#maintenanceOverlay .maintenance-text").textContent = message;
-  ["topupBtn", "betBtn", "withdrawBtn", "openCreateRaffle", "openUpgrade", "openIceArena", "iceJoinBtn", "openCreateTask"].forEach(id => {
+  ["topupBtn", "betBtn", "withdrawBtn", "openCreateRaffle", "openUpgrade", "openCreateTask"].forEach(id => {
     const el = $("#" + id);
     if (el) el.disabled = clientMaintenance;
   });
@@ -666,17 +666,17 @@ function setView(view) {
   const views = { pvp: $("#pvpView"), raffles: $("#rafflesView"), games: $("#gamesView"), profile: $("#profileView") };
   const activeKey = views[view] ? view : "pvp";
 
+  if (document.body.classList.contains("ice-arena-open")) {
+    document.body.classList.remove("ice-arena-open");
+    document.getElementById("iceArenaGame")?.classList.add("hidden");
+    window.__iceArenaActive = false;
+  }
+
   Object.values(views).forEach(el => el.classList.add("hidden"));
   views[activeKey].classList.remove("hidden");
 
   if (activeKey === "profile") loadProfile();
   if (activeKey === "raffles") loadRaffles();
-  if (activeKey === "games") {
-    $("#gamesList")?.classList.remove("hidden");
-    $("#upgradeGame")?.classList.add("hidden");
-    $("#iceArenaGame")?.classList.add("hidden");
-    window.__iceArenaActive = false;
-  }
 
   document.querySelectorAll(".nav-item").forEach(btn => {
     btn.classList.toggle("active", btn.dataset.view === activeKey);
@@ -1694,34 +1694,27 @@ if (historySearchInput) {
   };
 });
 
-// ---------- ICE ARENA ----------
-// Ice Arena source structure, visuals, animations and physics are retained from the original project.
-// Only its color palette is adapted in styles.css; transport is bridged to RING's existing Socket.IO session.
-window.__RING_SOCKET = socket;
-window.__iceArenaActive = false;
-(function () {
-  const tg = window.Telegram && Telegram.WebApp;
-  if (tg) { tg.ready(); tg.expand && tg.expand(); }
-  const $ = id => document.getElementById(id);
-  const arena = $('iceArena'), puck = $('icePuck'), zoneMap = $('iceZoneMap'), legend = $('iceLegend'), winnerEl = $('iceWinner');
+
+// ===== Embedded Ice Arena: exact original physics/animation, RING UI/network adapter =====
+(() => {
+  const arena = document.getElementById('iceArena'), puck = document.getElementById('icePuck'), zoneMap = document.getElementById('iceZoneMap'), legend = document.getElementById('iceLegend'), winnerEl = document.getElementById('iceWinner');
   const SPIN = 0, HOLD = 0, FLIGHT = 7000, CLOSE = 1000, PUCK = 24, S = 100, N = FLIGHT / 1000 * 60;
-  let W = arena.clientWidth || 358, me = null, isAdmin = false, ws, skew = 0;
+  let W = arena.clientWidth || 358, me = null, skew = 0;
   let st = { status: 'waiting', players: [], online: 0 }, L = [];
   let plan = null, planFor = null, finished = false, phase = '', cam = null;
 
-  const fmt = v => String(+Number(v).toFixed(3));
+  const fmt = v => String(+Number(v).toFixed(0));
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), 2600); }
   function place(x, y) { puck.style.transform = `translate3d(${(x * W / 100 - PUCK / 2).toFixed(2)}px,${(y * W / 100 - PUCK / 2).toFixed(2)}px,0)`; }
   window.addEventListener('resize', () => { W = arena.clientWidth || W; });
   place(50, 50); puck.style.visibility = 'hidden';
 
   // ---------- аватарка ----------
   function avatar(p, cls, size) {
-    const el = document.createElement(p.photo ? 'img' : 'div');
+    const el = document.createElement(p.avatar ? 'img' : 'div');
     el.className = cls; el.style.width = el.style.height = size + 'px';
     const initial = () => { const d = document.createElement('div'); d.className = cls; d.style.cssText = `width:${size}px;height:${size}px;background:${p.color};font-size:${size * .45}px`; d.textContent = (p.name || '?')[0].toUpperCase(); return d; };
-    if (p.photo) { el.src = p.photo; el.referrerPolicy = 'no-referrer'; el.onerror = () => el.replaceWith(initial()); return el; }
+    if (p.avatar) { el.src = p.avatar; el.referrerPolicy = 'no-referrer'; el.onerror = () => el.replaceWith(initial()); return el; }
     return initial();
   }
 
@@ -1745,9 +1738,9 @@ window.__iceArenaActive = false;
   function render() {
     zoneMap.innerHTML = ''; legend.innerHTML = '';
     const sum = L.reduce((s, p) => s + p.stake, 0), cs = L.length ? cells() : [];
-    st.players.map((p, i) => i).sort((a, b) => (st.players[a].id === (me && me.id) ? 1 : 0) - (st.players[b].id === (me && me.id) ? 1 : 0)).forEach(i => {
+    st.players.map((p, i) => i).sort((a, b) => (String(st.players[a].id) === String(me && me.id) ? 1 : 0) - (String(st.players[b].id) === String(me && me.id) ? 1 : 0)).forEach(i => {
       const p = st.players[i], poly = cs[i], inf = info(poly), r = inr(poly, inf.cx, inf.cy);
-      const el = document.createElement('div'); el.className = 'zone-item' + (me && p.id === me.id ? ' mine' : '');
+      const el = document.createElement('div'); el.className = 'zone-item' + (me && String(p.id) === String(me.id) ? ' mine' : '');
       el.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none"><polygon points="${poly.map(v => v[0].toFixed(2) + ',' + v[1].toFixed(2)).join(' ')}" fill="${p.color}"/></svg>`;
       const d = Math.min(46, r * W / 100 * 1.4);
       if (d >= 14) { const a = avatar(p, 'zone-av', Math.round(d)); a.style.left = inf.cx + '%'; a.style.top = inf.cy + '%'; el.append(a); }
@@ -1759,32 +1752,32 @@ window.__iceArenaActive = false;
       it.insertAdjacentHTML('beforeend', `<span>${esc(p.name)}</span><b>${fmt(p.stake)} · ${(p.stake / sum * 100).toFixed(1)}%</b>`);
       legend.append(it);
     });
-    $('icePool').textContent = sum.toFixed(2) + ' TON';
-    $('icePlayerCount').textContent = st.players.length;
-    $('online').textContent = st.online || 0;
+    document.getElementById('icePool').textContent = sum.toFixed(0) + ' ⭐';
+    document.getElementById('icePlayerCount').textContent = st.players.length;
+    document.getElementById('iceOnline').textContent = st.online || 0;
     if (finished) applyResult();
     ui();
   }
   function applyResult() {
-    st.players.forEach(p => p.zone && p.zone.classList.add(p.id === st.winnerId ? 'winner-zone' : 'loser'));
-    const w = st.players.find(p => p.id === st.winnerId); if (!w) return;
+    st.players.forEach(p => p.zone && p.zone.classList.add(String(p.id) === String(st.winnerId) ? 'winner-zone' : 'loser'));
+    const w = st.players.find(p => String(p.id) === String(st.winnerId)); if (!w) return;
     const pool = st.players.reduce((s, p) => s + p.stake, 0);
-    winnerEl.innerHTML = `<div><b>${esc(w.name)}</b><small>Победитель · +${fmt(pool)} TON</small></div>`;
+    winnerEl.innerHTML = `<div><b>${esc(w.name)}</b><small>Победитель · +${fmt(pool)} ⭐</small></div>`;
     winnerEl.classList.add('show');
   }
   function ui() {
     const now = Date.now() + skew; let txt = '', can = false;
-    if (st.status === 'waiting') { txt = st.players.length ? 'Ждём 2-го игрока' : 'Набор игроков'; can = true; }
-    else if (st.status === 'countdown') { const left = st.endsAt - now; if (left > CLOSE) { txt = 'Старт через ' + Math.ceil(left / 1000) + ' с'; can = true; } else txt = 'Ставки закрыты'; }
-    else if (st.status === 'running') txt = phase === 'rushing' ? 'Шайба на льду' : 'Раунд начинается';
+    if (st.status === 'WAITING') { txt = st.players.length ? 'Ждём 2-го игрока' : 'Набор игроков'; can = true; }
+    else if (st.status === 'COUNTDOWN') { const left = st.countdownEndsAt - now; if (left > CLOSE) { txt = 'Старт через ' + Math.ceil(left / 1000) + ' с'; can = true; } else txt = 'Ставки закрыты'; }
+    else if (st.status === 'RUNNING') txt = phase === 'rushing' ? 'Шайба на льду' : 'Раунд начинается';
     else txt = 'Раунд завершён';
-    $('iceStatus').textContent = txt;
-    $('iceJoinBtn').disabled = !can || !me;
+    document.getElementById('iceStatus').textContent = txt;
+    document.getElementById('iceJoinBtn').disabled = !can || !me;
     const mine = me && st.players.find(p => p.id === me.id);
-    $('stakeInfo').textContent = mine ? 'Ваша: ' + fmt(mine.stake) : '';
+    document.getElementById('iceStakeInfo').textContent = mine ? 'Ваша: ' + fmt(mine.stake) + ' ⭐' : '';
+    document.getElementById('iceBal').textContent = Number(currentBalance || 0).toFixed(0);
   }
   setInterval(ui, 200);
-  window.__iceGetState = () => st.status;
 
   // ---------- детерминированная физика шайбы ----------
   function rng(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
@@ -1843,7 +1836,7 @@ window.__iceArenaActive = false;
   }
   function loop() {
     requestAnimationFrame(loop);
-    if ((st.status !== 'running' && st.status !== 'result') || !st.startAt || !L.length) return;
+    if ((st.status !== 'RUNNING' && st.status !== 'RESULT') || !st.startAt || !L.length) return;
     if (planFor !== st.id) { plan = buildPlan(); planFor = st.id; finished = false; cam = null; }
     frame(Date.now() + skew - st.startAt);
   }
@@ -1856,95 +1849,118 @@ window.__iceArenaActive = false;
     W = arena.clientWidth || W; place(50, 50); puck.style.visibility = 'hidden';
   }
 
-  // ---------- сеть ----------
-  // RING adapter: gameplay/rendering/physics above are the original Ice Arena code.
-  const send = m => {
-    const s = window.__RING_SOCKET;
-    if (!s) return;
-    if (m.t === 'bet') s.emit('ice_bet', { amount: Number(m.amount) });
-    else if (m.t === 'admin_users') s.emit('ice_admin_users');
-    else if (m.t === 'admin_give') s.emit('ice_admin_give', { userId: String(m.userId || ''), amount: Number(m.amount) });
-  };
 
-  function connect() {
-    const s = window.__RING_SOCKET;
-    if (!s) { setTimeout(connect, 250); return; }
-    s.on('joined', m => {
-      const u = m?.user || {};
-      me = {
-        id: String(m?.playerId || u.id || ''),
-        name: [u.first_name, u.last_name].filter(Boolean).join(' ') || u.username || String(m?.playerId || ''),
-        photo: u.photo_url || ''
-      };
-      isAdmin = !!m?.isAdmin;
-      $('bal').textContent = fmt(m?.balance ?? 0);
-      $('adminBtn').style.visibility = isAdmin ? 'visible' : 'hidden';
-      ui();
-      s.emit('request_ice_state');
-    });
-    s.on('ice_state', m => {
-      skew = Number(m?.now || Date.now()) - Date.now();
-      st = {
-        status: String(m?.status || 'WAITING').toLowerCase(),
-        players: Array.isArray(m?.players) ? m.players.map(p => ({
-          id: String(p.id), name: p.name, photo: p.avatar || p.photo || '', color: p.color,
-          stake: Number(p.bet ?? p.stake ?? 0), sx: Number(p.sx), sy: Number(p.sy)
-        })) : [],
-        online: Number(m?.online || 0),
-        endsAt: Number(m?.countdownEndsAt || 0),
-        startAt: Number(m?.startAt || 0),
-        seed: Number(m?.seed || 0),
-        id: String(m?.roomId || ''),
-        winnerId: m?.winnerId == null ? null : String(m.winnerId)
-      };
-      if (st.status === 'waiting' || st.status === 'countdown') resetVisual();
-      layout(); render();
-    });
-    s.on('balance_updated', m => { $('bal').textContent = fmt(m?.balance ?? 0); ui(); });
-    s.on('ice_admin_users_result', m => renderUsers(m?.list || []));
-    s.on('ice_admin_ok', m => toast(m?.msg || 'Готово'));
-    s.on('error_message', m => toast(m));
-    s.emit('request_ice_state');
+  // ---------- RING Socket.IO integration ----------
+  function syncState(data) {
+    skew = Number(data?.now || Date.now()) - Date.now();
+    st = {
+      status: data?.status || 'WAITING',
+      players: (Array.isArray(data?.players) ? data.players : []).map(p => ({ ...p, stake: Number(p.bet || 0), photo: p.avatar || '' })),
+      online: Number(data?.online || 0),
+      seed: Number(data?.seed || 0),
+      id: data?.roomId || '',
+      startAt: Number(data?.startAt || 0),
+      countdownEndsAt: Number(data?.countdownEndsAt || 0),
+      winnerId: data?.winnerId == null ? null : String(data.winnerId)
+    };
+    if (st.status === 'WAITING' || st.status === 'COUNTDOWN') resetVisual();
+    layout(); render();
   }
-  connect();
+
+  socket.on('ice_state', syncState);
+  socket.on('joined', data => {
+    me = {
+      id: String(data?.playerId || ''),
+      name: data?.user?.username ? '@' + data.user.username : (data?.user?.first_name || 'Игрок'),
+      avatar: data?.user?.photo_url || ''
+    };
+    ui();
+  });
+  socket.on('balance_updated', data => {
+    setTimeout(() => { ui(); }, 0);
+  });
 
   // ---------- ставки ----------
-  $('iceJoinBtn').addEventListener('click', () => send({ t: 'bet', amount: Number($('betAmt').value) }));
-  document.querySelectorAll('.ice-stakes button').forEach(b => b.addEventListener('click', () => { $('betAmt').value = b.dataset.v; }));
+  document.getElementById('iceJoinBtn').addEventListener('click', () => {
+    if (!initData) return handleNotTelegram();
+    const amount = Number(document.getElementById('iceBetAmt').value);
+    if (!Number.isInteger(amount) || amount <= 0) return toast('Введите целое число Stars.');
+    if (amount > Number(currentBalance || 0)) return toast('Недостаточно Stars на балансе.');
+    socket.emit('ice_bet', { amount });
+  });
+  document.querySelectorAll('#iceArenaScreen .ice-stakes button').forEach(b => b.addEventListener('click', () => {
+    document.getElementById('iceBetAmt').value = b.dataset.v;
+    document.querySelectorAll('#iceArenaScreen .ice-stakes button').forEach(x => x.classList.toggle('active', x === b));
+  }));
+  document.querySelector('#iceArenaScreen .ice-stakes button[data-v="1"]')?.classList.add('active');
 
-  // ---------- админка ----------
-  function renderUsers(list) {
-    $('adminList').innerHTML = list.map(u => `<div class="adm-row" data-id="${u.id}"><span>${esc(u.name)}<small>${u.id}</small></span><b>${fmt(u.balance)}</b></div>`).join('') || '<p class="ice-hint">Пока никто не заходил</p>';
-    document.querySelectorAll('.adm-row').forEach(r => r.addEventListener('click', () => { $('admId').value = r.dataset.id; $('admAmt').focus(); }));
+  // ---------- открытие / закрытие ----------
+  document.getElementById('openIceArena')?.addEventListener('click', () => {
+    if (!initData) return handleNotTelegram();
+    document.getElementById('gamesList')?.classList.add('hidden');
+    document.getElementById('upgradeGame')?.classList.add('hidden');
+    document.getElementById('iceArenaGame')?.classList.remove('hidden');
+    document.body.classList.add('ice-arena-open');
+    window.__iceArenaActive = true;
+    layout(); render();
+    socket.emit('request_ice_state');
+  });
+  document.getElementById('iceArenaBack')?.addEventListener('click', () => {
+    document.getElementById('iceArenaGame')?.classList.add('hidden');
+    document.getElementById('gamesList')?.classList.remove('hidden');
+    document.body.classList.remove('ice-arena-open');
+    window.__iceArenaActive = false;
+  });
+
+  // Telegram native back button mirrors the original game's standalone behavior.
+  try {
+    if (tg) {
+      tg.BackButton?.onClick(() => document.getElementById('iceArenaBack')?.click());
+    }
+  } catch {}
+
+  // ---------- Ice-only history (same visual pattern as ROLL history) ----------
+  function iceHistoryDate(value) { return formatHistoryDateTime(value); }
+  function iceHistoryShort(value) { return shortenMiddle(value); }
+  async function loadIceHistory(q = '') {
+    const list = document.getElementById('iceHistoryList');
+    const empty = document.getElementById('iceHistoryEmpty');
+    try {
+      const r = await fetch(`/api/ice/history?q=${encodeURIComponent(q)}`, { cache: 'no-store' });
+      const data = await r.json();
+      const rounds = Array.isArray(data.rounds) ? data.rounds : [];
+      empty.classList.toggle('hidden', rounds.length > 0);
+      list.innerHTML = rounds.map(round => {
+        const w = round.winner;
+        return `<button class="history-round" data-ice-round="${round.roundNumber}">
+          <div class="history-round-top"><span class="history-round-tag"><span style="font-size:13px">🏒</span> Ice Arena</span><span>#${round.roundNumber} • ${iceHistoryDate(round.createdAt)}</span></div>
+          <div class="history-round-body"><div class="history-round-winner">${avatarMarkup(w?.avatar, w?.name)}<div class="history-round-winner-info"><div class="history-round-name">${escapeHtml(w?.name || 'Игрок')}</div><div class="history-round-pct">${Number(w?.percentage || 0).toFixed(2)}%</div></div></div><div class="history-round-right"><div class="history-round-amount">+${Number(round.payout).toFixed(0)} ⭐</div><div class="history-round-mult">${round.multiplier}x</div></div></div>
+        </button>`;
+      }).join('');
+      list.querySelectorAll('[data-ice-round]').forEach(btn => btn.onclick = () => openIceHistoryDetail(btn.dataset.iceRound));
+    } catch {
+      empty.classList.remove('hidden'); list.innerHTML = '';
+    }
   }
-  $('adminBtn').addEventListener('click', () => { if (isAdmin) { $('adminModal').classList.add('show'); send({ t: 'admin_users' }); } });
-  $('adminClose').addEventListener('click', () => $('adminModal').classList.remove('show'));
-  $('adminModal').addEventListener('click', e => { if (e.target === $('adminModal')) $('adminModal').classList.remove('show'); });
-  $('admGive').addEventListener('click', () => send({ t: 'admin_give', userId: $('admId').value, amount: Number($('admAmt').value) }));
+  async function openIceHistoryDetail(roundNumber) {
+    try {
+      const r = await fetch(`/api/ice/history/${encodeURIComponent(roundNumber)}`, { cache: 'no-store' });
+      if (!r.ok) throw new Error();
+      const d = await r.json();
+      document.getElementById('iceHistoryDetailTitle').textContent = `Ice Arena #${d.roundNumber}`;
+      document.getElementById('iceHistoryDetailDate').textContent = iceHistoryDate(d.createdAt);
+      document.getElementById('iceHistoryHashValue').textContent = iceHistoryShort(d.hash);
+      document.getElementById('iceHistoryHashRow').dataset.copy = d.hash || '';
+      document.getElementById('iceHistorySeedValue').textContent = iceHistoryShort(d.seed);
+      document.getElementById('iceHistorySeedRow').dataset.copy = d.seed || '';
+      document.getElementById('iceHistoryDetailPlayers').innerHTML = (d.players || []).map(p => `<div class="history-player-row">${avatarMarkup(p.avatar, p.name)}<div><div class="history-player-name">${escapeHtml(p.name || 'Игрок')}</div><div class="history-player-pct">${Number(p.percentage || 0).toFixed(2)}%</div></div><div class="history-player-bet">${Number(p.bet).toFixed(0)} ⭐</div></div>`).join('');
+      openModal(document.getElementById('iceHistoryDetailModal'));
+    } catch { toast('Не удалось загрузить игру.'); }
+  }
+  document.getElementById('iceHistoryBtn')?.addEventListener('click', () => { openModal(document.getElementById('iceHistoryModal')); loadIceHistory(document.getElementById('iceHistorySearch').value.trim()); });
+  document.getElementById('iceHistoryClose')?.addEventListener('click', () => closeModal(document.getElementById('iceHistoryModal')));
+  document.getElementById('iceHistoryDetailClose')?.addEventListener('click', () => closeModal(document.getElementById('iceHistoryDetailModal')));
+  document.getElementById('iceHistorySearch')?.addEventListener('input', (() => { let t; return e => { clearTimeout(t); t = setTimeout(() => loadIceHistory(e.target.value.trim()), 250); }; })());
+  [document.getElementById('iceHistoryHashRow'), document.getElementById('iceHistorySeedRow')].forEach(btn => btn?.addEventListener('click', () => { const value = btn.dataset.copy; if (!value || !navigator.clipboard) return; navigator.clipboard.writeText(value).then(() => toast('Скопировано')); }));
 })();
 
-// Open/close wrapper belongs to the host Mini App, not the Arena UI itself.
-const iceHost = document.getElementById('iceArenaGame');
-const iceOpenBtn = document.getElementById('openIceArena');
-function openIceArenaView(){
-  if (!iceHost) return;
-  document.getElementById('gamesList')?.classList.add('hidden');
-  document.getElementById('upgradeGame')?.classList.add('hidden');
-  iceHost.classList.remove('hidden');
-  window.__iceArenaActive = true;
-  if (tg?.BackButton) { tg.BackButton.show(); tg.BackButton.offClick(closeIceArenaView); tg.BackButton.onClick(closeIceArenaView); }
-}
-function closeIceArenaView(){
-  if (!iceHost) return;
-  if (typeof window.__iceGetState === 'function' && window.__iceGetState() === 'running') return toast('Дождитесь окончания раунда.');
-  iceHost.classList.add('hidden');
-  window.__iceArenaActive = false;
-  if (tg?.BackButton) tg.BackButton.hide();
-}
-iceOpenBtn?.addEventListener('click', () => { if (!initData) return handleNotTelegram(); openIceArenaView(); });
-
-const ringSetViewWithIceGuard = setView;
-setView = function(view){
-  if (view !== 'games') closeIceArenaView();
-  ringSetViewWithIceGuard(view);
-};
