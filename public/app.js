@@ -133,7 +133,7 @@ function setMaintenanceOverlay(enabled, message = "") {
   if (!overlay) return;
   overlay.classList.toggle("hidden", !clientMaintenance);
   if (message) $("#maintenanceOverlay .maintenance-text").textContent = message;
-  ["topupBtn", "betBtn", "withdrawBtn", "openCreateRaffle", "openUpgrade", "openCreateTask"].forEach(id => {
+  ["topupBtn", "betBtn", "withdrawBtn", "openCreateRaffle", "openUpgrade", "openIceArena", "iceJoinBtn", "openCreateTask"].forEach(id => {
     const el = $("#" + id);
     if (el) el.disabled = clientMaintenance;
   });
@@ -671,6 +671,12 @@ function setView(view) {
 
   if (activeKey === "profile") loadProfile();
   if (activeKey === "raffles") loadRaffles();
+  if (activeKey === "games") {
+    $("#gamesList")?.classList.remove("hidden");
+    $("#upgradeGame")?.classList.add("hidden");
+    $("#iceArenaGame")?.classList.add("hidden");
+    window.__iceArenaActive = false;
+  }
 
   document.querySelectorAll(".nav-item").forEach(btn => {
     btn.classList.toggle("active", btn.dataset.view === activeKey);
@@ -1688,16 +1694,19 @@ if (historySearchInput) {
   };
 });
 
-
-// ===== ICE ARENA: original game logic embedded, economy/UI adapted only =====
-function initIceArena() {
+// ---------- ICE ARENA ----------
+// Ice Arena source structure, visuals, animations and physics are retained from the original project.
+// Only its color palette is adapted in styles.css; transport is bridged to RING's existing Socket.IO session.
+window.__RING_SOCKET = socket;
+window.__iceArenaActive = false;
+(function () {
+  const tg = window.Telegram && Telegram.WebApp;
+  if (tg) { tg.ready(); tg.expand && tg.expand(); }
   const $ = id => document.getElementById(id);
   const arena = $('iceArena'), puck = $('icePuck'), zoneMap = $('iceZoneMap'), legend = $('iceLegend'), winnerEl = $('iceWinner');
-  $('bal').textContent = Number(currentBalance || 0).toFixed(2);
   const SPIN = 0, HOLD = 0, FLIGHT = 7000, CLOSE = 1000, PUCK = 24, S = 100, N = FLIGHT / 1000 * 60;
-  let W = arena.clientWidth || 358, me = user ? { id: String(user.id), balance: Number(currentBalance || 0), name: user.first_name || 'Игрок', photo: user.photo_url || '' } : null, skew = 0;
-  let st = { status: 'waiting', players: [], online: 0 };
-  let L = [];
+  let W = arena.clientWidth || 358, me = null, isAdmin = false, ws, skew = 0;
+  let st = { status: 'waiting', players: [], online: 0 }, L = [];
   let plan = null, planFor = null, finished = false, phase = '', cam = null;
 
   const fmt = v => String(+Number(v).toFixed(3));
@@ -1750,7 +1759,7 @@ function initIceArena() {
       it.insertAdjacentHTML('beforeend', `<span>${esc(p.name)}</span><b>${fmt(p.stake)} · ${(p.stake / sum * 100).toFixed(1)}%</b>`);
       legend.append(it);
     });
-    $('icePool').textContent = sum.toFixed(2) + ' TON';
+    $('icePool').textContent = sum.toFixed(2) + ' ⭐';
     $('icePlayerCount').textContent = st.players.length;
     $('online').textContent = st.online || 0;
     if (finished) applyResult();
@@ -1760,7 +1769,7 @@ function initIceArena() {
     st.players.forEach(p => p.zone && p.zone.classList.add(p.id === st.winnerId ? 'winner-zone' : 'loser'));
     const w = st.players.find(p => p.id === st.winnerId); if (!w) return;
     const pool = st.players.reduce((s, p) => s + p.stake, 0);
-    winnerEl.innerHTML = `<div><b>${esc(w.name)}</b><small>Победитель · +${fmt(pool)} TON</small></div>`;
+    winnerEl.innerHTML = `<div><b>${esc(w.name)}</b><small>Победитель · +${fmt(pool)} ⭐</small></div>`;
     winnerEl.classList.add('show');
   }
   function ui() {
@@ -1775,6 +1784,7 @@ function initIceArena() {
     $('stakeInfo').textContent = mine ? 'Ваша: ' + fmt(mine.stake) : '';
   }
   setInterval(ui, 200);
+  window.__iceGetState = () => st.status;
 
   // ---------- детерминированная физика шайбы ----------
   function rng(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
@@ -1846,80 +1856,95 @@ function initIceArena() {
     W = arena.clientWidth || W; place(50, 50); puck.style.visibility = 'hidden';
   }
 
-  // ---------- shared RING Socket.IO network ----------
-  function iceRenderState(m) {
-    skew = Number(m.now || Date.now()) - Date.now();
-    st = { status: String(m.status || 'waiting').toLowerCase(), players: Array.isArray(m.players) ? m.players : [], online: Number(m.online || 0), id: m.id, endsAt: m.endsAt || 0, startAt: m.startAt || 0, seed: m.seed || 0, winnerId: m.winnerId || null, roundNumber: m.roundNumber || null };
-    if (st.status === 'waiting' || st.status === 'countdown') resetVisual();
-    layout(); render();
-  }
-  socket.on('ice_state', iceRenderState);
-  socket.on('ice_bet_accepted', d => { setBalance(d.balance); me = { id: String(d.playerId || me?.id || ''), balance: Number(d.balance || 0) }; ui(); });
-  socket.on('ice_error', d => toast(d?.message || 'Ошибка Ice Arena.'));
-  socket.on('joined', data => { if (data?.playerId) me = me || { id: String(data.playerId), balance: Number(data.balance || 0) }; });
-  socket.on('balance_updated', d => { setBalance(d.balance); if (me) me.balance = Number(d.balance || 0); ui(); });
-
-  $('iceBackBtn').addEventListener('click', () => window.closeIceArena && window.closeIceArena());
-  $('iceJoinBtn').addEventListener('click', () => {
-    const amount = Number($('betAmt').value);
-    if (!Number.isInteger(amount) || amount < 1) return toast('Минимальная ставка 1 ⭐.');
-    if (amount > currentBalance) return toast('Недостаточно Stars на балансе.');
-    socket.emit('ice_bet', { amount });
-  });
-  document.querySelectorAll('#iceScreen .ice-stakes button').forEach(b => b.addEventListener('click', () => { $('betAmt').value = b.dataset.v; }));
-  $('iceHistoryBtn').addEventListener('click', () => openIceHistory());
-  $('iceHistoryClose').addEventListener('click', () => $('iceHistoryModal').classList.remove('show'));
-  $('iceHistoryDetailClose').addEventListener('click', () => $('iceHistoryDetailModal').classList.remove('show'));
-  let iceHistorySearchTimer = null;
-  $('iceHistorySearch').addEventListener('input', e => { clearTimeout(iceHistorySearchTimer); iceHistorySearchTimer=setTimeout(()=>loadIceHistory(e.target.value.trim()),250); });
-  $('iceHistoryModal').addEventListener('click', e => { if(e.target === $('iceHistoryModal')) $('iceHistoryModal').classList.remove('show'); });
-  $('iceHistoryDetailModal').addEventListener('click', e => { if(e.target === $('iceHistoryDetailModal')) $('iceHistoryDetailModal').classList.remove('show'); });
-  ['iceHistoryHash','iceHistorySeed'].forEach(id=>$(id).addEventListener('click', async()=>{ const text=($(id).textContent||'').replace(/^\w+:\s*/,''); try{await navigator.clipboard.writeText(text);toast('Скопировано.');}catch{} }));
-
-  async function openIceHistory(q='') {
-    const modal=$('iceHistoryModal'); modal.classList.add('show');
-    await loadIceHistory(q);
-  }
-  async function loadIceHistory(q='') {
-    const list=$('iceHistoryList'), empty=$('iceHistoryEmpty');
-    try {
-      const r=await fetch(`/api/ice/history?q=${encodeURIComponent(q)}`, {cache:'no-store'}); const data=await r.json().catch(()=>({}));
-      if(!r.ok) throw new Error(data.error || 'Не удалось загрузить историю.');
-      const rows=Array.isArray(data.rounds)?data.rounds:[];
-      empty.style.display=rows.length?'none':'block';
-      list.innerHTML=rows.map(x=>`<button class="ice-history-row" data-round="${x.roundNumber}"><div><b>Ice Arena #${x.roundNumber}</b><span>${formatHistoryDateTime(x.createdAt)} · банк ${Number(x.bank).toFixed(2)} ⭐</span></div><strong>${escapeHtml(x.winnerName || '—')}</strong></button>`).join('');
-      list.querySelectorAll('.ice-history-row').forEach(el=>el.addEventListener('click',()=>openIceHistoryDetail(el.dataset.round)));
-    } catch(e){ empty.textContent=e.message; empty.style.display='block'; }
-  }
-  async function openIceHistoryDetail(n) {
-    try {
-      const r=await fetch(`/api/ice/history/${encodeURIComponent(n)}`, {cache:'no-store'}); const d=await r.json().catch(()=>({}));
-      if(!r.ok) throw new Error(d.error || 'Игра не найдена.');
-      $('iceHistoryDetailTitle').textContent=`Ice Arena #${d.roundNumber}`;
-      $('iceHistoryDetailDate').textContent=formatHistoryDateTime(d.createdAt);
-      $('iceHistoryHash').textContent='Hash: '+String(d.hash||'—');
-      $('iceHistorySeed').textContent='Seed: '+String(d.seed||'—');
-      $('iceHistoryDetailPlayers').innerHTML=(d.players||[]).map(p=>`<div class="ice-history-player ${String(p.id)===String(d.winnerId)?'win':''}"><div><b>${escapeHtml(p.name||'Игрок')}</b><small>${Number(p.bet||0).toFixed(2)} ⭐ · ${Number(p.percentage||0).toFixed(1)}%</small></div><strong>${String(p.id)===String(d.winnerId)?'ПОБЕДА':''}</strong></div>`).join('') || '<div class="ice-hint">Нет участников</div>';
-      $('iceHistoryModal').classList.remove('show'); $('iceHistoryDetailModal').classList.add('show');
-    } catch(e){ toast(e.message); }
-  }
-
-  function requestIceState() { socket.emit('ice_request_state'); }
-  requestIceState();
-}
-
-window.initIceArena = initIceArena;
-
-// Ice Arena card and overlay navigation.
-(function(){
-  const btn=document.getElementById('openIceArena');
-  const screen=document.getElementById('iceScreen');
-  let iceReady=false;
-  window.closeIceArena=function(){ screen.classList.remove('active'); document.body.classList.remove('ice-open'); if (typeof setView==='function') setView('games'); };
-  window.openIceArena=function(){
-    if(!initData) return handleNotTelegram();
-    screen.classList.add('active'); document.body.classList.add('ice-open');
-    if(!iceReady){ window.initIceArena(); iceReady=true; } else { socket.emit('ice_request_state'); }
+  // ---------- сеть ----------
+  // RING adapter: gameplay/rendering/physics above are the original Ice Arena code.
+  const send = m => {
+    const s = window.__RING_SOCKET;
+    if (!s) return;
+    if (m.t === 'bet') s.emit('ice_bet', { amount: Number(m.amount) });
+    else if (m.t === 'history') s.emit('ice_history');
   };
-  if(btn) btn.addEventListener('click', window.openIceArena);
+
+  function connect() {
+    const s = window.__RING_SOCKET;
+    if (!s) { setTimeout(connect, 250); return; }
+    s.on('joined', m => {
+      const u = m?.user || {};
+      me = {
+        id: String(m?.playerId || u.id || ''),
+        name: [u.first_name, u.last_name].filter(Boolean).join(' ') || u.username || String(m?.playerId || ''),
+        photo: u.photo_url || ''
+      };
+      isAdmin = !!m?.isAdmin;
+      $('bal').textContent = fmt(m?.balance ?? 0);
+      ui();
+      s.emit('request_ice_state');
+    });
+    s.on('ice_state', m => {
+      skew = Number(m?.now || Date.now()) - Date.now();
+      st = {
+        status: String(m?.status || 'WAITING').toLowerCase(),
+        players: Array.isArray(m?.players) ? m.players.map(p => ({
+          id: String(p.id), name: p.name, photo: p.avatar || p.photo || '', color: p.color,
+          stake: Number(p.bet ?? p.stake ?? 0), sx: Number(p.sx), sy: Number(p.sy)
+        })) : [],
+        online: Number(m?.online || 0),
+        endsAt: Number(m?.countdownEndsAt || 0),
+        startAt: Number(m?.startAt || 0),
+        seed: Number(m?.seed || 0),
+        id: String(m?.roomId || ''),
+        winnerId: m?.winnerId == null ? null : String(m.winnerId)
+      };
+      if (st.status === 'waiting' || st.status === 'countdown') resetVisual();
+      layout(); render();
+    });
+    s.on('balance_updated', m => { $('bal').textContent = fmt(m?.balance ?? 0); ui(); });
+    s.on('ice_history_result', m => renderHistory(m?.list || []));
+    s.on('error_message', m => toast(m));
+    s.emit('request_ice_state');
+  }
+  connect();
+
+  // ---------- ставки ----------
+  $('iceJoinBtn').addEventListener('click', () => send({ t: 'bet', amount: Number($('betAmt').value) }));
+  document.querySelectorAll('.ice-stakes button').forEach(b => b.addEventListener('click', () => { $('betAmt').value = b.dataset.v; }));
+
+  // ---------- история (вместо админ-панели: баланс ⭐ общий с RING) ----------
+  function renderHistory(list) {
+    $('iceHistoryEmpty').style.display = list.length ? 'none' : '';
+    $('iceHistoryList').innerHTML = list.map(h => {
+      const win = Number(h.amount) > 0;
+      const dt = h.createdAt ? new Date(h.createdAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+      return `<div class="adm-row ${win ? 'win' : 'lose'}"><span>${win ? 'Победа' : 'Ставка'}<small>${dt}</small></span><b>${win ? '+' : ''}${fmt(h.amount)} ⭐</b></div>`;
+    }).join('');
+  }
+  $('iceHistoryBtn').addEventListener('click', () => { $('iceHistoryModal').classList.add('show'); send({ t: 'history' }); });
+  $('iceHistoryClose').addEventListener('click', () => $('iceHistoryModal').classList.remove('show'));
+  $('iceHistoryModal').addEventListener('click', e => { if (e.target === $('iceHistoryModal')) $('iceHistoryModal').classList.remove('show'); });
 })();
+
+// Open/close wrapper belongs to the host Mini App, not the Arena UI itself.
+const iceHost = document.getElementById('iceArenaGame');
+const iceOpenBtn = document.getElementById('openIceArena');
+function openIceArenaView(){
+  if (!iceHost) return;
+  document.getElementById('gamesList')?.classList.add('hidden');
+  document.getElementById('upgradeGame')?.classList.add('hidden');
+  iceHost.classList.remove('hidden');
+  window.__iceArenaActive = true;
+  if (tg?.BackButton) { tg.BackButton.show(); tg.BackButton.offClick(closeIceArenaView); tg.BackButton.onClick(closeIceArenaView); }
+}
+function closeIceArenaView(){
+  if (!iceHost) return;
+  if (typeof window.__iceGetState === 'function' && window.__iceGetState() === 'running') return toast('Дождитесь окончания раунда.');
+  iceHost.classList.add('hidden');
+  window.__iceArenaActive = false;
+  if (tg?.BackButton) tg.BackButton.hide();
+}
+iceOpenBtn?.addEventListener('click', () => { if (!initData) return handleNotTelegram(); openIceArenaView(); });
+
+const ringSetViewWithIceGuard = setView;
+setView = function(view){
+  if (view !== 'games') closeIceArenaView();
+  ringSetViewWithIceGuard(view);
+};
