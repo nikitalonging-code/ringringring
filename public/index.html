@@ -170,20 +170,14 @@
       </section>
 
       <section class="tasks-card">
-        <div class="tasks-title">ЗАДАНИЯ</div>
-        <div class="tasks-subtitle">Подпишитесь на канал и получите Stars.</div>
-        <div id="tasksList" class="tasks-list"></div>
-        <div class="task-admin-create task-create-public">
-          <div class="promo-admin-title">СОЗДАТЬ СВОЁ ЗАДАНИЕ</div>
-          <div class="task-admin-hint">Бот должен быть администратором указанного канала.</div>
-          <input id="adminTaskChannel" placeholder="@username_канала" autocomplete="off">
-          <div class="task-admin-row">
-            <input id="adminTaskReward" type="number" min="1" step="1" placeholder="Награда ⭐">
-            <input id="adminTaskActivations" type="number" min="1" step="1" placeholder="Активации">
+        <div class="tasks-head-row">
+          <div>
+            <div class="tasks-title">ЗАДАНИЯ</div>
+            <div class="tasks-subtitle">Подпишитесь на канал и получите Stars.</div>
           </div>
-          <div class="task-admin-price">Стоимость: <b id="adminTaskPrice">0.00 ⭐</b></div>
-          <button id="createTask">СОЗДАТЬ ЗАДАНИЕ</button>
+          <button class="task-create-open" id="openCreateTask">＋ СВОЁ ЗАДАНИЕ</button>
         </div>
+        <div id="tasksList" class="tasks-list"></div>
       </section>
 
       <section class="promo-card">
@@ -207,6 +201,7 @@
         <button class="admin-tab" data-admin-tab="withdrawals">Выводы</button>
         <button class="admin-tab" data-admin-tab="referrals">Рефералы</button>
         <button class="admin-tab" data-admin-tab="promos">Промокоды</button>
+        <button class="admin-tab" data-admin-tab="system">Тех. работы</button>
       </div>
 
       <div class="admin-tab-panel" id="adminTabUsers">
@@ -231,10 +226,20 @@
             <input id="adminPromoBonus" type="number" min="1" step="1" inputmode="numeric" placeholder="Бонус ⭐">
             <input id="adminPromoUses" type="number" min="1" step="1" inputmode="numeric" placeholder="Лимит активаций">
             <input id="adminPromoWager" type="number" min="0" step="0.5" inputmode="decimal" placeholder="Вагер x (0 — без)">
+            <input id="adminPromoDeposit" type="number" min="0" step="1" inputmode="numeric" placeholder="Мин. депозит ⭐ (0 — без)">
             <button id="createPromo">СОЗДАТЬ</button>
           </div>
         </div>
         <div id="adminPromos" class="admin-promos"></div>
+      </div>
+
+      <div class="admin-tab-panel hidden" id="adminTabSystem">
+        <div class="system-card">
+          <div class="promo-admin-title">ТЕХНИЧЕСКИЕ РАБОТЫ</div>
+          <div class="system-status" id="maintenanceStatus">Проверка статуса…</div>
+          <div class="system-hint">При закрытии обычные пользователи увидят экран технических работ. Администраторы сохранят доступ.</div>
+          <button id="toggleMaintenance" class="maintenance-toggle">ЗАКРЫТЬ ПРИЛОЖЕНИЕ</button>
+        </div>
       </div>
     </section>
 
@@ -372,6 +377,22 @@
     </div>
   </div>
 
+  <div class="modal hidden" id="taskCreateModal">
+    <div class="modal-card task-create-modal-card">
+      <div class="sheet-handle"></div>
+      <button class="modal-close" id="taskCreateClose">×</button>
+      <h3>СОЗДАТЬ СВОЁ ЗАДАНИЕ</h3>
+      <div class="task-admin-hint">Бот должен быть администратором указанного канала.</div>
+      <input id="adminTaskChannel" placeholder="@username_канала" autocomplete="off">
+      <div class="task-admin-row">
+        <input id="adminTaskReward" type="number" min="1" step="1" placeholder="Награда ⭐">
+        <input id="adminTaskActivations" type="number" min="1" step="1" placeholder="Активации">
+      </div>
+      <div class="task-admin-price">Стоимость: <b id="adminTaskPrice">0.00 ⭐</b></div>
+      <button id="createTask">СОЗДАТЬ ЗАДАНИЕ</button>
+    </div>
+  </div>
+
   <div class="modal hidden" id="raffleCreateModal">
     <div class="modal-card raffle-modal-card">
       <div class="sheet-handle"></div>
@@ -422,6 +443,15 @@
       <div class="freebet-amount" id="freebetAmount">+0 ⭐</div>
       <div class="freebet-info" id="freebetInfo">Фрибет зачислен на баланс.</div>
       <button class="confirm" id="freebetCloseBtn">ПОНЯТНО</button>
+    </div>
+  </div>
+
+  <div class="maintenance-overlay hidden" id="maintenanceOverlay">
+    <div class="maintenance-card">
+      <div class="maintenance-icon">🔧</div>
+      <div class="maintenance-title">ТЕХНИЧЕСКИЕ РАБОТЫ</div>
+      <div class="maintenance-text">Приложение временно закрыто. Скоро всё снова заработает.</div>
+      <div class="maintenance-subtext">Попробуйте зайти позже.</div>
     </div>
   </div>
 

@@ -13,6 +13,18 @@ const io = new Server(server, { cors: { origin: "*" } });
 
 app.use(express.json({ limit: "512kb" }));
 app.use(express.urlencoded({ extended: false }));
+
+// Runtime maintenance lock: administrators can still use the app/admin API,
+// while normal users receive a clean 503 with a maintenance flag.
+app.use('/api', async (req, res, next) => {
+  if (!maintenanceMode || req.method === 'OPTIONS' || isPublicMaintenanceBypass(req.path)) return next();
+  try {
+    const checked = validateTelegramInitData(req.headers['x-telegram-init-data']);
+    if (checked.ok && isAdmin(checked.user.id)) return next();
+  } catch {}
+  return res.status(503).json({ error: maintenanceMessage(), maintenance: true });
+});
+
 app.get("/tonconnect-manifest.json", (req, res) => {
   const base = String(process.env.APP_PUBLIC_URL || `${req.protocol}://${req.get("host")}`).replace(/\/$/, "");
   res.json({
@@ -86,6 +98,8 @@ const COLORS = [
   "#ff5ce1", "#35e0d0", "#ffb347", "#5b7cfa", "#e6ff4f",
   "#7dffce", "#f15cff", "#ffde59", "#6ca7ff", "#ff8d6b"
 ];
+
+let maintenanceMode = false;
 
 const state = {
   roomId: crypto.randomUUID(),
@@ -286,6 +300,20 @@ async function initDb() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
+    `CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS support_tickets (
+      id UUID PRIMARY KEY,
+      telegram_user_id TEXT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed')),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      closed_at TIMESTAMPTZ,
+      closed_by TEXT
+    )`,
+    `CREATE INDEX IF NOT EXISTS support_tickets_user_idx ON support_tickets(telegram_user_id, created_at DESC)`,
     `CREATE TABLE IF NOT EXISTS account_security_signals (
       telegram_user_id TEXT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
       fingerprint_hash TEXT NOT NULL DEFAULT '',
@@ -481,6 +509,8 @@ async function initDb() {
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS games_won INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS total_wagered NUMERIC(20,2) NOT NULL DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS wager_remaining NUMERIC(20,2) NOT NULL DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS total_deposited NUMERIC(20,2) NOT NULL DEFAULT 0`,
+    `ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS required_deposit NUMERIC(20,2) NOT NULL DEFAULT 0`,
     `ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS wager NUMERIC(10,2) NOT NULL DEFAULT 0`,
     `ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS wallet_address TEXT NOT NULL DEFAULT ''`,
     `ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ`,
@@ -515,6 +545,70 @@ async function initDb() {
       console.error("DB migration statement failed:", e.message, "\nSQL:", sql.split("\n")[0].trim());
     }
   }
+  try {
+    await pool.query(`
+      UPDATE users u
+      SET total_deposited = COALESCE((
+        SELECT SUM(bt.amount)
+        FROM balance_transactions bt
+        WHERE bt.telegram_user_id=u.telegram_id
+          AND bt.type IN ('stars_topup','ton_topup')
+          AND bt.amount > 0
+      ), 0)
+      WHERE COALESCE(u.total_deposited, 0) = 0
+    `);
+  } catch (e) {
+    console.error("Deposit total backfill failed:", e.message);
+  }
+}
+
+async function loadMaintenanceMode() {
+  if (!pool) return;
+  try {
+    const r = await pool.query(`SELECT value FROM app_settings WHERE key='maintenance_mode'`);
+    maintenanceMode = String(r.rows[0]?.value || '').toLowerCase() === 'true';
+  } catch (e) {
+    console.error("Maintenance state load failed:", e.message);
+    maintenanceMode = false;
+  }
+}
+
+async function setMaintenanceMode(enabled, adminId) {
+  requireDatabase();
+  const value = enabled ? 'true' : 'false';
+  await pool.query(
+    `INSERT INTO app_settings(key,value,updated_at) VALUES ('maintenance_mode',$1,NOW())
+     ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()`,
+    [value]
+  );
+  maintenanceMode = !!enabled;
+  io.emit('maintenance_changed', { enabled: maintenanceMode });
+  return { enabled: maintenanceMode, changedBy: String(adminId || '') };
+}
+
+async function maintenanceStatusForRequest(req) {
+  let admin = false;
+  const raw = req.headers['x-telegram-init-data'] || '';
+  if (raw) {
+    const checked = validateTelegramInitData(raw);
+    admin = !!(checked.ok && isAdmin(checked.user.id));
+  }
+  return { enabled: maintenanceMode, isAdmin: admin };
+}
+
+function isPublicMaintenanceBypass(pathname) {
+  return [
+    '/system/status',
+    '/support/webhook',
+    '/support/config',
+    '/telegram/webhook',
+    '/telegram/status',
+    '/telegram/webhook-status'
+  ].includes(pathname) || pathname.startsWith('/admin/');
+}
+
+function maintenanceMessage() {
+  return 'Приложение временно закрыто на технические работы. Попробуйте зайти позже.';
 }
 
 function hashSecurityValue(value) {
@@ -718,7 +812,7 @@ async function creditBalance(userId, amount, client = pool, meta = {}) {
   return balanceAfter;
 }
 
-async function adjustAdminBalance(targetId, delta, adminId, description) {
+async function adjustAdminBalance(targetId, delta, adminId, description, wagerMultiplier = 0) {
   requireDatabase();
   const client = await pool.connect();
   try {
@@ -737,11 +831,18 @@ async function adjustAdminBalance(targetId, delta, adminId, description) {
       [String(targetId), after]
     );
     const balanceAfter = Number(updated.rows[0].balance);
+    const wagerX = Number(wagerMultiplier || 0);
+    if (delta > 0 && wagerX > 0) {
+      await client.query(
+        `UPDATE users SET wager_remaining=wager_remaining+$2::numeric, updated_at=NOW() WHERE telegram_id=$1`,
+        [String(targetId), Number(delta) * wagerX]
+      );
+    }
     await client.query(
       `INSERT INTO balance_transactions
        (telegram_user_id, type, amount, balance_after, description, admin_id)
        VALUES ($1,$2,$3,$4,$5,$6)`,
-      [String(targetId), delta >= 0 ? "admin_credit" : "admin_debit", Number(delta), balanceAfter, description || "Изменение администратором", String(adminId)]
+      [String(targetId), delta >= 0 ? "admin_credit" : "admin_debit", Number(delta), balanceAfter, `${description || "Изменение администратором"}${delta > 0 && Number(wagerMultiplier || 0) > 0 ? ` · вагер x${Number(wagerMultiplier)}` : ""}`, String(adminId)]
     );
     await client.query("COMMIT");
     invalidateUserCache(targetId);
@@ -1079,6 +1180,10 @@ io.on("connection", socket => {
     try {
       const session = await authenticatedUserFromInitData(data?.initData, data?.referralCode);
       const tgUser = session.telegram;
+      if (maintenanceMode && !isAdmin(tgUser.id)) {
+        socket.emit("maintenance", { enabled: true, message: maintenanceMessage() });
+        return;
+      }
       const socketIp = String(socket.handshake?.headers?.['x-forwarded-for'] || '').split(',')[0].trim() || String(socket.handshake?.address || '');
       recordSecuritySignal(tgUser.id, {
         fingerprint: data?.clientFingerprint,
@@ -1114,6 +1219,7 @@ io.on("connection", socket => {
   socket.on("place_bet", async data => {
     try {
       const id = socket.data.playerId;
+      if (maintenanceMode && !isAdmin(id)) throw new Error(maintenanceMessage());
       if (!id) throw new Error("Авторизация Telegram не выполнена.");
       const dbUser = await getUser(id);
       if (!dbUser || dbUser.banned) throw new Error("Ваш аккаунт заблокирован в приложении.");
@@ -1128,6 +1234,7 @@ io.on("connection", socket => {
   socket.on("upgrade_spin", async data => {
     try {
       const id = socket.data.playerId;
+      if (maintenanceMode && !isAdmin(id)) throw new Error(maintenanceMessage());
       if (!id) throw new Error("Авторизация Telegram не выполнена.");
       const bet = Number(data?.bet);
       const target = Number(data?.target);
@@ -1149,6 +1256,15 @@ io.on("connection", socket => {
       broadcast();
     }
   });
+});
+
+app.get("/api/system/status", async (req, res) => {
+  try {
+    const status = await maintenanceStatusForRequest(req);
+    res.json({ ok: true, maintenance: status.enabled, isAdmin: status.isAdmin, message: maintenanceMessage() });
+  } catch (e) {
+    res.json({ ok: true, maintenance: maintenanceMode, isAdmin: false, message: maintenanceMessage() });
+  }
 });
 
 app.get("/api/me", async (req, res) => {
@@ -1217,6 +1333,19 @@ app.post("/api/stars/create-invoice", async (req, res) => {
   }
 });
 
+
+async function notifyBalanceTopup(userId, amount, method = "Пополнение") {
+  const appUrl = buildMiniAppOpenUrl();
+  const reply_markup = appUrl ? {
+    inline_keyboard: [[{ text: "🎮 ИГРАТЬ", web_app: { url: appUrl } }]]
+  } : undefined;
+  await telegramApi("sendMessage", {
+    chat_id: String(userId),
+    text: `✅ <b>Баланс пополнен</b>\n\n+${Number(amount).toFixed(2)} ⭐\nСпособ: ${method}`,
+    parse_mode: "HTML",
+    ...(reply_markup ? { reply_markup } : {})
+  });
+}
 
 // ---------------- TELEGRAM BOT ----------------
 const freebetWizard = new Map();
@@ -1548,27 +1677,58 @@ async function sendSupportRequestToAdmins(message) {
   const admins = getSupportAdminIds();
   if (!admins.length) return;
   const from = message?.from || {};
+  const userId = String(from.id || "");
   const username = from.username ? `@${from.username}` : "без username";
   const name = [from.first_name, from.last_name].filter(Boolean).join(" ") || "Пользователь";
-  const header = `🆘 <b>Новый запрос в поддержку</b>\n\n👤 ${escapeHtmlTelegram(name)}\n🔗 ${escapeHtmlTelegram(username)}\n🆔 <code>${escapeHtmlTelegram(from.id)}</code>`;
+
+  let ticketId = supportOpenTickets.get(userId);
+  const isNewTicket = !ticketId;
+  if (!ticketId) {
+    ticketId = crypto.randomUUID();
+    if (pool && userId) {
+      try {
+        await pool.query(
+          `INSERT INTO support_tickets (id, telegram_user_id, status) VALUES ($1,$2,'open')`,
+          [ticketId, userId]
+        );
+      } catch (e) {
+        console.error("Support ticket insert error:", e.message);
+      }
+    }
+    supportOpenTickets.set(userId, ticketId);
+  }
+
+  const header = `${isNewTicket ? "🆘 <b>Новая заявка в поддержку</b>" : "💬 <b>Новое сообщение по заявке</b>"}\n\n` +
+    `🎫 <code>${escapeHtmlTelegram(ticketId.slice(0, 8))}</code>\n` +
+    `👤 ${escapeHtmlTelegram(name)}\n` +
+    `🔗 ${escapeHtmlTelegram(username)}\n` +
+    `🆔 <code>${escapeHtmlTelegram(userId)}</code>`;
   await Promise.all(admins.map(async adminId => {
     try {
       const sentHeader = await supportTelegramApi("sendMessage", {
         chat_id: adminId,
         text: header,
         parse_mode: "HTML",
-        reply_markup: { inline_keyboard: [[{ text: "↩️ Ответить", callback_data: `support:reply:${String(from.id)}` }]] }
+        reply_markup: {
+          inline_keyboard: [[
+            { text: "↩️ Ответить", callback_data: `support:reply:${userId}` },
+            { text: "✅ Закрыть", callback_data: `support:close:${userId}` }
+          ]]
+        }
       });
-      await supportTelegramApi("copyMessage", {
-        chat_id: adminId,
-        from_chat_id: message.chat.id,
-        message_id: message.message_id,
-        reply_to_message_id: sentHeader.message_id
-      });
+      if (message?.chat?.id && message?.message_id) {
+        await supportTelegramApi("copyMessage", {
+          chat_id: adminId,
+          from_chat_id: message.chat.id,
+          message_id: message.message_id,
+          reply_to_message_id: sentHeader.message_id
+        });
+      }
     } catch (e) {
       console.error(`Support forward error (${adminId}):`, e.message);
     }
   }));
+  return { ticketId, isNewTicket };
 }
 
 function escapeHtmlTelegram(value) {
@@ -1581,35 +1741,85 @@ function escapeHtmlTelegram(value) {
 
 async function handleSupportBotCallback(callback) {
   const data = String(callback?.data || "");
-  const match = data.match(/^support:reply:(\d+)$/);
-  if (!match) return false;
   const adminId = String(callback?.from?.id || "");
-  if (!getSupportAdminIds().includes(adminId)) {
-    await supportTelegramApi("answerCallbackQuery", { callback_query_id: callback.id, text: "Нет доступа." }).catch(() => {});
+  if (data === "support:create") {
+    supportTicketWizard.set(adminId, true);
+    await supportTelegramApi("answerCallbackQuery", { callback_query_id: callback.id, text: "Опишите проблему." }).catch(() => {});
+    await supportTelegramApi("sendMessage", { chat_id: callback.message.chat.id, text: "✍️ Напишите одним или несколькими сообщениями, что произошло. После отправки заявка уйдёт оператору." });
     return true;
   }
-  const userId = match[1];
-  supportReplyWizard.set(adminId, userId);
-  await supportTelegramApi("answerCallbackQuery", { callback_query_id: callback.id, text: "Напиши сообщение — оно уйдёт пользователю." }).catch(() => {});
-  await supportTelegramApi("sendMessage", { chat_id: adminId, text: `✍️ Режим ответа включён для пользователя ${userId}. Отправь следующее сообщение.` });
-  return true;
+  const replyMatch = data.match(/^support:reply:(\d+)$/);
+  if (replyMatch) {
+    if (!getSupportAdminIds().includes(adminId)) {
+      await supportTelegramApi("answerCallbackQuery", { callback_query_id: callback.id, text: "Нет доступа." }).catch(() => {});
+      return true;
+    }
+    const userId = replyMatch[1];
+    supportReplyWizard.set(adminId, userId);
+    await supportTelegramApi("answerCallbackQuery", { callback_query_id: callback.id, text: "Режим ответа включён." }).catch(() => {});
+    await supportTelegramApi("sendMessage", { chat_id: adminId, text: `✍️ Ответ пользователю ${userId}. Можно отправлять несколько сообщений. Для выхода: /cancel` });
+    return true;
+  }
+  const closeMatch = data.match(/^support:close:(\d+)$/);
+  if (closeMatch) {
+    if (!getSupportAdminIds().includes(adminId)) {
+      await supportTelegramApi("answerCallbackQuery", { callback_query_id: callback.id, text: "Нет доступа." }).catch(() => {});
+      return true;
+    }
+    const userId = closeMatch[1];
+    supportReplyWizard.delete(adminId);
+    supportTicketWizard.delete(userId);
+    const ticketId = supportOpenTickets.get(userId);
+    supportOpenTickets.delete(userId);
+    if (ticketId && pool) {
+      await pool.query(`UPDATE support_tickets SET status='closed', closed_at=NOW(), closed_by=$2 WHERE id=$1`, [ticketId, adminId]).catch(() => {});
+    }
+    await supportTelegramApi("answerCallbackQuery", { callback_query_id: callback.id, text: "Заявка закрыта." }).catch(() => {});
+    await supportTelegramApi("sendMessage", { chat_id: userId, text: "✅ Заявка закрыта оператором. Чтобы открыть новую, нажмите кнопку «Создать заявку»." }).catch(() => {});
+    return true;
+  }
+  return false;
 }
 
 async function handleSupportBotMessage(message) {
   if (!message?.chat?.id) return false;
   const userId = String(message.from?.id || "");
   if (!userId) return false;
+  const text = String(message.text || "").trim();
   const admins = getSupportAdminIds();
+
+  // Operators also need a visible response to /start so they can verify the
+  // support bot is alive. Their other messages remain in operator/reply mode.
+  if (/^\/start(?:@\w+)?$/i.test(text) && admins.includes(userId)) {
+    supportReplyWizard.delete(userId);
+    await supportTelegramApi("sendMessage", {
+      chat_id: message.chat.id,
+      text: "🛠 <b>Панель оператора поддержки</b>\n\nКогда пользователь создаст заявку, сюда придёт сообщение с кнопками «Ответить» и «Закрыть».",
+      parse_mode: "HTML"
+    });
+    return true;
+  }
+  if (/^\/help(?:@\w+)?$/i.test(text) && admins.includes(userId)) {
+    await supportTelegramApi("sendMessage", {
+      chat_id: message.chat.id,
+      text: "↩️ Нажмите «Ответить» в сообщении заявки. Можно отправлять несколько сообщений. Для выхода используйте /cancel."
+    });
+    return true;
+  }
+
   if (admins.includes(userId)) {
+    if (/^\/cancel(?:@\w+)?$/i.test(text)) {
+      supportReplyWizard.delete(userId);
+      await supportTelegramApi("sendMessage", { chat_id: message.chat.id, text: "✅ Режим ответа выключен." });
+      return true;
+    }
     const target = supportReplyWizard.get(userId);
-    if (target && message.chat.type === "private" && !String(message.text || "").startsWith("/")) {
+    if (target && message.chat.type === "private" && !text.startsWith("/")) {
       await supportTelegramApi("copyMessage", {
         chat_id: target,
         from_chat_id: message.chat.id,
         message_id: message.message_id
       });
-      supportReplyWizard.delete(userId);
-      await supportTelegramApi("sendMessage", { chat_id: userId, text: "✅ Ответ отправлен пользователю." });
       return true;
     }
     return false;
@@ -1617,24 +1827,38 @@ async function handleSupportBotMessage(message) {
 
   if (message.chat.type !== "private") return false;
   await ensureSupportBotUser(message.from);
-  if (/^\/start(?:@\w+)?$/i.test(String(message.text || "").trim())) {
+  if (/^\/start(?:@\w+)?$/i.test(text)) {
+    supportTicketWizard.delete(userId);
     await supportTelegramApi("sendMessage", {
       chat_id: message.chat.id,
-      text: "👋 <b>Поддержка RING</b>\n\nНапишите ваш вопрос одним сообщением. Мы передадим его оператору.",
-      parse_mode: "HTML"
+      text: "👋 <b>Поддержка RING</b>\n\nЗдесь можно создать заявку и связаться с оператором.",
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: [[{ text: "🆘 СОЗДАТЬ ЗАЯВКУ", callback_data: "support:create" }]] }
     });
     return true;
   }
-  if (/^\/help(?:@\w+)?$/i.test(String(message.text || "").trim())) {
+  if (/^\/help(?:@\w+)?$/i.test(text)) {
     await supportTelegramApi("sendMessage", {
       chat_id: message.chat.id,
-      text: "💬 Просто отправьте сюда свой вопрос, и он поступит в поддержку.",
-      parse_mode: "HTML"
+      text: "💬 Нажмите «Создать заявку», затем отправьте описание проблемы.",
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: [[{ text: "🆘 СОЗДАТЬ ЗАЯВКУ", callback_data: "support:create" }]] }
     });
     return true;
   }
-  await sendSupportRequestToAdmins(message);
-  await supportTelegramApi("sendMessage", { chat_id: message.chat.id, text: "✅ Запрос отправлен в поддержку. Ожидайте ответа." });
+
+  if (supportOpenTickets.has(userId) || supportTicketWizard.has(userId)) {
+    if (!supportOpenTickets.has(userId)) supportTicketWizard.delete(userId);
+    await sendSupportRequestToAdmins(message);
+    await supportTelegramApi("sendMessage", { chat_id: message.chat.id, text: "✅ Сообщение отправлено оператору. Можно продолжать писать сюда, пока заявка открыта." });
+    return true;
+  }
+
+  await supportTelegramApi("sendMessage", {
+    chat_id: message.chat.id,
+    text: "Сначала создайте заявку в поддержку.",
+    reply_markup: { inline_keyboard: [[{ text: "🆘 СОЗДАТЬ ЗАЯВКУ", callback_data: "support:create" }]] }
+  });
   return true;
 }
 
@@ -1652,15 +1876,18 @@ async function configureSupportBot() {
     await supportTelegramApi("setWebhook", {
       url: `${appUrl}/api/support/webhook`,
       ...(secret ? { secret_token: secret } : {}),
-      allowed_updates: ["message", "callback_query"]
+      allowed_updates: ["message", "callback_query"],
+      drop_pending_updates: false
     });
+    await supportTelegramApi("deleteMyCommands", {});
     await supportTelegramApi("setMyCommands", {
       commands: [
         { command: "start", description: "Начать" },
         { command: "help", description: "Помощь" }
       ]
     });
-    console.log(`Support webhook configured: ${appUrl}/api/support/webhook`);
+    const hook = await supportTelegramApi("getWebhookInfo", {});
+    console.log(`Support webhook configured: ${hook.url || appUrl + '/api/support/webhook'}${hook.last_error_message ? ` | last error: ${hook.last_error_message}` : ''}`);
   } catch (e) {
     console.error("Support Telegram setup error:", e.message);
   }
@@ -1812,6 +2039,8 @@ let botInfoCacheAt = 0;
 let supportBotInfoCache = null;
 let supportBotInfoCacheAt = 0;
 const supportReplyWizard = new Map();
+const supportTicketWizard = new Map();
+const supportOpenTickets = new Map();
 
 async function getBotInfoCached() {
   if (botInfoCache && Date.now() - botInfoCacheAt < 60 * 60 * 1000) return botInfoCache;
@@ -2574,7 +2803,12 @@ app.post("/api/telegram/webhook", async (req, res) => {
             [String(tgUser.id), tgUser.username || "", tgUser.first_name || "Игрок"]
           );
           const r = await client.query(
-            `UPDATE users SET balance=(balance+$2::numeric), updated_at=NOW() WHERE telegram_id=$1 RETURNING balance::float AS balance`,
+            `UPDATE users
+             SET balance=(balance+$2::numeric),
+                 total_deposited=total_deposited+$2::numeric,
+                 updated_at=NOW()
+             WHERE telegram_id=$1
+             RETURNING balance::float AS balance, total_deposited::float AS total_deposited`,
             [String(tgUser.id), Number(payment.total_amount)]
           );
           const balanceAfter = Number(r.rows[0].balance);
@@ -2608,6 +2842,7 @@ app.post("/api/telegram/webhook", async (req, res) => {
           }
           await client.query("COMMIT");
           io.to(`user:${tgUser.id}`).emit("balance_updated", { balance: balanceAfter });
+          notifyBalanceTopup(tgUser.id, Number(payment.total_amount), "Telegram Stars").catch(e => console.error("Top-up DM error:", e.message));
           return res.json({ ok: true, credited: true });
         }
         await client.query("COMMIT");
@@ -2781,18 +3016,35 @@ app.post("/api/gram/topup-intent", async (req, res) => {
 });
 
 function tonMessageComment(message) {
-  const decoded = message?.message_content?.decoded || message?.decoded || {};
-  return String(decoded.text || decoded.comment || "").trim();
+  const exact = /^RING:[0-9a-f-]{36}$/i;
+  const seen = new Set();
+  const queue = [message];
+  while (queue.length) {
+    const value = queue.shift();
+    if (value == null) continue;
+    if (typeof value === 'string') {
+      const text = value.trim();
+      if (exact.test(text)) return text;
+      continue;
+    }
+    if (typeof value !== 'object' || seen.has(value)) continue;
+    seen.add(value);
+    for (const [key, child] of Object.entries(value)) {
+      if (/comment|text|decoded|body|payload|message_content|decoded_body|msg_data/i.test(key)) queue.push(child);
+      else if (child && typeof child === 'object') queue.push(child);
+    }
+  }
+  return "";
 }
 
 async function settleTonTopups() {
-  if (!pool || !process.env.TONAPI_KEY) return;
+  if (!pool) return;
   const recipient = String(process.env.TON_TOPUP_WALLET_ADDRESS || process.env.TON_CONNECT_WALLET_ADDRESS || "").trim();
   if (!recipient) return;
   try {
-    const response = await fetch(`https://tonapi.io/v2/blockchain/accounts/${encodeURIComponent(recipient)}/transactions?limit=50`, {
-      headers: { Authorization: `Bearer ${process.env.TONAPI_KEY}` }
-    });
+    const headers = {};
+    if (process.env.TONAPI_KEY) headers.Authorization = `Bearer ${process.env.TONAPI_KEY}`;
+    const response = await fetch(`https://tonapi.io/v2/blockchain/accounts/${encodeURIComponent(recipient)}/transactions?limit=100`, { headers });
     if (!response.ok) throw new Error(`TonAPI ${response.status}`);
     const data = await response.json();
     for (const transaction of data.transactions || []) {
@@ -2818,11 +3070,16 @@ async function settleTonTopups() {
           description: `Автопополнение TON, транзакция ${hash}`
         });
         await client.query(
+          `UPDATE users SET total_deposited=total_deposited+$2::numeric, updated_at=NOW() WHERE telegram_id=$1`,
+          [String(row.telegram_user_id), Number(row.stars)]
+        );
+        await client.query(
           `UPDATE ton_topup_intents SET status='credited', transaction_hash=$2, credited_at=NOW() WHERE id=$1`,
           [row.id, hash]
         );
         await client.query("COMMIT");
         io.to(`user:${row.telegram_user_id}`).emit("balance_updated", { balance });
+        notifyBalanceTopup(row.telegram_user_id, Number(row.stars), "GRAM / TON").catch(e => console.error("GRAM top-up DM error:", e.message));
       } catch (e) {
         try { await client.query("ROLLBACK"); } catch {}
         console.error("TON top-up settlement error:", e.message);
@@ -3059,7 +3316,7 @@ async function redeemPromoCode(userId, rawCode) {
   try {
     await client.query("BEGIN");
     const promo = await client.query(
-      `SELECT id, code, bonus::float AS bonus, wager::float AS wager, max_uses, uses_count, active
+      `SELECT id, code, bonus::float AS bonus, wager::float AS wager, required_deposit::float AS required_deposit, max_uses, uses_count, active
        FROM promo_codes WHERE code=$1 FOR UPDATE`,
       [code]
     );
@@ -3067,6 +3324,12 @@ async function redeemPromoCode(userId, rawCode) {
     const p = promo.rows[0];
     if (!p.active) throw new Error("Этот промокод отключён.");
     if (Number(p.uses_count) >= Number(p.max_uses)) throw new Error("Лимит активаций промокода исчерпан.");
+    const userDeposit = await client.query(`SELECT total_deposited::float AS total_deposited FROM users WHERE telegram_id=$1 FOR UPDATE`, [String(userId)]);
+    const totalDeposited = Number(userDeposit.rows[0]?.total_deposited || 0);
+    const requiredDeposit = Number(p.required_deposit || 0);
+    if (requiredDeposit > totalDeposited) {
+      throw new Error(`Для активации промокода нужен депозит от ${requiredDeposit.toFixed(2)} ⭐. Ваш депозит: ${totalDeposited.toFixed(2)} ⭐.`);
+    }
 
     const already = await client.query(
       `SELECT 1 FROM promo_redemptions WHERE promo_code_id=$1 AND telegram_user_id=$2`,
@@ -3108,22 +3371,24 @@ async function redeemPromoCode(userId, rawCode) {
   }
 }
 
-async function createPromoCode(adminId, rawCode, bonus, maxUses, wager) {
+async function createPromoCode(adminId, rawCode, bonus, maxUses, wager, requiredDeposit) {
   requireDatabase();
   const code = normalizePromoCode(rawCode);
   if (!/^[A-Z0-9_-]{3,32}$/.test(code)) throw new Error("Промокод должен содержать 3–32 символа: A-Z, 0-9, _ или -.");
   const amount = Number(bonus);
   const uses = Number(maxUses);
   const wagerMultiplier = wager === undefined || wager === null || wager === "" ? 0 : Number(wager);
+  const depositRequirement = requiredDeposit === undefined || requiredDeposit === null || requiredDeposit === "" ? 0 : Number(requiredDeposit);
   if (!Number.isInteger(amount) || amount <= 0 || amount > 1_000_000_000) throw new Error("Бонус должен быть целым числом от 1 до 1 000 000 000.");
   if (!Number.isInteger(uses) || uses <= 0 || uses > 1_000_000_000) throw new Error("Количество активаций должно быть от 1 до 1 000 000 000.");
   if (!Number.isFinite(wagerMultiplier) || wagerMultiplier < 0 || wagerMultiplier > 1000) throw new Error("Вагер должен быть числом от 0 до 1000 (0 — без вагера).");
+  if (!Number.isFinite(depositRequirement) || depositRequirement < 0 || depositRequirement > 1_000_000_000) throw new Error("Минимальный депозит должен быть от 0 до 1 000 000 000 ⭐.");
 
   try {
     const r = await pool.query(
-      `INSERT INTO promo_codes (code, bonus, max_uses, created_by, wager) VALUES ($1,$2,$3,$4,$5)
-       RETURNING id, code, bonus::float AS bonus, wager::float AS wager, max_uses, uses_count, active, created_at`,
-      [code, amount, uses, String(adminId), wagerMultiplier]
+      `INSERT INTO promo_codes (code, bonus, max_uses, created_by, wager, required_deposit) VALUES ($1,$2,$3,$4,$5,$6)
+       RETURNING id, code, bonus::float AS bonus, wager::float AS wager, required_deposit::float AS required_deposit, max_uses, uses_count, active, created_at`,
+      [code, amount, uses, String(adminId), wagerMultiplier, depositRequirement]
     );
     return r.rows[0];
   } catch (e) {
@@ -3233,6 +3498,26 @@ function taskPrice(reward, activations) {
   return Number((Number(reward) * Number(activations) * safeMultiplier).toFixed(2));
 }
 
+async function notifyTaskCreationAttempt(telegramUser, body) {
+  const channel = String(body?.channel || '—').trim();
+  const reward = Number(body?.reward || 0);
+  const activations = Number(body?.activations || 0);
+  const cost = (reward > 0 && activations > 0) ? taskPrice(reward, activations) : 0;
+  const priceText = isAdmin(telegramUser?.id) ? 'БЕСПЛАТНО (админ)' : `${cost.toFixed(2)} ⭐`;
+  const username = telegramUser?.username ? `@${telegramUser.username}` : 'без username';
+  const text = [
+    '📣 Попытка создать задание',
+    '',
+    `👤 Пользователь: ${username}`,
+    `🆔 ID: ${String(telegramUser?.id || '—')}`,
+    `📢 Канал: ${channel}`,
+    `⭐ Награда: ${Number.isFinite(reward) ? reward : 0} ⭐`,
+    `👥 Активации: ${Number.isFinite(activations) ? activations : 0}`,
+    `💳 Стоимость: ${priceText}`
+  ].join('\n');
+  await notifyAdmins(text);
+}
+
 async function createTaskForUser(userId, body) {
   requireDatabase();
   const reward = Number(body?.reward);
@@ -3333,6 +3618,7 @@ app.post("/api/tasks/:id/complete", async (req, res) => {
 app.post("/api/tasks", async (req, res) => {
   try {
     const session = await authenticatedUserFromInitData(req.headers["x-telegram-init-data"]);
+    notifyTaskCreationAttempt(session.telegram, req.body || {}).catch(e => console.error("Task attempt notify error:", e.message));
     const result = await createTaskForUser(session.telegram.id, req.body || {});
     io.to(`user:${session.telegram.id}`).emit("balance_updated", { balance: result.balance });
     res.json(result);
@@ -3344,6 +3630,7 @@ app.post("/api/tasks", async (req, res) => {
 app.post("/api/admin/tasks", async (req, res) => {
   try {
     const admin = await requireAdminRequest(req);
+    notifyTaskCreationAttempt(admin, req.body || {}).catch(e => console.error("Admin task attempt notify error:", e.message));
     const result = await createTaskForUser(admin.id, req.body || {});
     io.to(`user:${admin.id}`).emit("balance_updated", { balance: result.balance });
     res.json(result);
@@ -3353,6 +3640,26 @@ app.post("/api/admin/tasks", async (req, res) => {
 });
 
 // ---------------- ADMIN API ----------------
+app.get("/api/admin/system", async (req, res) => {
+  try {
+    await requireAdminRequest(req);
+    res.json({ ok: true, maintenance: maintenanceMode });
+  } catch (e) {
+    res.status(403).json({ error: e.message });
+  }
+});
+
+app.post("/api/admin/system/maintenance", async (req, res) => {
+  try {
+    const admin = await requireAdminRequest(req);
+    const enabled = Boolean(req.body?.enabled);
+    const result = await setMaintenanceMode(enabled, admin.id);
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    res.status(403).json({ error: e.message });
+  }
+});
+
 
 app.get("/api/admin/stats", async (req, res) => {
   try {
@@ -3383,7 +3690,10 @@ app.get("/api/admin/users", async (req, res) => {
     }
     values.push(limit);
     const r = await pool.query(
-      `SELECT u.telegram_id, u.username, u.first_name, u.balance::float AS balance, u.banned, u.created_at,
+      `SELECT u.telegram_id, u.username, u.first_name, u.balance::float AS balance,
+              u.wager_remaining::float AS wager_remaining,
+              u.total_deposited::float AS total_deposited,
+              u.banned, u.created_at,
               COALESCE(f.risk_score,0)::int AS risk_score,
               COALESCE(f.linked_accounts,0)::int AS linked_accounts,
               COALESCE(f.exact_device_matches,0)::int AS exact_device_matches,
@@ -3438,7 +3748,7 @@ app.get("/api/admin/transactions", async (req, res) => {
 // reused across the Пополнения/Ставки/Выводы/Рефералы admin tabs, in the
 // spirit of the "Статистика" screen the client asked to match.
 const ADMIN_SUMMARY_METHOD_LABELS = {
-  balance_topup: "Stars", ton_topup: "TON / GRAM",
+  stars_topup: "Stars", balance_topup: "Stars", ton_topup: "TON / GRAM",
   pvp_bet: "PVP", upgrade_bet: "Upgrade",
   STAR: "Stars", GRAM: "GRAM", TON: "TON",
   true: "Выплачено", false: "Не выплачено"
@@ -3454,7 +3764,7 @@ app.get("/api/admin/summary/:category", async (req, res) => {
         `SELECT t.type AS method, t.amount::float AS amount, t.created_at,
                 COALESCE(NULLIF(u.username,''), u.first_name) AS name, u.username
          FROM balance_transactions t JOIN users u ON u.telegram_id=t.telegram_user_id
-         WHERE t.type IN ('balance_topup','ton_topup') ORDER BY t.created_at DESC LIMIT 500`
+         WHERE t.type IN ('stars_topup','balance_topup','ton_topup') ORDER BY t.created_at DESC LIMIT 500`
       )).rows;
     } else if (category === "bets") {
       rows = (await pool.query(
@@ -3513,7 +3823,7 @@ app.get("/api/admin/promos", async (req, res) => {
   try {
     await requireAdminRequest(req);
     const r = await pool.query(
-      `SELECT id, code, bonus::float AS bonus, wager::float AS wager, max_uses, uses_count, active, created_by, created_at
+      `SELECT id, code, bonus::float AS bonus, wager::float AS wager, required_deposit::float AS required_deposit, max_uses, uses_count, active, created_by, created_at
        FROM promo_codes ORDER BY created_at DESC LIMIT 200`
     );
     res.json({ promos: r.rows });
@@ -3525,7 +3835,7 @@ app.get("/api/admin/promos", async (req, res) => {
 app.post("/api/admin/promos", async (req, res) => {
   try {
     const admin = await requireAdminRequest(req);
-    const promo = await createPromoCode(admin.id, req.body?.code, req.body?.bonus, req.body?.maxUses, req.body?.wager);
+    const promo = await createPromoCode(admin.id, req.body?.code, req.body?.bonus, req.body?.maxUses, req.body?.wager, req.body?.requiredDeposit);
     res.json({ ok: true, promo });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -3539,7 +3849,7 @@ app.post("/api/admin/promos/:id/toggle", async (req, res) => {
     if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Некорректный промокод." });
     const active = Boolean(req.body?.active);
     const r = await pool.query(
-      `UPDATE promo_codes SET active=$2 WHERE id=$1 RETURNING id, code, bonus::float AS bonus, max_uses, uses_count, active, created_at`,
+      `UPDATE promo_codes SET active=$2 WHERE id=$1 RETURNING id, code, bonus::float AS bonus, wager::float AS wager, required_deposit::float AS required_deposit, max_uses, uses_count, active, created_at`,
       [id, active]
     );
     if (!r.rowCount) return res.status(404).json({ error: "Промокод не найден." });
@@ -3555,7 +3865,9 @@ app.post("/api/admin/users/:id/adjust-balance", async (req, res) => {
     const delta = Number(req.body?.delta);
     if (!Number.isInteger(delta) || delta === 0) return res.status(400).json({ error: "delta должен быть целым числом и не равен 0." });
     if (Math.abs(delta) > 1_000_000_000) return res.status(400).json({ error: "Слишком большая сумма." });
-    const balance = await adjustAdminBalance(String(req.params.id), delta, admin.id, String(req.body?.description || "Изменение баланса администратором").slice(0, 180));
+    const wager = req.body?.wager === undefined || req.body?.wager === null || req.body?.wager === "" ? 0 : Number(req.body.wager);
+    if (!Number.isFinite(wager) || wager < 0 || wager > 1000) return res.status(400).json({ error: "Вагер должен быть числом от 0 до 1000." });
+    const balance = await adjustAdminBalance(String(req.params.id), delta, admin.id, String(req.body?.description || "Изменение баланса администратором").slice(0, 180), wager);
     io.to(`user:${String(req.params.id)}`).emit("balance_updated", { balance });
     res.json({ ok: true, balance });
   } catch (e) {
@@ -3674,6 +3986,7 @@ app.get("*", (req, res) => res.sendFile(path.join(__dirname, "public", "index.ht
 
 async function start() {
   await initDb();
+  await loadMaintenanceMode();
   await settleExpiredRaffles();
   setInterval(settleExpiredRaffles, 5000).unref();
   await settleTonTopups();

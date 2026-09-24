@@ -80,7 +80,7 @@ services:
         sync: false
       - key: TON_PER_STAR
         sync: false
-      # API key from tonapi.io; needed to verify incoming TON transfers and
+      # API key from tonapi.io; optional but recommended for stable rate limits when verifying incoming TON transfers and
       # credit the balance automatically.
       - key: TONAPI_KEY
         sync: false

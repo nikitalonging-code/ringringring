@@ -73,6 +73,8 @@ const betModal = $("#betModal");
 const topupModal = $("#topupModal");
 const withdrawModal = $("#withdrawModal");
 const freebetModal = $("#freebetModal");
+const taskCreateModal = $("#taskCreateModal");
+let clientMaintenance = false;
 let withdrawCurrency = "STAR";
 let topupCurrency = "STAR";
 let GRAM_USD_PER_STAR = Number(window.__RING_GRAM_USD_PER_STAR || 0.015);
@@ -123,6 +125,32 @@ async function claimFreebetFromStartParam() {
 
 function authHeaders(extra = {}) {
   return { ...extra, "X-Telegram-Init-Data": initData };
+}
+
+function setMaintenanceOverlay(enabled, message = "") {
+  clientMaintenance = !!enabled;
+  const overlay = $("#maintenanceOverlay");
+  if (!overlay) return;
+  overlay.classList.toggle("hidden", !clientMaintenance);
+  if (message) $("#maintenanceOverlay .maintenance-text").textContent = message;
+  ["topupBtn", "betBtn", "withdrawBtn", "openCreateRaffle", "openUpgrade", "openCreateTask"].forEach(id => {
+    const el = $("#" + id);
+    if (el) el.disabled = clientMaintenance;
+  });
+}
+
+async function loadMaintenanceStatus() {
+  try {
+    const r = await fetch("/api/system/status", { headers: authHeaders(), cache: "no-store" });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || "Не удалось получить статус приложения.");
+    isAdmin = !!data.isAdmin;
+    setMaintenanceOverlay(!!data.maintenance && !isAdmin, data.message || "");
+    return data;
+  } catch (e) {
+    console.warn("Maintenance status failed:", e.message);
+    return { maintenance: false, isAdmin };
+  }
 }
 
 function setBalance(value) {
@@ -380,7 +408,10 @@ $("#createInvoice").onclick = async () => {
   } catch (e) { toast(e.message); }
 };
 
-socket.on("connect", () => {
+socket.on("connect", async () => {
+  const system = await loadMaintenanceStatus();
+  if (system.maintenance && !system.isAdmin) return;
+  if (clientMaintenance && !isAdmin) return;
   clientFingerprintPromise.then(clientFingerprint => {
     socket.emit("join_room", { initData, referralCode: startParam, clientFingerprint, telegramPlatform: String(tg?.platform || '') });
   });
@@ -403,6 +434,8 @@ socket.on("joined", data => {
 (async function bootstrap() {
   if (!initData) return handleNotTelegram();
   try {
+    const system = await loadMaintenanceStatus();
+    if (system.maintenance && !system.isAdmin) return;
     const r = await fetch("/api/bootstrap", { headers: await securityHeaders(authHeaders()), cache: "no-store" });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.error || "Не удалось загрузить приложение.");
@@ -425,6 +458,20 @@ socket.on("joined", data => {
   }
 })();
 
+socket.on("maintenance", data => setMaintenanceOverlay(true, data?.message || ""));
+socket.on("maintenance_changed", data => {
+  if (isAdmin) {
+    refreshAdminSystem();
+    return;
+  }
+  const enabled = !!data?.enabled;
+  setMaintenanceOverlay(enabled, "Приложение временно закрыто на технические работы. Попробуйте зайти позже.");
+  if (!enabled) {
+    clientFingerprintPromise.then(fp => {
+      if (socket.connected && tg?.initData) socket.emit("join_room", { initData: tg.initData, fingerprint: fp });
+    }).catch(() => {});
+  }
+});
 socket.on("balance_updated", data => setBalance(data.balance));
 socket.on("force_banned", () => {
   toast("Ваш аккаунт заблокирован администратором.");
@@ -1023,14 +1070,22 @@ async function refreshAdmin() {
   adminRefreshInFlight = true;
   if (!isAdmin) return;
   try {
-    const [stats, users, promos] = await Promise.all([
+    const [stats, users, promos, system] = await Promise.all([
       adminFetch("/api/admin/stats"),
       adminFetch("/api/admin/users?q=" + encodeURIComponent($("#adminSearch").value.trim())),
-      adminFetch("/api/admin/promos")
+      adminFetch("/api/admin/promos"),
+      adminFetch("/api/admin/system")
     ]);
     renderAdminStats(stats);
     renderAdminPromos(promos.promos || []);
     renderAdminUsers(users.users || []);
+    const status = $('#maintenanceStatus');
+    const button = $('#toggleMaintenance');
+    if (status && button) {
+      status.textContent = system.maintenance ? '🔴 Приложение закрыто на технические работы.' : '🟢 Приложение работает в обычном режиме.';
+      button.textContent = system.maintenance ? 'ОТКРЫТЬ ПРИЛОЖЕНИЕ' : 'ЗАКРЫТЬ ПРИЛОЖЕНИЕ';
+      button.classList.toggle('active', !!system.maintenance);
+    }
   } catch (e) {
     toast(e.message);
   } finally {
@@ -1081,6 +1136,7 @@ document.querySelectorAll(".admin-tab").forEach(btn => {
     const panelId = tab === "users" ? "adminTabUsers" : tab === "promos" ? "adminTabPromos" : "adminTab" + tab[0].toUpperCase() + tab.slice(1);
     $("#" + panelId).classList.remove("hidden");
     if (ADMIN_SUMMARY_TABS[tab]) loadAdminSummary(tab);
+    if (tab === 'system') refreshAdminSystem();
   };
 });
 
@@ -1089,7 +1145,7 @@ function updateTaskPrice() {
   const activations = Number($("#adminTaskActivations")?.value || 0);
   const price = reward > 0 && activations > 0 ? reward * activations * 1.5 : 0;
   const priceEl = $("#adminTaskPrice");
-  const card = $(".task-create-public");
+  const card = $(".task-create-public") || $(".task-create-modal-card");
   const button = $("#createTask");
   if (!priceEl || !button) return;
 
@@ -1103,6 +1159,16 @@ function updateTaskPrice() {
     button.textContent = "СОЗДАТЬ И ОПЛАТИТЬ";
   }
 }
+
+$("#openCreateTask")?.addEventListener("click", () => {
+  if (clientMaintenance) return toast("Приложение временно закрыто на технические работы.");
+  $("#adminTaskChannel").value = "";
+  $("#adminTaskReward").value = "";
+  $("#adminTaskActivations").value = "";
+  updateTaskPrice();
+  openModal(taskCreateModal);
+});
+$("#taskCreateClose")?.addEventListener("click", () => closeModal(taskCreateModal));
 ["adminTaskReward", "adminTaskActivations"].forEach(id => $("#" + id)?.addEventListener("input", updateTaskPrice));
 $("#createTask")?.addEventListener("click", async () => {
   const channel = $("#adminTaskChannel").value.trim();
@@ -1120,6 +1186,7 @@ $("#createTask")?.addEventListener("click", async () => {
     const result = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(result.error || "Не удалось создать задание.");
     setBalance(result.balance);
+    closeModal(taskCreateModal);
     $("#adminTaskChannel").value = "";
     $("#adminTaskReward").value = "";
     $("#adminTaskActivations").value = "";
@@ -1138,6 +1205,33 @@ function renderAdminStats(s) {
   `;
 }
 
+async function refreshAdminSystem() {
+  try {
+    const data = await adminFetch('/api/admin/system');
+    const status = $('#maintenanceStatus');
+    const button = $('#toggleMaintenance');
+    if (!status || !button) return;
+    status.textContent = data.maintenance ? '🔴 Приложение закрыто на технические работы.' : '🟢 Приложение работает в обычном режиме.';
+    button.textContent = data.maintenance ? 'ОТКРЫТЬ ПРИЛОЖЕНИЕ' : 'ЗАКРЫТЬ ПРИЛОЖЕНИЕ';
+    button.classList.toggle('active', !!data.maintenance);
+  } catch (e) { toast(e.message); }
+}
+
+$('#toggleMaintenance')?.addEventListener('click', async () => {
+  try {
+    const current = await adminFetch('/api/admin/system');
+    const next = !current.maintenance;
+    await adminFetch('/api/admin/system/maintenance', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: next })
+    });
+    setMaintenanceOverlay(false);
+    toast(next ? 'Приложение закрыто на технические работы.' : 'Приложение снова открыто.');
+    await refreshAdminSystem();
+  } catch (e) { toast(e.message); }
+});
+
 function renderAdminPromos(promos) {
   const root = $("#adminPromos");
   root.innerHTML = "";
@@ -1152,7 +1246,7 @@ function renderAdminPromos(promos) {
     el.innerHTML = `
       <div>
         <div class="admin-promo-code">${escapeHtml(p.code)}</div>
-        <div class="admin-promo-meta">+${Number(p.bonus).toFixed(0)} ⭐ · ${Number(p.uses_count)}/${Number(p.max_uses)} активаций${Number(p.wager) > 0 ? ` · вагер x${Number(p.wager)}` : ""}</div>
+        <div class="admin-promo-meta">+${Number(p.bonus).toFixed(0)} ⭐ · ${Number(p.uses_count)}/${Number(p.max_uses)} активаций${Number(p.wager) > 0 ? ` · вагер x${Number(p.wager)}` : ""}${Number(p.required_deposit) > 0 ? ` · депозит от ${Number(p.required_deposit).toFixed(0)} ⭐` : ""}</div>
       </div>
       <button class="promo-toggle ${active ? "active" : ""}">${active ? "ВКЛ" : "ВЫКЛ"}</button>
     `;
@@ -1192,8 +1286,10 @@ function renderAdminUsers(users) {
         <div>${u.risk_score >= 70 ? `⚠️ МУЛЬТИ ×${Number(u.linked_accounts || 0)}` : (u.risk_score >= 20 ? `🟠 РИСК ${Number(u.risk_score)}` : (u.banned ? "🔴 БАН" : "🟢 ОК"))}</div>
       </div>
       <div class="admin-balance">${Number(u.balance).toFixed(2)} ⭐</div>
+      <div class="admin-user-meta">Вагер: ${Number(u.wager_remaining || 0).toFixed(2)} ⭐ · Депозит: ${Number(u.total_deposited || 0).toFixed(2)} ⭐</div>
       <div class="admin-actions">
         <input class="admin-amount" type="number" step="1" min="1" placeholder="Stars">
+        <input class="admin-wager" type="number" step="0.5" min="0" placeholder="Вагер x">
         <button class="add-btn">ВЫДАТЬ</button>
         <button class="remove-btn">ЗАБРАТЬ</button>
         <button class="ban-btn ${u.banned ? "unban" : ""}">${u.banned ? "РАЗБАНИТЬ" : "ЗАБАНИТЬ"}</button>
@@ -1201,10 +1297,13 @@ function renderAdminUsers(users) {
     `;
 
     const amountInput = el.querySelector(".admin-amount");
+    const wagerInput = el.querySelector(".admin-wager");
     el.querySelector(".add-btn").onclick = async () => {
       const amount = Number(amountInput.value);
+      const wager = wagerInput.value.trim() === "" ? 0 : Number(wagerInput.value);
       if (!Number.isInteger(amount) || amount <= 0) return toast("Введите целое количество Stars.");
-      await adminAdjust(u.telegram_id, amount);
+      if (!Number.isFinite(wager) || wager < 0) return toast("Вагер должен быть 0 или больше.");
+      await adminAdjust(u.telegram_id, amount, wager);
     };
     el.querySelector(".remove-btn").onclick = async () => {
       const amount = Number(amountInput.value);
@@ -1226,12 +1325,12 @@ function renderAdminUsers(users) {
   }
 }
 
-async function adminAdjust(id, delta) {
+async function adminAdjust(id, delta, wager = 0) {
   try {
     await adminFetch(`/api/admin/users/${encodeURIComponent(id)}/adjust-balance`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ delta, description: delta > 0 ? "Выдача Stars администратором" : "Списание Stars администратором" })
+      body: JSON.stringify({ delta, wager, description: delta > 0 ? "Выдача Stars администратором" : "Списание Stars администратором" })
     });
     toast(delta > 0 ? "Stars выданы." : "Stars списаны.");
     refreshAdmin();
@@ -1277,20 +1376,24 @@ $("#createPromo").onclick = async () => {
   const maxUses = Number($("#adminPromoUses").value);
   const wagerInput = $("#adminPromoWager");
   const wager = wagerInput && wagerInput.value.trim() !== "" ? Number(wagerInput.value) : 0;
+  const depositInput = $("#adminPromoDeposit");
+  const requiredDeposit = depositInput && depositInput.value.trim() !== "" ? Number(depositInput.value) : 0;
   if (!code) return toast("Введите код промокода.");
   if (!Number.isInteger(bonus) || bonus <= 0) return toast("Введите целый бонус.");
   if (!Number.isInteger(maxUses) || maxUses <= 0) return toast("Введите лимит активаций.");
   if (!Number.isFinite(wager) || wager < 0) return toast("Вагер должен быть числом от 0 и выше.");
+  if (!Number.isFinite(requiredDeposit) || requiredDeposit < 0) return toast("Минимальный депозит должен быть 0 или больше.");
   try {
     await adminFetch("/api/admin/promos", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code, bonus, maxUses, wager })
+      body: JSON.stringify({ code, bonus, maxUses, wager, requiredDeposit })
     });
     $("#adminPromoCode").value = "";
     $("#adminPromoBonus").value = "";
     $("#adminPromoUses").value = "";
     if (wagerInput) wagerInput.value = "";
+    if (depositInput) depositInput.value = "";
     toast("Промокод создан.");
     refreshAdmin();
   } catch (e) { toast(e.message); }
