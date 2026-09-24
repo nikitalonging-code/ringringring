@@ -175,8 +175,12 @@
             <div class="tasks-title">ЗАДАНИЯ</div>
             <div class="tasks-subtitle">Подпишитесь на канал и получите Stars.</div>
           </div>
-          <button class="task-create-open" id="openCreateTask">＋ СВОЁ ЗАДАНИЕ</button>
         </div>
+        <button class="task-create-open" id="openCreateTask">
+          <span class="task-create-icon">＋</span>
+          <span class="task-create-copy"><b>СВОЁ ЗАДАНИЕ</b><small>Создайте задание для своего канала</small></span>
+          <span class="task-create-arrow">›</span>
+        </button>
         <div id="tasksList" class="tasks-list"></div>
       </section>
 
@@ -381,15 +385,31 @@
     <div class="modal-card task-create-modal-card">
       <div class="sheet-handle"></div>
       <button class="modal-close" id="taskCreateClose">×</button>
-      <h3>СОЗДАТЬ СВОЁ ЗАДАНИЕ</h3>
-      <div class="task-admin-hint">Бот должен быть администратором указанного канала.</div>
-      <input id="adminTaskChannel" placeholder="@username_канала" autocomplete="off">
-      <div class="task-admin-row">
-        <input id="adminTaskReward" type="number" min="1" step="1" placeholder="Награда ⭐">
-        <input id="adminTaskActivations" type="number" min="1" step="1" placeholder="Активации">
+      <div class="task-modal-kicker">RING · ЗАДАНИЯ</div>
+      <div class="task-modal-title">Создать своё задание</div>
+      <div class="task-modal-subtitle">Укажи канал, награду и количество активаций.</div>
+
+      <div class="task-form-label">КАНАЛ</div>
+      <div class="input-row task-input-row">
+        <span class="task-input-prefix">@</span>
+        <input id="adminTaskChannel" placeholder="username канала" autocomplete="off" spellcheck="false">
       </div>
-      <div class="task-admin-price">Стоимость: <b id="adminTaskPrice">0.00 ⭐</b></div>
-      <button id="createTask">СОЗДАТЬ ЗАДАНИЕ</button>
+
+      <div class="task-fields-title">ПАРАМЕТРЫ</div>
+      <div class="task-field-grid">
+        <div>
+          <div class="task-form-label">НАГРАДА</div>
+          <div class="input-row task-input-row"><input id="adminTaskReward" type="number" min="1" step="1" placeholder="10"><span>⭐</span></div>
+        </div>
+        <div>
+          <div class="task-form-label">АКТИВАЦИИ</div>
+          <div class="input-row task-input-row"><input id="adminTaskActivations" type="number" min="1" step="1" placeholder="100"></div>
+        </div>
+      </div>
+
+      <div class="task-bot-hint">Бот должен быть администратором канала с правом проверки подписки.</div>
+      <div class="task-price-card"><span>СТОИМОСТЬ</span><b id="adminTaskPrice">0.00 ⭐</b></div>
+      <button class="task-create-submit" id="createTask"><span>СОЗДАТЬ ЗАДАНИЕ</span><span>→</span></button>
     </div>
   </div>
 
