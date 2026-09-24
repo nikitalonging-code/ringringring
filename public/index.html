@@ -92,42 +92,30 @@
         <div class="games-soon-hint">Новый режим уже доступен</div>
       </div>
 
-      <div id="iceArenaGame" class="ice-game hidden">
-        <div class="ice-game-header">
-          <button class="upgrade-back" id="iceArenaBack" type="button">‹ Игры</button>
-          <div class="ice-game-title"><b>ICE ARENA</b><small><i></i> <span id="iceOnline">0</span> онлайн</small></div>
-          <div class="ice-game-badge">⭐ <span id="iceBalanceLabel">0</span></div>
-        </div>
-
-        <div class="ice-stats-grid">
-          <div><span>СТАТУС</span><b id="iceStatus">Подключение…</b></div>
-          <div><span>ПРИЗОВОЙ ПУЛ</span><b id="icePool">0 ⭐</b></div>
-          <div><span>ИГРОКОВ</span><b id="icePlayerCount">0</b></div>
-        </div>
-
-        <div class="ice-arena-shell" id="iceArenaShell">
-          <div class="ice-arena" id="iceArena">
-            <div class="ice-zone-map" id="iceZoneMap"></div>
-            <div class="ice-puck" id="icePuck">
-              <div class="ice-puck-disc"></div>
-              <span class="ice-arrow" aria-hidden="true"><svg viewBox="0 0 14 20" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 19V3M2.2 7.8 7 3l4.8 4.8"/></svg></span>
-            </div>
-          </div>
-          <div class="ice-winner" id="iceWinner"></div>
-        </div>
-
-        <div class="ice-controls">
-          <div class="ice-stake-label"><span>Ставка, ⭐</span><strong id="iceStakeInfo"></strong></div>
-          <div class="ice-stakes">
-            <button type="button" data-ice-v="1">1</button><button type="button" data-ice-v="5">5</button><button type="button" data-ice-v="10">10</button><button type="button" data-ice-v="50">50</button>
-          </div>
-          <div class="ice-bet-field"><input id="iceBetAmt" type="number" min="1" step="1" value="1" inputmode="numeric" placeholder="Сумма ставки"></div>
-          <button class="ice-join" id="iceJoinBtn" type="button" disabled>ПОСТАВИТЬ</button>
-        </div>
-
-        <div class="ice-legend" id="iceLegend"></div>
-        <p class="ice-hint">Для старта нужно 2 игрока. После второго игрока идёт 10 секунд на ставки. Размер зоны зависит от ставки.</p>
-      </div>
+<div id="iceArenaGame" class="ice-game hidden ice-game-host">
+<div class="ice-screen active" id="iceScreen">
+  <div class="ice-topbar">
+    <button class="playhub-back" id="adminBtn" style="visibility:hidden" aria-label="Админка">⚙</button>
+    <div class="ice-title"><strong>Ice Arena</strong><small><i></i> <span id="online">0</span> онлайн</small></div>
+    <div class="playhub-balance"><span class="ton-icon">▽</span><span class="balance-val" id="bal">0</span></div>
+  </div>
+  <div class="ice-body">
+    <div class="ice-stats"><div><span>СТАТУС</span><b id="iceStatus">Подключение…</b></div><div><span>ПРИЗОВОЙ ПУЛ</span><b id="icePool">0.00 TON</b></div><div><span>ИГРОКОВ</span><b id="icePlayerCount">0</b></div></div>
+    <div class="ice-arena-shell" id="iceArenaShell"><div class="ice-arena" id="iceArena"><div class="ice-zone-map" id="iceZoneMap"></div><div class="ice-puck" id="icePuck"><img class="puck-img" alt="" draggable="false" src="/puck.png"><span class="ice-arrow"><svg viewBox="0 0 14 20" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 19V3M2.2 7.8 7 3l4.8 4.8"/></svg></span></div></div><div class="ice-winner" id="iceWinner"></div></div>
+    <div class="ice-controls"><div class="ice-stake-label">Ставка, TON <strong id="stakeInfo"></strong></div>
+      <div class="ice-stakes"><button data-v="0.1">0.1</button><button data-v="0.5">0.5</button><button data-v="1">1</button><button data-v="5">5</button></div>
+      <div class="ice-bet-field" style="margin:10px 0 0"><input id="betAmt" type="number" min="0.01" step="0.01" value="0.1" inputmode="decimal"></div>
+      <button class="ice-join" id="iceJoinBtn" disabled>Поставить</button></div>
+    <div class="ice-legend" id="iceLegend"></div>
+    <p class="ice-hint">Для старта нужно 2 игрока. После второго — 10 секунд на ставки. Площадь зоны равна доле ставки в пуле.</p>
+  </div>
+  <div class="ice-bet-modal" id="adminModal"><div class="ice-bet-sheet"><div class="ice-bet-head">Админ-панель <button class="ice-bet-close" id="adminClose">×</button></div>
+    <label class="ice-bet-field">Telegram ID игрока<input id="admId" inputmode="numeric" placeholder="нажмите на игрока в списке"></label>
+    <label class="ice-bet-field">Сумма, TON (минус — списать)<input id="admAmt" type="number" step="0.01" value="1" inputmode="decimal"></label>
+    <button class="ice-bet-confirm" id="admGive">Выдать / списать</button>
+    <div class="adm-list" id="adminList"></div></div></div>
+</div>
+</div>
 
       <div id="upgradeGame" class="upgrade-game hidden">
         <div class="upgrade-header">

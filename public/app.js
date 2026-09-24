@@ -1695,491 +1695,256 @@ if (historySearchInput) {
 });
 
 // ---------- ICE ARENA ----------
-// The Ice Arena is embedded into the Games tab without adding another project
-// or another public file. Its round state lives on the same Socket.IO server
-// and its bets use the same Stars balance as the rest of RING.
-(() => {
-  const iceArena = $("#iceArena");
-  const icePuck = $("#icePuck");
-  const iceZoneMap = $("#iceZoneMap");
-  const iceLegend = $("#iceLegend");
-  const iceWinner = $("#iceWinner");
-  if (!iceArena || !icePuck || !iceZoneMap || !iceLegend || !iceWinner) return;
+// Ice Arena source structure, visuals, animations and physics are retained from the original project.
+// Only its color palette is adapted in styles.css; transport is bridged to RING's existing Socket.IO session.
+window.__RING_SOCKET = socket;
+window.__iceArenaActive = false;
+(function () {
+  const tg = window.Telegram && Telegram.WebApp;
+  if (tg) { tg.ready(); tg.expand && tg.expand(); }
+  const $ = id => document.getElementById(id);
+  const arena = $('iceArena'), puck = $('icePuck'), zoneMap = $('iceZoneMap'), legend = $('iceLegend'), winnerEl = $('iceWinner');
+  const SPIN = 0, HOLD = 0, FLIGHT = 7000, CLOSE = 1000, PUCK = 24, S = 100, N = FLIGHT / 1000 * 60;
+  let W = arena.clientWidth || 358, me = null, isAdmin = false, ws, skew = 0;
+  let st = { status: 'waiting', players: [], online: 0 }, L = [];
+  let plan = null, planFor = null, finished = false, phase = '', cam = null;
 
-  const ICE_FLIGHT = 7000;
-  const ICE_PUCK_SIZE = 24;
-  const ICE_SIDE = 100;
-  const ICE_FRAMES = 60;
-  let iceW = iceArena.clientWidth || 300;
-  let iceMe = null;
-  let iceState = {
-    status: "WAITING",
-    players: [],
-    online: 0,
-    seed: 0,
-    roomId: "",
-    startAt: 0,
-    countdownEndsAt: 0,
-    winnerId: null
-  };
-  let iceLayout = [];
-  let icePlan = null;
-  let icePlanFor = null;
-  let iceFinished = false;
-  let icePhase = "";
-  let iceCam = null;
-  let iceServerSkew = 0;
+  const fmt = v => String(+Number(v).toFixed(3));
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), 2600); }
+  function place(x, y) { puck.style.transform = `translate3d(${(x * W / 100 - PUCK / 2).toFixed(2)}px,${(y * W / 100 - PUCK / 2).toFixed(2)}px,0)`; }
+  window.addEventListener('resize', () => { W = arena.clientWidth || W; });
+  place(50, 50); puck.style.visibility = 'hidden';
 
-  function iceFmt(v) {
-    return String(Number(Number(v || 0).toFixed(2)));
+  // ---------- аватарка ----------
+  function avatar(p, cls, size) {
+    const el = document.createElement(p.photo ? 'img' : 'div');
+    el.className = cls; el.style.width = el.style.height = size + 'px';
+    const initial = () => { const d = document.createElement('div'); d.className = cls; d.style.cssText = `width:${size}px;height:${size}px;background:${p.color};font-size:${size * .45}px`; d.textContent = (p.name || '?')[0].toUpperCase(); return d; };
+    if (p.photo) { el.src = p.photo; el.referrerPolicy = 'no-referrer'; el.onerror = () => el.replaceWith(initial()); return el; }
+    return initial();
   }
 
-  function iceEsc(s) {
-    return String(s || "").replace(/[&<>\"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[c]));
-  }
-
-  function iceAvatarMarkup(p, size, cls = "") {
-    const safe = iceEsc((p?.name || "?").charAt(0).toUpperCase());
-    if (p?.avatar) {
-      return `<span class="${cls} ice-avatar" style="width:${size}px;height:${size}px"><img src="${iceEsc(p.avatar)}" alt="" referrerpolicy="no-referrer" onerror="this.parentNode.innerHTML='${safe}'"></span>`;
-    }
-    return `<span class="${cls} ice-avatar ice-player-av-fallback" style="width:${size}px;height:${size}px">${safe}</span>`;
-  }
-
-  function icePlace(x, y) {
-    icePuck.style.transform = `translate3d(${(x * iceW / 100 - ICE_PUCK_SIZE / 2).toFixed(2)}px,${(y * iceW / 100 - ICE_PUCK_SIZE / 2).toFixed(2)}px,0)`;
-  }
-
-  window.addEventListener("resize", () => { iceW = iceArena.clientWidth || iceW; });
-  icePlace(50, 50);
-  icePuck.style.visibility = "hidden";
-
-  // ---------- weighted Voronoi-like zone layout ----------
-  function iceClip(poly, a, b, c) {
-    const out = [];
-    for (let i = 0; i < poly.length; i++) {
-      const p = poly[i], q = poly[(i + 1) % poly.length];
-      const dp = a * p[0] + b * p[1] - c;
-      const dq = a * q[0] + b * q[1] - c;
-      if (dp <= 0) out.push(p);
-      if (dp * dq < 0) {
-        const t = dp / (dp - dq);
-        out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]);
-      }
-    }
-    return out;
-  }
-
-  function iceCells() {
-    return iceLayout.map(p => {
-      let poly = [[0, 0], [ICE_SIDE, 0], [ICE_SIDE, ICE_SIDE], [0, ICE_SIDE]];
-      for (const o of iceLayout) {
-        if (o === p || !poly.length) continue;
-        poly = iceClip(
-          poly,
-          2 * (o.sx - p.sx),
-          2 * (o.sy - p.sy),
-          o.sx * o.sx + o.sy * o.sy - p.sx * p.sx - p.sy * p.sy + p.w - o.w
-        );
-      }
-      return poly;
-    });
-  }
-
-  function iceInfo(poly) {
-    let area = 0, cx = 0, cy = 0;
-    for (let i = 0; i < poly.length; i++) {
-      const p = poly[i], q = poly[(i + 1) % poly.length];
-      const f = p[0] * q[1] - q[0] * p[1];
-      area += f;
-      cx += (p[0] + q[0]) * f;
-      cy += (p[1] + q[1]) * f;
-    }
-    area /= 2;
-    return area > 1e-9 ? { A: area, cx: cx / (6 * area), cy: cy / (6 * area) } : { A: 0, cx: 50, cy: 50 };
-  }
-
-  function iceInradius(poly, cx, cy) {
-    let m = 1e9;
-    for (let i = 0; i < poly.length; i++) {
-      const p = poly[i], q = poly[(i + 1) % poly.length];
-      const dx = q[0] - p[0], dy = q[1] - p[1], len = Math.hypot(dx, dy);
-      if (len > 1e-6) m = Math.min(m, Math.abs(dx * (cy - p[1]) - dy * (cx - p[0])) / len);
-    }
-    return m;
-  }
-
-  function iceSolve() {
-    const sum = iceLayout.reduce((s, p) => s + Number(p.bet || 0), 0) || 1;
+  // ---------- геометрия зон ----------
+  function clip(poly, a, b, c) { const out = []; for (let i = 0; i < poly.length; i++) { const p = poly[i], q = poly[(i + 1) % poly.length], dp = a * p[0] + b * p[1] - c, dq = a * q[0] + b * q[1] - c; if (dp <= 0) out.push(p); if (dp * dq < 0) { const t = dp / (dp - dq); out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]); } } return out; }
+  function cells() { return L.map(p => { let poly = [[0, 0], [S, 0], [S, S], [0, S]]; for (const o of L) { if (o === p || !poly.length) continue; poly = clip(poly, 2 * (o.sx - p.sx), 2 * (o.sy - p.sy), o.sx * o.sx + o.sy * o.sy - p.sx * p.sx - p.sy * p.sy + p.w - o.w); } return poly; }); }
+  function info(poly) { let A = 0, cx = 0, cy = 0; for (let i = 0; i < poly.length; i++) { const p = poly[i], q = poly[(i + 1) % poly.length], f = p[0] * q[1] - q[0] * p[1]; A += f; cx += (p[0] + q[0]) * f; cy += (p[1] + q[1]) * f; } A /= 2; return A > 1e-9 ? { A, cx: cx / (6 * A), cy: cy / (6 * A) } : { A: 0, cx: 50, cy: 50 }; }
+  function inr(poly, cx, cy) { let m = 1e9; for (let i = 0; i < poly.length; i++) { const p = poly[i], q = poly[(i + 1) % poly.length], dx = q[0] - p[0], dy = q[1] - p[1], l = Math.hypot(dx, dy); if (l > 1e-6) m = Math.min(m, Math.abs(dx * (cy - p[1]) - dy * (cx - p[0])) / l); } return m; }
+  function solve() {
+    const sum = L.reduce((s, p) => s + p.stake, 0);
     for (let it = 0; it < 400; it++) {
-      const inf = iceCells().map(iceInfo);
-      iceLayout.forEach((p, i) => {
-        const error = p.bet / sum * ICE_SIDE * ICE_SIDE - inf[i].A;
-        const dir = Math.sign(error);
-        p.step = Math.min(3000, Math.max(0.02, p.step * (dir === p.dir ? 1.25 : 0.5)));
-        p.dir = dir;
-        p.w += dir * Math.min(p.step, Math.abs(error) * 3);
-        if (it < 25 && inf[i].A > 0) {
-          p.sx += (inf[i].cx - p.sx) * 0.3;
-          p.sy += (inf[i].cy - p.sy) * 0.3;
-        }
-      });
-      const meanWeight = iceLayout.reduce((s, p) => s + p.w, 0) / iceLayout.length;
-      iceLayout.forEach(p => { p.w -= meanWeight; });
+      const inf = cells().map(info);
+      L.forEach((p, i) => { const e = p.stake / sum * S * S - inf[i].A, d = Math.sign(e); p.step = Math.min(3000, Math.max(.02, p.step * (d === p.dir ? 1.25 : .5))); p.dir = d; p.w += d * Math.min(p.step, Math.abs(e) * 3); if (it < 25 && inf[i].A > 0) { p.sx += (inf[i].cx - p.sx) * .3; p.sy += (inf[i].cy - p.sy) * .3; } });
+      const m = L.reduce((s, p) => s + p.w, 0) / L.length; L.forEach(p => p.w -= m);
     }
   }
+  function layout() { L = st.players.map(p => ({ id: p.id, stake: p.stake, sx: p.sx, sy: p.sy, w: 0, step: 200, dir: 0 })); if (L.length) solve(); }
+  function getWinner(x, y) { let best = L[0], bv = Infinity; for (const p of L) { const v = (x - p.sx) ** 2 + (y - p.sy) ** 2 - p.w; if (v < bv) { bv = v; best = p; } } return best; }
 
-  function iceBuildLayout() {
-    iceLayout = (iceState.players || []).map(p => ({
-      id: p.id,
-      bet: Number(p.bet || 0),
-      sx: Number(p.sx || 50),
-      sy: Number(p.sy || 50),
-      w: 0,
-      step: 200,
-      dir: 0
-    }));
-    if (iceLayout.length) iceSolve();
-  }
-
-  function iceWinnerAt(x, y) {
-    let best = iceLayout[0], bestValue = Infinity;
-    for (const p of iceLayout) {
-      const v = (x - p.sx) ** 2 + (y - p.sy) ** 2 - p.w;
-      if (v < bestValue) {
-        bestValue = v;
-        best = p;
-      }
-    }
-    return best;
-  }
-
-  function iceRender() {
-    iceZoneMap.innerHTML = "";
-    iceLegend.innerHTML = "";
-    const sum = (iceState.players || []).reduce((s, p) => s + Number(p.bet || 0), 0);
-    const polygons = iceLayout.length ? iceCells() : [];
-
-    (iceState.players || []).map((p, i) => i).sort((a, b) => {
-      const mineA = iceMe && String(iceState.players[a].id) === String(iceMe.id) ? 1 : 0;
-      const mineB = iceMe && String(iceState.players[b].id) === String(iceMe.id) ? 1 : 0;
-      return mineA - mineB;
-    }).forEach(i => {
-      const p = iceState.players[i];
-      const poly = polygons[i];
-      if (!poly?.length) return;
-      const info = iceInfo(poly);
-      const radius = iceInradius(poly, info.cx, info.cy);
-      const el = document.createElement("div");
-      el.className = "ice-zone-item" + (iceMe && String(p.id) === String(iceMe.id) ? " mine" : "");
-      el.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none"><polygon points="${poly.map(v => `${v[0].toFixed(2)},${v[1].toFixed(2)}`).join(" ")}" fill="${iceEsc(p.color)}"></polygon></svg>`;
-      const avatarSize = Math.min(46, radius * iceW / 100 * 1.4);
-      if (avatarSize >= 14) {
-        const avatar = document.createElement("span");
-        avatar.className = "ice-zone-av";
-        avatar.style.width = avatar.style.height = `${Math.round(avatarSize)}px`;
-        avatar.style.left = `${info.cx}%`;
-        avatar.style.top = `${info.cy}%`;
-        if (p.avatar) {
-          const img = document.createElement("img");
-          img.src = p.avatar;
-          img.referrerPolicy = "no-referrer";
-          img.alt = "";
-          img.onerror = () => {
-            avatar.textContent = String(p.name || "?").charAt(0).toUpperCase();
-            avatar.classList.add("ice-zone-av-fallback");
-          };
-          avatar.appendChild(img);
-        } else {
-          avatar.textContent = String(p.name || "?").charAt(0).toUpperCase();
-          avatar.classList.add("ice-zone-av-fallback");
-        }
-        el.appendChild(avatar);
-      }
-      p.__zoneEl = el;
-      iceZoneMap.appendChild(el);
+  // ---------- отрисовка ----------
+  function render() {
+    zoneMap.innerHTML = ''; legend.innerHTML = '';
+    const sum = L.reduce((s, p) => s + p.stake, 0), cs = L.length ? cells() : [];
+    st.players.map((p, i) => i).sort((a, b) => (st.players[a].id === (me && me.id) ? 1 : 0) - (st.players[b].id === (me && me.id) ? 1 : 0)).forEach(i => {
+      const p = st.players[i], poly = cs[i], inf = info(poly), r = inr(poly, inf.cx, inf.cy);
+      const el = document.createElement('div'); el.className = 'zone-item' + (me && p.id === me.id ? ' mine' : '');
+      el.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none"><polygon points="${poly.map(v => v[0].toFixed(2) + ',' + v[1].toFixed(2)).join(' ')}" fill="${p.color}"/></svg>`;
+      const d = Math.min(46, r * W / 100 * 1.4);
+      if (d >= 14) { const a = avatar(p, 'zone-av', Math.round(d)); a.style.left = inf.cx + '%'; a.style.top = inf.cy + '%'; el.append(a); }
+      zoneMap.append(el); p.zone = el;
     });
-
-    (iceState.players || []).forEach(p => {
-      const item = document.createElement("div");
-      item.className = "ice-player";
-      const av = document.createElement("span");
-      av.className = "ice-player-av";
-      if (p.avatar) {
-        const img = document.createElement("img");
-        img.src = p.avatar;
-        img.referrerPolicy = "no-referrer";
-        img.alt = "";
-        img.onerror = () => { av.textContent = String(p.name || "?").charAt(0).toUpperCase(); };
-        av.appendChild(img);
-      } else av.textContent = String(p.name || "?").charAt(0).toUpperCase();
-      item.appendChild(av);
-      const name = document.createElement("span");
-      name.className = "ice-player-name";
-      name.textContent = p.name || "Игрок";
-      item.appendChild(name);
-      const bet = document.createElement("b");
-      bet.className = "ice-player-bet";
-      bet.textContent = `${iceFmt(p.bet)} ⭐ · ${sum ? (Number(p.bet) / sum * 100).toFixed(1) : "0.0"}%`;
-      item.appendChild(bet);
-      iceLegend.appendChild(item);
+    st.players.forEach(p => {
+      const it = document.createElement('div'); it.className = 'ice-player';
+      it.append(avatar(p, 'lg-av', 20));
+      it.insertAdjacentHTML('beforeend', `<span>${esc(p.name)}</span><b>${fmt(p.stake)} · ${(p.stake / sum * 100).toFixed(1)}%</b>`);
+      legend.append(it);
     });
-
-    $("#icePool").textContent = `${iceFmt(sum)} ⭐`;
-    $("#icePlayerCount").textContent = String((iceState.players || []).length);
-    $("#iceOnline").textContent = String(iceState.online || 0);
-    if (iceState.status === "RESULT" && iceFinished) iceApplyResult();
-    iceUi();
+    $('icePool').textContent = sum.toFixed(2) + ' TON';
+    $('icePlayerCount').textContent = st.players.length;
+    $('online').textContent = st.online || 0;
+    if (finished) applyResult();
+    ui();
   }
-
-  function iceApplyResult() {
-    (iceState.players || []).forEach(p => {
-      if (p.__zoneEl) p.__zoneEl.classList.add(String(p.id) === String(iceState.winnerId) ? "winner-zone" : "loser");
-    });
-    const winner = (iceState.players || []).find(p => String(p.id) === String(iceState.winnerId));
-    if (!winner) return;
-    const pool = (iceState.players || []).reduce((s, p) => s + Number(p.bet || 0), 0);
-    iceWinner.innerHTML = `<div><b>${iceEsc(winner.name)}</b><small>ПОБЕДИТЕЛЬ · +${iceFmt(pool)} ⭐</small></div>`;
-    iceWinner.classList.add("show");
+  function applyResult() {
+    st.players.forEach(p => p.zone && p.zone.classList.add(p.id === st.winnerId ? 'winner-zone' : 'loser'));
+    const w = st.players.find(p => p.id === st.winnerId); if (!w) return;
+    const pool = st.players.reduce((s, p) => s + p.stake, 0);
+    winnerEl.innerHTML = `<div><b>${esc(w.name)}</b><small>Победитель · +${fmt(pool)} TON</small></div>`;
+    winnerEl.classList.add('show');
   }
-
-  function iceUi() {
-    const now = Date.now() + iceServerSkew;
-    let text = "", canBet = false;
-    if (iceState.status === "WAITING") {
-      text = (iceState.players || []).length ? "Ждём 2-го игрока" : "Набор игроков";
-      canBet = true;
-    } else if (iceState.status === "COUNTDOWN") {
-      const left = Number(iceState.countdownEndsAt || 0) - now;
-      if (left > 1000) { text = `Старт через ${Math.ceil(left / 1000)} с`; canBet = true; }
-      else text = "Ставки закрыты";
-    } else if (iceState.status === "RUNNING") {
-      text = icePhase === "rushing" ? "Шайба на льду" : "Раунд начинается";
-    } else {
-      text = "Раунд завершён";
-    }
-    $("#iceStatus").textContent = text;
-    $("#iceJoinBtn").disabled = !canBet || !iceMe || Number(currentBalance) < 1 || clientMaintenance;
-    const mine = iceMe && (iceState.players || []).find(p => String(p.id) === String(iceMe.id));
-    $("#iceStakeInfo").textContent = mine ? `Ваша: ${iceFmt(mine.bet)} ⭐` : "";
-    $("#iceBalanceLabel").textContent = Number(currentBalance || 0).toFixed(2);
+  function ui() {
+    const now = Date.now() + skew; let txt = '', can = false;
+    if (st.status === 'waiting') { txt = st.players.length ? 'Ждём 2-го игрока' : 'Набор игроков'; can = true; }
+    else if (st.status === 'countdown') { const left = st.endsAt - now; if (left > CLOSE) { txt = 'Старт через ' + Math.ceil(left / 1000) + ' с'; can = true; } else txt = 'Ставки закрыты'; }
+    else if (st.status === 'running') txt = phase === 'rushing' ? 'Шайба на льду' : 'Раунд начинается';
+    else txt = 'Раунд завершён';
+    $('iceStatus').textContent = txt;
+    $('iceJoinBtn').disabled = !can || !me;
+    const mine = me && st.players.find(p => p.id === me.id);
+    $('stakeInfo').textContent = mine ? 'Ваша: ' + fmt(mine.stake) : '';
   }
-  setInterval(iceUi, 200);
+  setInterval(ui, 200);
+  window.__iceGetState = () => st.status;
 
-  function iceRng(a) {
-    return function () {
-      a |= 0;
-      a = a + 0x6D2B79F5 | 0;
-      let t = Math.imul(a ^ a >>> 15, 1 | a);
-      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
-      return ((t ^ t >>> 14) >>> 0) / 4294967296;
-    };
-  }
-
-  function iceSim(x, y, angle, speed) {
-    let vx = Math.cos(angle) * speed, vy = Math.sin(angle) * speed;
-    const dt = 1 / 60;
-    const decay = 4.5 / (ICE_FLIGHT / 1000);
-    const points = [[x, y]];
-    const total = ICE_FLIGHT / 1000 * ICE_FRAMES;
-    for (let i = 1; i <= total; i++) {
-      const boost = 1 + Math.exp(-((i - 1) * dt) / 0.4);
-      x += vx * dt * boost;
-      y += vy * dt * boost;
-      let hitX = false, hitY = false;
-      if (x < 0) { x = 0; if (vx < 0) { vx = Math.abs(vx) * 0.78; hitX = true; } }
-      else if (x > 100) { x = 100; if (vx > 0) { vx = -Math.abs(vx) * 0.78; hitX = true; } }
-      if (y < 0) { y = 0; if (vy < 0) { vy = Math.abs(vy) * 0.78; hitY = true; } }
-      else if (y > 100) { y = 100; if (vy > 0) { vy = -Math.abs(vy) * 0.78; hitY = true; } }
-      if (hitX || hitY) {
-        const speedNow = Math.hypot(vx, vy) || 1;
-        const minSpeed = 0.37 * speedNow;
-        const ax = hitX ? (x < 50 ? 1 : -1) : 0;
-        const ay = hitY ? (y < 50 ? 1 : -1) : 0;
-        let nx = vx, ny = vy;
-        if (ax && ax * nx < minSpeed) { nx = ax * minSpeed; ny = (Math.sign(ny) || 1) * Math.sqrt(Math.max(0, speedNow * speedNow - nx * nx)); }
-        if (ay && ay * ny < minSpeed) { ny = ay * minSpeed; nx = (Math.sign(nx) || 1) * Math.sqrt(Math.max(0, speedNow * speedNow - ny * ny)); }
+  // ---------- детерминированная физика шайбы ----------
+  function rng(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function sim(x, y, ang, spd) {
+    let vx = Math.cos(ang) * spd, vy = Math.sin(ang) * spd; const dt = 1 / 60, decay = 4.5 / (FLIGHT / 1000), pts = [[x, y]];
+    for (let i = 1; i <= N; i++) {
+      const boost = 1 + Math.exp(-((i - 1) * dt) / .4); x += vx * dt * boost; y += vy * dt * boost;
+      let bx = false, by = false;
+      if (x < 0) { x = 0; if (vx < 0) { vx = Math.abs(vx) * .78; bx = true; } } else if (x > 100) { x = 100; if (vx > 0) { vx = -Math.abs(vx) * .78; bx = true; } }
+      if (y < 0) { y = 0; if (vy < 0) { vy = Math.abs(vy) * .78; by = true; } } else if (y > 100) { y = 100; if (vy > 0) { vy = -Math.abs(vy) * .78; by = true; } }
+      if (bx || by) {
+        const s = Math.hypot(vx, vy) || 1, m = .37 * s, ax = bx ? (x < 50 ? 1 : -1) : 0, ay = by ? (y < 50 ? 1 : -1) : 0; let nx = vx, ny = vy;
+        if (ax && ax * nx < m) { nx = ax * m; ny = (Math.sign(ny) || 1) * Math.sqrt(Math.max(0, s * s - nx * nx)); }
+        if (ay && ay * ny < m) { ny = ay * m; nx = (Math.sign(nx) || 1) * Math.sqrt(Math.max(0, s * s - ny * ny)); }
         vx = nx; vy = ny;
       }
-      if ((x < 12 || x > 88) && (y < 12 || y > 88)) {
-        const s0 = Math.hypot(vx, vy);
-        vx += (50 - x) * 0.02 * s0 * dt;
-        vy += (50 - y) * 0.02 * s0 * dt;
-        const s1 = Math.hypot(vx, vy) || 1;
-        vx *= s0 / s1;
-        vy *= s0 / s1;
-      }
-      const f = Math.exp(-decay * dt);
-      vx *= f;
-      vy *= f;
-      points.push([x, y]);
+      if ((x < 12 || x > 88) && (y < 12 || y > 88)) { const s0 = Math.hypot(vx, vy); vx += (50 - x) * .02 * s0 * dt; vy += (50 - y) * .02 * s0 * dt; const s1 = Math.hypot(vx, vy) || 1; vx *= s0 / s1; vy *= s0 / s1; }
+      const f = Math.exp(-decay * dt); vx *= f; vy *= f; pts.push([x, y]);
     }
-    return points;
+    return pts;
   }
-
-  function iceBuildPlan() {
+  // Победитель определён сервером; подбираем траекторию (по общему seed), которая приводит шайбу в его зону.
+  function buildPlan() {
     let best = null;
-    const frames = ICE_FLIGHT / 1000 * ICE_FRAMES;
     for (let k = 0; k < 4000; k++) {
-      const r = iceRng((Number(iceState.seed) + k * 7919) >>> 0);
-      const sx = 12 + r() * 76;
-      const sy = 14 + r() * 72;
-      const q = Math.floor(r() * 4);
-      const angle = (q * 90 + 24 + r() * 42) * Math.PI / 180;
-      const speed = 750 + r() * 160;
-      const startAngle = r() * 360;
-      const points = iceSim(sx, sy, angle, speed);
-      best = { sp: [sx, sy], pts: points, ang: angle, sa: startAngle };
-      const end = points[Math.min(frames, points.length - 1)];
-      if (iceWinnerAt(end[0], end[1]).id === iceState.winnerId) break;
+      const r = rng((st.seed + k * 7919) >>> 0);
+      const sx = 12 + r() * 76, sy = 14 + r() * 72, q = Math.floor(r() * 4), ang = (q * 90 + 24 + r() * 42) * Math.PI / 180, spd = 750 + r() * 160, sa = r() * 360;
+      const pts = sim(sx, sy, ang, spd); best = { sp: [sx, sy], pts, ang, sa };
+      const e = pts[N]; if (getWinner(e[0], e[1]).id === st.winnerId) break;
     }
-    const flightAngle = best.ang * 180 / Math.PI + 90;
-    const endAngle = best.sa + 1440 + ((((flightAngle - best.sa) % 360) + 360) % 360);
-    icePuck.style.setProperty("--flight-angle", `${flightAngle}deg`);
-    icePuck.style.setProperty("--ice-spin-ms", "1400ms");
-    icePuck.style.setProperty("--start-angle", `${best.sa.toFixed(2)}deg`);
-    icePuck.style.setProperty("--end-angle", `${endAngle.toFixed(2)}deg`);
+    const fa = best.ang * 180 / Math.PI + 90, ea = best.sa + 1440 + ((((fa - best.sa) % 360) + 360) % 360);
+    puck.style.setProperty('--flight-angle', fa + 'deg'); puck.style.setProperty('--spin-ms', SPIN + 'ms');
+    puck.style.setProperty('--start-angle', best.sa.toFixed(2) + 'deg'); puck.style.setProperty('--end-angle', ea.toFixed(2) + 'deg');
     return best;
   }
-
-  function iceSetPhase(phase) {
-    if (phase === icePhase) return;
-    icePhase = phase;
-    icePuck.classList.toggle("choosing", phase === "choosing");
-    icePuck.classList.toggle("aiming", phase === "aiming");
-    icePuck.classList.toggle("rushing", phase === "rushing");
+  function setPhase(p) {
+    if (p === phase) return; phase = p;
+    puck.classList.toggle('choosing', p === 'choosing'); puck.classList.toggle('aiming', p === 'aiming'); puck.classList.toggle('rushing', p === 'rushing');
+  }
+  function frame(t) {
+    if (t < 0) { puck.style.visibility = 'hidden'; place(plan.sp[0], plan.sp[1]); return; }
+    puck.style.visibility = 'visible';
+    setPhase('rushing');
+    const ft = Math.min(t - SPIN - HOLD, FLIGHT), idx = ft / 1000 * 60, i = Math.min(N - 1, Math.floor(idx)), f = idx - i;
+    const a = plan.pts[i], b = plan.pts[i + 1], x = a[0] + (b[0] - a[0]) * f, y = a[1] + (b[1] - a[1]) * f;
+    place(x, y);
+    const zt = Math.max(0, Math.min(1, (ft - (FLIGHT - 3000)) / 3000));
+    if (zt > 0) {
+      if (!cam) { cam = { x, y }; arena.style.transition = 'none'; }
+      cam.x += (x - cam.x) * .12; cam.y += (y - cam.y) * .12;
+      const e = zt * zt * (3 - 2 * zt), sc = 1 + .32 * e, lim = (sc - 1) * 50;
+      const tx = Math.max(-lim, Math.min(lim, (50 - cam.x) * sc)), ty = Math.max(-lim, Math.min(lim, (50 - cam.y) * sc));
+      arena.style.transform = `translate(${tx}%,${ty}%) scale(${sc})`;
+    }
+    if (ft >= FLIGHT && !finished) { finished = true; applyResult(); }
+  }
+  function loop() {
+    requestAnimationFrame(loop);
+    if ((st.status !== 'running' && st.status !== 'result') || !st.startAt || !L.length) return;
+    if (planFor !== st.id) { plan = buildPlan(); planFor = st.id; finished = false; cam = null; }
+    frame(Date.now() + skew - st.startAt);
+  }
+  requestAnimationFrame(loop);
+  function resetVisual() {
+    if (!plan && !finished) return;
+    plan = null; planFor = null; finished = false; cam = null; phase = '';
+    arena.style.transition = ''; arena.style.transform = 'scale(1)';
+    puck.classList.remove('choosing', 'aiming', 'rushing'); winnerEl.classList.remove('show'); winnerEl.innerHTML = '';
+    W = arena.clientWidth || W; place(50, 50); puck.style.visibility = 'hidden';
   }
 
-  function iceFrame(time) {
-    if (!icePlan) return;
-    if (time < 0) {
-      icePuck.style.visibility = "hidden";
-      icePlace(icePlan.sp[0], icePlan.sp[1]);
-      return;
-    }
-    icePuck.style.visibility = "visible";
-    iceSetPhase("rushing");
-    const frames = ICE_FLIGHT / 1000 * ICE_FRAMES;
-    const flightTime = Math.min(time, ICE_FLIGHT);
-    const frameIndex = Math.min(frames - 1, Math.floor(flightTime / 1000 * ICE_FRAMES));
-    const fraction = flightTime / 1000 * ICE_FRAMES - frameIndex;
-    const a = icePlan.pts[frameIndex], b = icePlan.pts[frameIndex + 1];
-    const x = a[0] + (b[0] - a[0]) * fraction;
-    const y = a[1] + (b[1] - a[1]) * fraction;
-    icePlace(x, y);
+  // ---------- сеть ----------
+  // RING adapter: gameplay/rendering/physics above are the original Ice Arena code.
+  const send = m => {
+    const s = window.__RING_SOCKET;
+    if (!s) return;
+    if (m.t === 'bet') s.emit('ice_bet', { amount: Number(m.amount) });
+    else if (m.t === 'admin_users') s.emit('ice_admin_users');
+    else if (m.t === 'admin_give') s.emit('ice_admin_give', { userId: String(m.userId || ''), amount: Number(m.amount) });
+  };
 
-    const zoomT = Math.max(0, Math.min(1, (flightTime - (ICE_FLIGHT - 3000)) / 3000));
-    if (zoomT > 0) {
-      if (!iceCam) { iceCam = { x, y }; iceArena.style.transition = "none"; }
-      iceCam.x += (x - iceCam.x) * 0.12;
-      iceCam.y += (y - iceCam.y) * 0.12;
-      const eased = zoomT * zoomT * (3 - 2 * zoomT);
-      const scale = 1 + 0.32 * eased;
-      const limit = (scale - 1) * 50;
-      const tx = Math.max(-limit, Math.min(limit, (50 - iceCam.x) * scale));
-      const ty = Math.max(-limit, Math.min(limit, (50 - iceCam.y) * scale));
-      iceArena.style.transform = `translate(${tx}%,${ty}%) scale(${scale})`;
-    }
-    if (flightTime >= ICE_FLIGHT && !iceFinished) {
-      iceFinished = true;
-      iceApplyResult();
-    }
-  }
-
-  function iceLoop() {
-    requestAnimationFrame(iceLoop);
-    if (!window.__iceArenaActive) return;
-    if ((iceState.status !== "RUNNING" && iceState.status !== "RESULT") || !iceState.startAt || !iceLayout.length) return;
-    if (icePlanFor !== iceState.roomId) {
-      icePlan = iceBuildPlan();
-      icePlanFor = iceState.roomId;
-      iceFinished = false;
-      iceCam = null;
-      iceWinner.classList.remove("show");
-      iceWinner.innerHTML = "";
-      iceSetPhase("choosing");
-    }
-    iceFrame(Date.now() + iceServerSkew - Number(iceState.startAt));
-  }
-  requestAnimationFrame(iceLoop);
-
-  function iceResetVisual() {
-    icePlan = null;
-    icePlanFor = null;
-    iceFinished = false;
-    iceCam = null;
-    icePhase = "";
-    iceArena.style.transition = "";
-    iceArena.style.transform = "scale(1)";
-    icePuck.classList.remove("choosing", "aiming", "rushing");
-    iceWinner.classList.remove("show");
-    iceWinner.innerHTML = "";
-    iceW = iceArena.clientWidth || iceW;
-    icePlace(50, 50);
-    icePuck.style.visibility = "hidden";
-  }
-
-  socket.on("ice_state", data => {
-    iceServerSkew = Number(data?.now || Date.now()) - Date.now();
-    iceState = {
-      status: data?.status || "WAITING",
-      players: Array.isArray(data?.players) ? data.players : [],
-      online: Number(data?.online || 0),
-      seed: Number(data?.seed || 0),
-      roomId: data?.roomId || "",
-      startAt: Number(data?.startAt || 0),
-      countdownEndsAt: Number(data?.countdownEndsAt || 0),
-      winnerId: data?.winnerId == null ? null : String(data.winnerId)
-    };
-    if (iceState.status === "WAITING" || iceState.status === "COUNTDOWN") iceResetVisual();
-    iceBuildLayout();
-    iceRender();
-  });
-
-  socket.on("joined", data => {
-    iceMe = {
-      id: String(data?.playerId || ""),
-      name: data?.user?.username ? `@${data.user.username}` : (data?.user?.first_name || "Игрок"),
-      avatar: data?.user?.photo_url || ""
-    };
-    iceUi();
-    socket.emit("request_ice_state");
-  });
-
-  socket.on("balance_updated", () => setTimeout(iceUi, 0));
-
-  $("#openIceArena")?.addEventListener("click", () => {
-    if (!initData) return handleNotTelegram();
-    $("#gamesList")?.classList.add("hidden");
-    $("#upgradeGame")?.classList.add("hidden");
-    $("#iceArenaGame")?.classList.remove("hidden");
-    window.__iceArenaActive = true;
-    iceBuildLayout();
-    iceRender();
-    socket.emit("request_ice_state");
-  });
-
-  $("#iceArenaBack")?.addEventListener("click", () => {
-    if (iceState.status === "RUNNING") return toast("Дождитесь окончания раунда.");
-    $("#iceArenaGame")?.classList.add("hidden");
-    $("#gamesList")?.classList.remove("hidden");
-    window.__iceArenaActive = false;
-  });
-
-  document.querySelectorAll("[data-ice-v]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const value = btn.dataset.iceV;
-      $("#iceBetAmt").value = value;
-      document.querySelectorAll("[data-ice-v]").forEach(b => b.classList.toggle("active", b === btn));
+  function connect() {
+    const s = window.__RING_SOCKET;
+    if (!s) { setTimeout(connect, 250); return; }
+    s.on('joined', m => {
+      const u = m?.user || {};
+      me = {
+        id: String(m?.playerId || u.id || ''),
+        name: [u.first_name, u.last_name].filter(Boolean).join(' ') || u.username || String(m?.playerId || ''),
+        photo: u.photo_url || ''
+      };
+      isAdmin = !!m?.isAdmin;
+      $('bal').textContent = fmt(m?.balance ?? 0);
+      $('adminBtn').style.visibility = isAdmin ? 'visible' : 'hidden';
+      ui();
+      s.emit('request_ice_state');
     });
-  });
-  document.querySelector('[data-ice-v="1"]')?.classList.add("active");
+    s.on('ice_state', m => {
+      skew = Number(m?.now || Date.now()) - Date.now();
+      st = {
+        status: String(m?.status || 'WAITING').toLowerCase(),
+        players: Array.isArray(m?.players) ? m.players.map(p => ({
+          id: String(p.id), name: p.name, photo: p.avatar || p.photo || '', color: p.color,
+          stake: Number(p.bet ?? p.stake ?? 0), sx: Number(p.sx), sy: Number(p.sy)
+        })) : [],
+        online: Number(m?.online || 0),
+        endsAt: Number(m?.countdownEndsAt || 0),
+        startAt: Number(m?.startAt || 0),
+        seed: Number(m?.seed || 0),
+        id: String(m?.roomId || ''),
+        winnerId: m?.winnerId == null ? null : String(m.winnerId)
+      };
+      if (st.status === 'waiting' || st.status === 'countdown') resetVisual();
+      layout(); render();
+    });
+    s.on('balance_updated', m => { $('bal').textContent = fmt(m?.balance ?? 0); ui(); });
+    s.on('ice_admin_users_result', m => renderUsers(m?.list || []));
+    s.on('ice_admin_ok', m => toast(m?.msg || 'Готово'));
+    s.on('error_message', m => toast(m));
+    s.emit('request_ice_state');
+  }
+  connect();
 
-  $("#iceJoinBtn")?.addEventListener("click", () => {
-    if (!initData) return handleNotTelegram();
-    const amount = Number($("#iceBetAmt").value);
-    if (!Number.isInteger(amount) || amount <= 0) return toast("Введите целое число Stars.");
-    if (amount > Number(currentBalance || 0)) return toast("Недостаточно Stars на балансе.");
-    socket.emit("ice_bet", { amount });
-  });
+  // ---------- ставки ----------
+  $('iceJoinBtn').addEventListener('click', () => send({ t: 'bet', amount: Number($('betAmt').value) }));
+  document.querySelectorAll('.ice-stakes button').forEach(b => b.addEventListener('click', () => { $('betAmt').value = b.dataset.v; }));
+
+  // ---------- админка ----------
+  function renderUsers(list) {
+    $('adminList').innerHTML = list.map(u => `<div class="adm-row" data-id="${u.id}"><span>${esc(u.name)}<small>${u.id}</small></span><b>${fmt(u.balance)}</b></div>`).join('') || '<p class="ice-hint">Пока никто не заходил</p>';
+    document.querySelectorAll('.adm-row').forEach(r => r.addEventListener('click', () => { $('admId').value = r.dataset.id; $('admAmt').focus(); }));
+  }
+  $('adminBtn').addEventListener('click', () => { if (isAdmin) { $('adminModal').classList.add('show'); send({ t: 'admin_users' }); } });
+  $('adminClose').addEventListener('click', () => $('adminModal').classList.remove('show'));
+  $('adminModal').addEventListener('click', e => { if (e.target === $('adminModal')) $('adminModal').classList.remove('show'); });
+  $('admGive').addEventListener('click', () => send({ t: 'admin_give', userId: $('admId').value, amount: Number($('admAmt').value) }));
 })();
+
+// Open/close wrapper belongs to the host Mini App, not the Arena UI itself.
+const iceHost = document.getElementById('iceArenaGame');
+const iceOpenBtn = document.getElementById('openIceArena');
+function openIceArenaView(){
+  if (!iceHost) return;
+  document.getElementById('gamesList')?.classList.add('hidden');
+  document.getElementById('upgradeGame')?.classList.add('hidden');
+  iceHost.classList.remove('hidden');
+  window.__iceArenaActive = true;
+  if (tg?.BackButton) { tg.BackButton.show(); tg.BackButton.offClick(closeIceArenaView); tg.BackButton.onClick(closeIceArenaView); }
+}
+function closeIceArenaView(){
+  if (!iceHost) return;
+  if (typeof window.__iceGetState === 'function' && window.__iceGetState() === 'running') return toast('Дождитесь окончания раунда.');
+  iceHost.classList.add('hidden');
+  window.__iceArenaActive = false;
+  if (tg?.BackButton) tg.BackButton.hide();
+}
+iceOpenBtn?.addEventListener('click', () => { if (!initData) return handleNotTelegram(); openIceArenaView(); });
+
+const ringSetViewWithIceGuard = setView;
+setView = function(view){
+  if (view !== 'games') closeIceArenaView();
+  ringSetViewWithIceGuard(view);
+};
