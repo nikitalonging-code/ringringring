@@ -547,7 +547,7 @@ async function recordSecuritySignal(userId, { fingerprint = '', ip = '', userAge
        telegram_platform=EXCLUDED.telegram_platform,
        hits=account_security_signals.hits+1,
        last_seen_at=NOW()`,
-    [uid, fingerprintHash, ipHash, String(platform || '').slice(0, 64)]
+    [uid, fingerprintHash, ipHash, uaHash, String(platform || '').slice(0, 64)]
   );
 
   const byFingerprint = fingerprintHash ? await pool.query(
