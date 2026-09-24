@@ -217,6 +217,34 @@ function weightedWinner(players, target) {
   return funded[funded.length - 1];
 }
 
+// PVP commission is progressive: the rarer the win, the larger the house
+// cut. The curve is intentionally non-linear so high-chance wins stay around
+// 1.5–3% while very low-chance wins approach a 30% ceiling.
+function calculatePvpSettlement(bank, winnerBet) {
+  const safeBank = Math.max(0, Number(bank) || 0);
+  const safeBet = Math.max(0, Number(winnerBet) || 0);
+  if (safeBank <= 0) return { payout: 0, commission: 0, commissionRate: 0, chance: 0 };
+
+  const chance = Math.min(1, Math.max(0, safeBet / safeBank));
+  const inverseChance = 1 - chance;
+  const commissionRate = Math.min(0.30, 0.015 + 0.30 * inverseChance * inverseChance);
+  const targetCommission = safeBank * commissionRate;
+
+  // Stars are whole units. The commission can never reduce the payout below
+  // the winner's original stake, so the effective commission is capped.
+  const maxCommission = Math.max(0, safeBank - safeBet);
+  const commission = Math.min(targetCommission, maxCommission);
+  const payout = Math.max(safeBet, Math.floor(safeBank - commission));
+  const effectiveCommission = Math.max(0, Number((safeBank - payout).toFixed(2)));
+
+  return {
+    payout,
+    commission: effectiveCommission,
+    commissionRate,
+    chance
+  };
+}
+
 function validateTelegramInitData(initData) {
   if (!initData) return { ok: false, reason: "missing" };
   if (!process.env.TELEGRAM_BOT_TOKEN) return { ok: false, reason: "bot_token_missing" };
@@ -921,11 +949,12 @@ async function finishRound() {
     sectorStart += share;
   }
 
-  // Telegram Stars are whole Stars, so production payout is rounded down.
-  // The winner still can never receive less than their original stake.
-  const normalPayout = Math.floor(bank * 0.92);
-  const payout = Math.max(Number(winner.bet), normalPayout);
-  const commission = Math.max(0, Number((bank - payout).toFixed(2)));
+  // Telegram Stars are whole Stars. The commission now depends on the
+  // winner's actual probability in this round: the smaller the chance, the
+  // larger the commission, with a 30% ceiling.
+  const settlement = calculatePvpSettlement(bank, winner.bet);
+  const payout = settlement.payout;
+  const commission = settlement.commission;
 
   state.payout = payout;
   state.commission = commission;
@@ -3061,7 +3090,7 @@ async function handleWithdrawalCallback(callback) {
       await telegramApi("editMessageReplyMarkup", {
         chat_id: callback.message?.chat?.id,
         message_id: callback.message?.message_id,
-        reply_markup: { inline_keyboard: [] }
+        reply_markup: { inline_keyboard: [[{ text: '📢 Открыть канал', url: `https://t.me/${String(preview.rows[0].target_username || '').replace(/^@/, '')}` }]] }
       }).catch(() => {});
       return true;
     }
@@ -3981,13 +4010,16 @@ function taskPrice(reward, activations) {
   return Number((Number(reward) * Number(activations) * safeMultiplier).toFixed(2));
 }
 
-function taskApprovalButtons(taskId) {
-  return {
-    inline_keyboard: [[
-      { text: "✅ Принять", callback_data: `task:approve:${taskId}` },
-      { text: "❌ Отклонить", callback_data: `task:reject:${taskId}` }
-    ]]
-  };
+function taskApprovalButtons(taskId, channelUsername = '') {
+  const clean = String(channelUsername || '').trim().replace(/^@/, '').split(/[/?#\s]/)[0];
+  const rows = [[
+    { text: "✅ Принять", callback_data: `task:approve:${taskId}` },
+    { text: "❌ Отклонить", callback_data: `task:reject:${taskId}` }
+  ]];
+  if (/^[A-Za-z0-9_]{5,32}$/.test(clean)) {
+    rows.push([{ text: "📢 Открыть канал", url: `https://t.me/${clean}` }]);
+  }
+  return { inline_keyboard: rows };
 }
 
 async function notifyTaskCreationAttempt(telegramUser, body) {
@@ -4013,18 +4045,24 @@ async function notifyTaskCreationAttempt(telegramUser, body) {
 async function notifyTaskPendingAdmins(telegramUser, body, taskResult) {
   const ids = getAdminIds();
   if (!ids.length || !process.env.TELEGRAM_BOT_TOKEN) return;
-  const channel = String(body?.channel || taskResult?.channel || '—').trim();
+  const channelRaw = String(taskResult?.channelUsername || body?.channel || taskResult?.channel || '—').trim();
+  const channelUsername = channelRaw.replace(/^@/, '').split(/[/?#\s]/)[0];
+  const channelUrl = /^[A-Za-z0-9_]{5,32}$/.test(channelUsername) ? `https://t.me/${channelUsername}` : '';
+  const channelLabel = /^[A-Za-z0-9_]{5,32}$/.test(channelUsername) ? `@${channelUsername}` : channelRaw;
   const reward = Number(body?.reward || 0);
   const activations = Number(body?.activations || 0);
   const price = Number(taskResult?.price || taskPrice(reward, activations));
   const username = telegramUser?.username ? `@${telegramUser.username}` : 'без username';
   const taskId = String(taskResult?.id || '');
+  const channelLine = channelUrl
+    ? `📢 Канал: <a href="${channelUrl}">${escapeHtmlTelegram(channelLabel)}</a>`
+    : `📢 Канал: <b>${escapeHtmlTelegram(channelLabel)}</b>`;
   const text = [
     '🟠 <b>Новое задание на проверку</b>',
     '',
     `👤 Пользователь: <b>${escapeHtmlTelegram(username)}</b>`,
     `🆔 ID: <code>${escapeHtmlTelegram(telegramUser?.id)}</code>`,
-    `📢 Канал: <b>${escapeHtmlTelegram(channel)}</b>`,
+    channelLine,
     `⭐ Награда: <b>${Number.isFinite(reward) ? reward.toFixed(2) : '0.00'} ⭐</b>`,
     `👥 Активации: <b>${Number.isFinite(activations) ? activations : 0}</b>`,
     `💳 Стоимость: <b>${price.toFixed(2)} ⭐</b>`,
@@ -4037,7 +4075,7 @@ async function notifyTaskPendingAdmins(telegramUser, body, taskResult) {
     chat_id: id,
     text,
     parse_mode: 'HTML',
-    reply_markup: taskApprovalButtons(taskId)
+    reply_markup: taskApprovalButtons(taskId, channelLabel)
   }).catch(e => console.error(`Task approval notify error (${id}):`, e.message))));
 }
 
@@ -4109,7 +4147,7 @@ async function handleTaskApprovalCallback(callback) {
       await telegramApi('editMessageText', {
         chat_id: callback.message?.chat?.id,
         message_id: callback.message?.message_id,
-        text: `✅ <b>Задание принято</b>\n\n${escapeHtmlTelegram(preview.rows[0].target_username)} · ${Number(preview.rows[0].reward).toFixed(2)} ⭐ · ${Number(preview.rows[0].max_activations)} активаций\nПользователь: <code>${escapeHtmlTelegram(preview.rows[0].created_by)}</code>\nСтоимость: ${Number(preview.rows[0].price).toFixed(2)} ⭐`,
+        text: `✅ <b>Задание принято</b>\n\n📢 <a href="https://t.me/${encodeURIComponent(String(preview.rows[0].target_username || '').replace(/^@/, ''))}">${escapeHtmlTelegram(preview.rows[0].target_username)}</a> · ${Number(preview.rows[0].reward).toFixed(2)} ⭐ · ${Number(preview.rows[0].max_activations)} активаций\nПользователь: <code>${escapeHtmlTelegram(preview.rows[0].created_by)}</code>\nСтоимость: ${Number(preview.rows[0].price).toFixed(2)} ⭐`,
         parse_mode: 'HTML',
         reply_markup: { inline_keyboard: [] }
       }).catch(() => {});
@@ -4167,9 +4205,9 @@ async function handleTaskApprovalCallback(callback) {
     await telegramApi('editMessageText', {
       chat_id: callback.message?.chat?.id,
       message_id: callback.message?.message_id,
-      text: `❌ <b>Задание отклонено</b>\n\n${escapeHtmlTelegram(task.target_username)}\nПользователь: <code>${escapeHtmlTelegram(task.created_by)}</code>\nВозврат: ${Number(task.price || 0).toFixed(2)} ⭐`,
+      text: `❌ <b>Задание отклонено</b>\n\n📢 <a href="https://t.me/${encodeURIComponent(String(task.target_username || '').replace(/^@/, ''))}">${escapeHtmlTelegram(task.target_username)}</a>\nПользователь: <code>${escapeHtmlTelegram(task.created_by)}</code>\nВозврат: ${Number(task.price || 0).toFixed(2)} ⭐`,
       parse_mode: 'HTML',
-      reply_markup: { inline_keyboard: [] }
+      reply_markup: { inline_keyboard: [[{ text: '📢 Открыть канал', url: `https://t.me/${String(task.target_username || '').replace(/^@/, '')}` }]] }
     }).catch(() => {});
     return true;
   } catch (e) {
@@ -4197,6 +4235,25 @@ async function createTaskForUser(userId, body) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+
+    // Do not let multiple paid tasks for the same subscription channel stack
+    // at the same time. The advisory lock closes the race where two requests
+    // arrive simultaneously before either one is inserted. Once the existing
+    // task reaches its activation limit and becomes finished, a new task may
+    // be purchased for the same channel again.
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [String(channel.id)]);
+    const existing = await client.query(
+      `SELECT id, status FROM tasks
+       WHERE status IN ('pending','active')
+         AND (target_chat_id=$1 OR LOWER(target_username)=LOWER($2))
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [String(channel.id), String(channel.username)]
+    );
+    if (existing.rowCount) {
+      const stateText = existing.rows[0].status === 'pending' ? 'на проверке у администратора' : 'уже активно';
+      throw new Error(`Задание на подписку на этот канал ${stateText}. Повторно купить его можно после завершения текущего задания.`);
+    }
 
     if (price > 0) {
       const debited = await client.query(
@@ -4231,7 +4288,17 @@ async function createTaskForUser(userId, body) {
 
     await client.query("COMMIT");
     invalidateUserCache(userId);
-    return { ok: true, id, price, balance, free: adminCreator, pending: !adminCreator, status };
+    return {
+      ok: true,
+      id,
+      price,
+      balance,
+      free: adminCreator,
+      pending: !adminCreator,
+      status,
+      channelUsername: channel.username,
+      channelId: channel.id
+    };
   } catch (e) {
     try { await client.query("ROLLBACK"); } catch {}
     throw e;

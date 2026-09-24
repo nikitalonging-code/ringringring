@@ -875,9 +875,9 @@ function renderRaffles(items) {
     el.className = `raffle-card ${r.status !== "active" ? "finished" : ""}`;
     el.innerHTML = `
       <div class="raffle-card-glow"></div>
-      <div class="raffle-card-top"><span>Winners: ${Number(r.winnersCount)}</span><span class="raffle-status">${r.status === "active" ? "Active" : "Inactive"}</span></div>
-      <div class="raffle-card-top" style="margin-top:6px"><span>Name: ${escapeHtml(r.prizeTitle || "Stars")}</span><span>${r.status === "active" ? formatRaffleCountdown(r.endsAt) : "Results: " + formatRaffleDate(r.endsAt)}</span></div>
-      <div class="raffle-card-prize">Prize:</div>
+      <div class="raffle-card-top"><span>Победителей: ${Number(r.winnersCount)}</span><span class="raffle-status">${r.status === "active" ? "Активен" : "Завершён"}</span></div>
+      <div class="raffle-card-top" style="margin-top:6px"><span>${escapeHtml(r.prizeTitle || "Stars")}</span><span>${r.status === "active" ? formatRaffleCountdown(r.endsAt) : "Итоги: " + formatRaffleDate(r.endsAt)}</span></div>
+      <div class="raffle-card-prize">Призовой фонд</div>
       <div class="raffle-card-amount">${Number(r.prizePool).toFixed(2)} ⭐</div>
       <div class="raffle-card-bottom"><span>👥 ${Number(r.participants || 0)} участников · 🎟 ${Number(r.totalTickets || 0)} билетов</span><span class="raffle-arrow">›</span></div>
     `;
@@ -906,16 +906,16 @@ function renderRaffleDetail(data) {
   root.innerHTML = `
     <div class="raffle-detail-banner ${ended ? 'finished' : ''}">
       <div class="raffle-detail-prize">${escapeHtml(r.prizeTitle || 'Stars')}</div>
-      <div class="raffle-detail-badge" style="margin-top:8px">${ended ? 'Inactive' : 'Active'}</div>
-      <div class="raffle-detail-fund" style="margin-top:14px">Results: ${formatRaffleDate(r.endsAt)}</div>
+      <div class="raffle-detail-badge" style="margin-top:8px">${ended ? 'Завершён' : 'Активен'}</div>
+      <div class="raffle-detail-fund" style="margin-top:14px">Итоги: ${formatRaffleDate(r.endsAt)}</div>
     </div>
     <div class="raffle-detail-grid">
-      <div><span>Prize</span><b>${Number(r.prizePool).toFixed(2)} ⭐</b></div>
-      <div><span>Winners</span><b>${r.winnersCount}</b></div>
-      <div><span>Participants</span><b>${Number(r.participants || 0)}</b></div>
+      <div><span>Приз</span><b>${Number(r.prizePool).toFixed(2)} ⭐</b></div>
+      <div><span>Победителей</span><b>${r.winnersCount}</b></div>
+      <div><span>Участников</span><b>${Number(r.participants || 0)}</b></div>
       <div><span>Билет</span><b>${r.type === 'paid' ? Number(r.ticketPrice).toFixed(2) + ' ⭐' : 'Бесплатно'}</b></div>
     </div>
-    <div class="raffle-detail-each">Каждому победителю ≈ ${each.toFixed(2)} ⭐ · ${ended ? '—' : formatRaffleCountdown(r.endsAt)}</div>
+    <div class="raffle-detail-each">Каждому победителю ≈ ${each.toFixed(2)} ⭐ · ${ended ? 'Розыгрыш завершён' : formatRaffleCountdown(r.endsAt)}</div>
     <div class="raffle-channel-row"><a href="${escapeHtml(data.channelUrl)}" target="_blank" rel="noreferrer">📣 ${escapeHtml(r.channelTitle || r.channelUsername)}</a></div>
     ${mine ? `<div class="raffle-your-ticket"><b>Твои билеты: ${mine.tickets}</b><span>Оплачено: ${Number(mine.paidAmount).toFixed(2)} ⭐</span></div>` : ''}
     <div class="raffle-detail-actions">
@@ -1001,6 +1001,8 @@ async function checkBoost(id) {
 }
 
 $("#createRaffleBtn").onclick = async () => {
+  const btn = $("#createRaffleBtn");
+  if (btn.disabled) return;
   const prizePool = Number($("#rafflePrizePool").value);
   const winnersCount = Number($("#raffleWinners").value);
   const ticketPrice = Number($("#raffleTicketPrice").value);
@@ -1013,8 +1015,9 @@ $("#createRaffleBtn").onclick = async () => {
   if (raffleType === 'paid' && (!Number.isFinite(ticketPrice) || ticketPrice <= 0)) return toast('Укажи цену билета.');
   if (!channel) return toast('Укажи канал.');
   if (!endsAtValue) return toast('Укажи время окончания.');
-  const btn = $("#createRaffleBtn");
-  btn.disabled = true; btn.textContent = 'СОЗДАЁМ…';
+  btn.disabled = true;
+  const originalText = btn.textContent;
+  btn.textContent = 'СОЗДАЁМ…';
   try {
     const r = await fetch('/api/raffles', {method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({type:raffleType,ticketPrice: raffleType==='paid'?ticketPrice:0,prizePool,winnersCount,prizeTitle,channel,endsAt})});
     const data = await r.json().catch(() => ({}));
@@ -1031,7 +1034,7 @@ $("#createRaffleBtn").onclick = async () => {
     await loadRaffles();
     await openRaffleDetail(data.raffle.id);
   } catch(e) { toast(e.message); }
-  finally { btn.disabled = false; btn.textContent = 'СОЗДАТЬ РОЗЫГРЫШ'; }
+  finally { btn.disabled = false; btn.textContent = originalText; }
 };
 
 setInterval(() => {
