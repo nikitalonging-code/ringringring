@@ -133,7 +133,7 @@ function setMaintenanceOverlay(enabled, message = "") {
   if (!overlay) return;
   overlay.classList.toggle("hidden", !clientMaintenance);
   if (message) $("#maintenanceOverlay .maintenance-text").textContent = message;
-  ["topupBtn", "betBtn", "withdrawBtn", "openCreateRaffle", "openUpgrade", "openCreateTask"].forEach(id => {
+  ["topupBtn", "betBtn", "withdrawBtn", "openCreateRaffle", "openUpgrade", "openIceArena", "iceJoinBtn", "openCreateTask"].forEach(id => {
     const el = $("#" + id);
     if (el) el.disabled = clientMaintenance;
   });
@@ -671,6 +671,12 @@ function setView(view) {
 
   if (activeKey === "profile") loadProfile();
   if (activeKey === "raffles") loadRaffles();
+  if (activeKey === "games") {
+    $("#gamesList")?.classList.remove("hidden");
+    $("#upgradeGame")?.classList.add("hidden");
+    $("#iceArenaGame")?.classList.add("hidden");
+    window.__iceArenaActive = false;
+  }
 
   document.querySelectorAll(".nav-item").forEach(btn => {
     btn.classList.toggle("active", btn.dataset.view === activeKey);
@@ -875,9 +881,9 @@ function renderRaffles(items) {
     el.className = `raffle-card ${r.status !== "active" ? "finished" : ""}`;
     el.innerHTML = `
       <div class="raffle-card-glow"></div>
-      <div class="raffle-card-top"><span>Победителей: ${Number(r.winnersCount)}</span><span class="raffle-status">${r.status === "active" ? "Активен" : "Завершён"}</span></div>
-      <div class="raffle-card-top" style="margin-top:6px"><span>${escapeHtml(r.prizeTitle || "Stars")}</span><span>${r.status === "active" ? formatRaffleCountdown(r.endsAt) : "Итоги: " + formatRaffleDate(r.endsAt)}</span></div>
-      <div class="raffle-card-prize">Призовой фонд</div>
+      <div class="raffle-card-top"><span>Winners: ${Number(r.winnersCount)}</span><span class="raffle-status">${r.status === "active" ? "Active" : "Inactive"}</span></div>
+      <div class="raffle-card-top" style="margin-top:6px"><span>Name: ${escapeHtml(r.prizeTitle || "Stars")}</span><span>${r.status === "active" ? formatRaffleCountdown(r.endsAt) : "Results: " + formatRaffleDate(r.endsAt)}</span></div>
+      <div class="raffle-card-prize">Prize:</div>
       <div class="raffle-card-amount">${Number(r.prizePool).toFixed(2)} ⭐</div>
       <div class="raffle-card-bottom"><span>👥 ${Number(r.participants || 0)} участников · 🎟 ${Number(r.totalTickets || 0)} билетов</span><span class="raffle-arrow">›</span></div>
     `;
@@ -906,16 +912,16 @@ function renderRaffleDetail(data) {
   root.innerHTML = `
     <div class="raffle-detail-banner ${ended ? 'finished' : ''}">
       <div class="raffle-detail-prize">${escapeHtml(r.prizeTitle || 'Stars')}</div>
-      <div class="raffle-detail-badge" style="margin-top:8px">${ended ? 'Завершён' : 'Активен'}</div>
-      <div class="raffle-detail-fund" style="margin-top:14px">Итоги: ${formatRaffleDate(r.endsAt)}</div>
+      <div class="raffle-detail-badge" style="margin-top:8px">${ended ? 'Inactive' : 'Active'}</div>
+      <div class="raffle-detail-fund" style="margin-top:14px">Results: ${formatRaffleDate(r.endsAt)}</div>
     </div>
     <div class="raffle-detail-grid">
-      <div><span>Приз</span><b>${Number(r.prizePool).toFixed(2)} ⭐</b></div>
-      <div><span>Победителей</span><b>${r.winnersCount}</b></div>
-      <div><span>Участников</span><b>${Number(r.participants || 0)}</b></div>
+      <div><span>Prize</span><b>${Number(r.prizePool).toFixed(2)} ⭐</b></div>
+      <div><span>Winners</span><b>${r.winnersCount}</b></div>
+      <div><span>Participants</span><b>${Number(r.participants || 0)}</b></div>
       <div><span>Билет</span><b>${r.type === 'paid' ? Number(r.ticketPrice).toFixed(2) + ' ⭐' : 'Бесплатно'}</b></div>
     </div>
-    <div class="raffle-detail-each">Каждому победителю ≈ ${each.toFixed(2)} ⭐ · ${ended ? 'Розыгрыш завершён' : formatRaffleCountdown(r.endsAt)}</div>
+    <div class="raffle-detail-each">Каждому победителю ≈ ${each.toFixed(2)} ⭐ · ${ended ? '—' : formatRaffleCountdown(r.endsAt)}</div>
     <div class="raffle-channel-row"><a href="${escapeHtml(data.channelUrl)}" target="_blank" rel="noreferrer">📣 ${escapeHtml(r.channelTitle || r.channelUsername)}</a></div>
     ${mine ? `<div class="raffle-your-ticket"><b>Твои билеты: ${mine.tickets}</b><span>Оплачено: ${Number(mine.paidAmount).toFixed(2)} ⭐</span></div>` : ''}
     <div class="raffle-detail-actions">
@@ -1001,8 +1007,6 @@ async function checkBoost(id) {
 }
 
 $("#createRaffleBtn").onclick = async () => {
-  const btn = $("#createRaffleBtn");
-  if (btn.disabled) return;
   const prizePool = Number($("#rafflePrizePool").value);
   const winnersCount = Number($("#raffleWinners").value);
   const ticketPrice = Number($("#raffleTicketPrice").value);
@@ -1015,9 +1019,8 @@ $("#createRaffleBtn").onclick = async () => {
   if (raffleType === 'paid' && (!Number.isFinite(ticketPrice) || ticketPrice <= 0)) return toast('Укажи цену билета.');
   if (!channel) return toast('Укажи канал.');
   if (!endsAtValue) return toast('Укажи время окончания.');
-  btn.disabled = true;
-  const originalText = btn.textContent;
-  btn.textContent = 'СОЗДАЁМ…';
+  const btn = $("#createRaffleBtn");
+  btn.disabled = true; btn.textContent = 'СОЗДАЁМ…';
   try {
     const r = await fetch('/api/raffles', {method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({type:raffleType,ticketPrice: raffleType==='paid'?ticketPrice:0,prizePool,winnersCount,prizeTitle,channel,endsAt})});
     const data = await r.json().catch(() => ({}));
@@ -1034,7 +1037,7 @@ $("#createRaffleBtn").onclick = async () => {
     await loadRaffles();
     await openRaffleDetail(data.raffle.id);
   } catch(e) { toast(e.message); }
-  finally { btn.disabled = false; btn.textContent = originalText; }
+  finally { btn.disabled = false; btn.textContent = 'СОЗДАТЬ РОЗЫГРЫШ'; }
 };
 
 setInterval(() => {
@@ -1690,3 +1693,493 @@ if (historySearchInput) {
     navigator.clipboard.writeText(value).then(() => toast("Скопировано"));
   };
 });
+
+// ---------- ICE ARENA ----------
+// The Ice Arena is embedded into the Games tab without adding another project
+// or another public file. Its round state lives on the same Socket.IO server
+// and its bets use the same Stars balance as the rest of RING.
+(() => {
+  const iceArena = $("#iceArena");
+  const icePuck = $("#icePuck");
+  const iceZoneMap = $("#iceZoneMap");
+  const iceLegend = $("#iceLegend");
+  const iceWinner = $("#iceWinner");
+  if (!iceArena || !icePuck || !iceZoneMap || !iceLegend || !iceWinner) return;
+
+  const ICE_FLIGHT = 7000;
+  const ICE_PUCK_SIZE = 24;
+  const ICE_SIDE = 100;
+  const ICE_FRAMES = 60;
+  let iceW = iceArena.clientWidth || 300;
+  let iceMe = null;
+  let iceState = {
+    status: "WAITING",
+    players: [],
+    online: 0,
+    seed: 0,
+    roomId: "",
+    startAt: 0,
+    countdownEndsAt: 0,
+    winnerId: null
+  };
+  let iceLayout = [];
+  let icePlan = null;
+  let icePlanFor = null;
+  let iceFinished = false;
+  let icePhase = "";
+  let iceCam = null;
+  let iceServerSkew = 0;
+
+  function iceFmt(v) {
+    return String(Number(Number(v || 0).toFixed(2)));
+  }
+
+  function iceEsc(s) {
+    return String(s || "").replace(/[&<>\"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[c]));
+  }
+
+  function iceAvatarMarkup(p, size, cls = "") {
+    const safe = iceEsc((p?.name || "?").charAt(0).toUpperCase());
+    if (p?.avatar) {
+      return `<span class="${cls} ice-avatar" style="width:${size}px;height:${size}px"><img src="${iceEsc(p.avatar)}" alt="" referrerpolicy="no-referrer" onerror="this.parentNode.innerHTML='${safe}'"></span>`;
+    }
+    return `<span class="${cls} ice-avatar ice-player-av-fallback" style="width:${size}px;height:${size}px">${safe}</span>`;
+  }
+
+  function icePlace(x, y) {
+    icePuck.style.transform = `translate3d(${(x * iceW / 100 - ICE_PUCK_SIZE / 2).toFixed(2)}px,${(y * iceW / 100 - ICE_PUCK_SIZE / 2).toFixed(2)}px,0)`;
+  }
+
+  window.addEventListener("resize", () => { iceW = iceArena.clientWidth || iceW; });
+  icePlace(50, 50);
+  icePuck.style.visibility = "hidden";
+
+  // ---------- weighted Voronoi-like zone layout ----------
+  function iceClip(poly, a, b, c) {
+    const out = [];
+    for (let i = 0; i < poly.length; i++) {
+      const p = poly[i], q = poly[(i + 1) % poly.length];
+      const dp = a * p[0] + b * p[1] - c;
+      const dq = a * q[0] + b * q[1] - c;
+      if (dp <= 0) out.push(p);
+      if (dp * dq < 0) {
+        const t = dp / (dp - dq);
+        out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]);
+      }
+    }
+    return out;
+  }
+
+  function iceCells() {
+    return iceLayout.map(p => {
+      let poly = [[0, 0], [ICE_SIDE, 0], [ICE_SIDE, ICE_SIDE], [0, ICE_SIDE]];
+      for (const o of iceLayout) {
+        if (o === p || !poly.length) continue;
+        poly = iceClip(
+          poly,
+          2 * (o.sx - p.sx),
+          2 * (o.sy - p.sy),
+          o.sx * o.sx + o.sy * o.sy - p.sx * p.sx - p.sy * p.sy + p.w - o.w
+        );
+      }
+      return poly;
+    });
+  }
+
+  function iceInfo(poly) {
+    let area = 0, cx = 0, cy = 0;
+    for (let i = 0; i < poly.length; i++) {
+      const p = poly[i], q = poly[(i + 1) % poly.length];
+      const f = p[0] * q[1] - q[0] * p[1];
+      area += f;
+      cx += (p[0] + q[0]) * f;
+      cy += (p[1] + q[1]) * f;
+    }
+    area /= 2;
+    return area > 1e-9 ? { A: area, cx: cx / (6 * area), cy: cy / (6 * area) } : { A: 0, cx: 50, cy: 50 };
+  }
+
+  function iceInradius(poly, cx, cy) {
+    let m = 1e9;
+    for (let i = 0; i < poly.length; i++) {
+      const p = poly[i], q = poly[(i + 1) % poly.length];
+      const dx = q[0] - p[0], dy = q[1] - p[1], len = Math.hypot(dx, dy);
+      if (len > 1e-6) m = Math.min(m, Math.abs(dx * (cy - p[1]) - dy * (cx - p[0])) / len);
+    }
+    return m;
+  }
+
+  function iceSolve() {
+    const sum = iceLayout.reduce((s, p) => s + Number(p.bet || 0), 0) || 1;
+    for (let it = 0; it < 400; it++) {
+      const inf = iceCells().map(iceInfo);
+      iceLayout.forEach((p, i) => {
+        const error = p.bet / sum * ICE_SIDE * ICE_SIDE - inf[i].A;
+        const dir = Math.sign(error);
+        p.step = Math.min(3000, Math.max(0.02, p.step * (dir === p.dir ? 1.25 : 0.5)));
+        p.dir = dir;
+        p.w += dir * Math.min(p.step, Math.abs(error) * 3);
+        if (it < 25 && inf[i].A > 0) {
+          p.sx += (inf[i].cx - p.sx) * 0.3;
+          p.sy += (inf[i].cy - p.sy) * 0.3;
+        }
+      });
+      const meanWeight = iceLayout.reduce((s, p) => s + p.w, 0) / iceLayout.length;
+      iceLayout.forEach(p => { p.w -= meanWeight; });
+    }
+  }
+
+  function iceBuildLayout() {
+    iceLayout = (iceState.players || []).map(p => ({
+      id: p.id,
+      bet: Number(p.bet || 0),
+      sx: Number(p.sx || 50),
+      sy: Number(p.sy || 50),
+      w: 0,
+      step: 200,
+      dir: 0
+    }));
+    if (iceLayout.length) iceSolve();
+  }
+
+  function iceWinnerAt(x, y) {
+    let best = iceLayout[0], bestValue = Infinity;
+    for (const p of iceLayout) {
+      const v = (x - p.sx) ** 2 + (y - p.sy) ** 2 - p.w;
+      if (v < bestValue) {
+        bestValue = v;
+        best = p;
+      }
+    }
+    return best;
+  }
+
+  function iceRender() {
+    iceZoneMap.innerHTML = "";
+    iceLegend.innerHTML = "";
+    const sum = (iceState.players || []).reduce((s, p) => s + Number(p.bet || 0), 0);
+    const polygons = iceLayout.length ? iceCells() : [];
+
+    (iceState.players || []).map((p, i) => i).sort((a, b) => {
+      const mineA = iceMe && String(iceState.players[a].id) === String(iceMe.id) ? 1 : 0;
+      const mineB = iceMe && String(iceState.players[b].id) === String(iceMe.id) ? 1 : 0;
+      return mineA - mineB;
+    }).forEach(i => {
+      const p = iceState.players[i];
+      const poly = polygons[i];
+      if (!poly?.length) return;
+      const info = iceInfo(poly);
+      const radius = iceInradius(poly, info.cx, info.cy);
+      const el = document.createElement("div");
+      el.className = "ice-zone-item" + (iceMe && String(p.id) === String(iceMe.id) ? " mine" : "");
+      el.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none"><polygon points="${poly.map(v => `${v[0].toFixed(2)},${v[1].toFixed(2)}`).join(" ")}" fill="${iceEsc(p.color)}"></polygon></svg>`;
+      const avatarSize = Math.min(46, radius * iceW / 100 * 1.4);
+      if (avatarSize >= 14) {
+        const avatar = document.createElement("span");
+        avatar.className = "ice-zone-av";
+        avatar.style.width = avatar.style.height = `${Math.round(avatarSize)}px`;
+        avatar.style.left = `${info.cx}%`;
+        avatar.style.top = `${info.cy}%`;
+        if (p.avatar) {
+          const img = document.createElement("img");
+          img.src = p.avatar;
+          img.referrerPolicy = "no-referrer";
+          img.alt = "";
+          img.onerror = () => {
+            avatar.textContent = String(p.name || "?").charAt(0).toUpperCase();
+            avatar.classList.add("ice-zone-av-fallback");
+          };
+          avatar.appendChild(img);
+        } else {
+          avatar.textContent = String(p.name || "?").charAt(0).toUpperCase();
+          avatar.classList.add("ice-zone-av-fallback");
+        }
+        el.appendChild(avatar);
+      }
+      p.__zoneEl = el;
+      iceZoneMap.appendChild(el);
+    });
+
+    (iceState.players || []).forEach(p => {
+      const item = document.createElement("div");
+      item.className = "ice-player";
+      const av = document.createElement("span");
+      av.className = "ice-player-av";
+      if (p.avatar) {
+        const img = document.createElement("img");
+        img.src = p.avatar;
+        img.referrerPolicy = "no-referrer";
+        img.alt = "";
+        img.onerror = () => { av.textContent = String(p.name || "?").charAt(0).toUpperCase(); };
+        av.appendChild(img);
+      } else av.textContent = String(p.name || "?").charAt(0).toUpperCase();
+      item.appendChild(av);
+      const name = document.createElement("span");
+      name.className = "ice-player-name";
+      name.textContent = p.name || "Игрок";
+      item.appendChild(name);
+      const bet = document.createElement("b");
+      bet.className = "ice-player-bet";
+      bet.textContent = `${iceFmt(p.bet)} ⭐ · ${sum ? (Number(p.bet) / sum * 100).toFixed(1) : "0.0"}%`;
+      item.appendChild(bet);
+      iceLegend.appendChild(item);
+    });
+
+    $("#icePool").textContent = `${iceFmt(sum)} ⭐`;
+    $("#icePlayerCount").textContent = String((iceState.players || []).length);
+    $("#iceOnline").textContent = String(iceState.online || 0);
+    if (iceState.status === "RESULT" && iceFinished) iceApplyResult();
+    iceUi();
+  }
+
+  function iceApplyResult() {
+    (iceState.players || []).forEach(p => {
+      if (p.__zoneEl) p.__zoneEl.classList.add(String(p.id) === String(iceState.winnerId) ? "winner-zone" : "loser");
+    });
+    const winner = (iceState.players || []).find(p => String(p.id) === String(iceState.winnerId));
+    if (!winner) return;
+    const pool = (iceState.players || []).reduce((s, p) => s + Number(p.bet || 0), 0);
+    iceWinner.innerHTML = `<div><b>${iceEsc(winner.name)}</b><small>ПОБЕДИТЕЛЬ · +${iceFmt(pool)} ⭐</small></div>`;
+    iceWinner.classList.add("show");
+  }
+
+  function iceUi() {
+    const now = Date.now() + iceServerSkew;
+    let text = "", canBet = false;
+    if (iceState.status === "WAITING") {
+      text = (iceState.players || []).length ? "Ждём 2-го игрока" : "Набор игроков";
+      canBet = true;
+    } else if (iceState.status === "COUNTDOWN") {
+      const left = Number(iceState.countdownEndsAt || 0) - now;
+      if (left > 1000) { text = `Старт через ${Math.ceil(left / 1000)} с`; canBet = true; }
+      else text = "Ставки закрыты";
+    } else if (iceState.status === "RUNNING") {
+      text = icePhase === "rushing" ? "Шайба на льду" : "Раунд начинается";
+    } else {
+      text = "Раунд завершён";
+    }
+    $("#iceStatus").textContent = text;
+    $("#iceJoinBtn").disabled = !canBet || !iceMe || Number(currentBalance) < 1 || clientMaintenance;
+    const mine = iceMe && (iceState.players || []).find(p => String(p.id) === String(iceMe.id));
+    $("#iceStakeInfo").textContent = mine ? `Ваша: ${iceFmt(mine.bet)} ⭐` : "";
+    $("#iceBalanceLabel").textContent = Number(currentBalance || 0).toFixed(2);
+  }
+  setInterval(iceUi, 200);
+
+  function iceRng(a) {
+    return function () {
+      a |= 0;
+      a = a + 0x6D2B79F5 | 0;
+      let t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+
+  function iceSim(x, y, angle, speed) {
+    let vx = Math.cos(angle) * speed, vy = Math.sin(angle) * speed;
+    const dt = 1 / 60;
+    const decay = 4.5 / (ICE_FLIGHT / 1000);
+    const points = [[x, y]];
+    const total = ICE_FLIGHT / 1000 * ICE_FRAMES;
+    for (let i = 1; i <= total; i++) {
+      const boost = 1 + Math.exp(-((i - 1) * dt) / 0.4);
+      x += vx * dt * boost;
+      y += vy * dt * boost;
+      let hitX = false, hitY = false;
+      if (x < 0) { x = 0; if (vx < 0) { vx = Math.abs(vx) * 0.78; hitX = true; } }
+      else if (x > 100) { x = 100; if (vx > 0) { vx = -Math.abs(vx) * 0.78; hitX = true; } }
+      if (y < 0) { y = 0; if (vy < 0) { vy = Math.abs(vy) * 0.78; hitY = true; } }
+      else if (y > 100) { y = 100; if (vy > 0) { vy = -Math.abs(vy) * 0.78; hitY = true; } }
+      if (hitX || hitY) {
+        const speedNow = Math.hypot(vx, vy) || 1;
+        const minSpeed = 0.37 * speedNow;
+        const ax = hitX ? (x < 50 ? 1 : -1) : 0;
+        const ay = hitY ? (y < 50 ? 1 : -1) : 0;
+        let nx = vx, ny = vy;
+        if (ax && ax * nx < minSpeed) { nx = ax * minSpeed; ny = (Math.sign(ny) || 1) * Math.sqrt(Math.max(0, speedNow * speedNow - nx * nx)); }
+        if (ay && ay * ny < minSpeed) { ny = ay * minSpeed; nx = (Math.sign(nx) || 1) * Math.sqrt(Math.max(0, speedNow * speedNow - ny * ny)); }
+        vx = nx; vy = ny;
+      }
+      if ((x < 12 || x > 88) && (y < 12 || y > 88)) {
+        const s0 = Math.hypot(vx, vy);
+        vx += (50 - x) * 0.02 * s0 * dt;
+        vy += (50 - y) * 0.02 * s0 * dt;
+        const s1 = Math.hypot(vx, vy) || 1;
+        vx *= s0 / s1;
+        vy *= s0 / s1;
+      }
+      const f = Math.exp(-decay * dt);
+      vx *= f;
+      vy *= f;
+      points.push([x, y]);
+    }
+    return points;
+  }
+
+  function iceBuildPlan() {
+    let best = null;
+    const frames = ICE_FLIGHT / 1000 * ICE_FRAMES;
+    for (let k = 0; k < 4000; k++) {
+      const r = iceRng((Number(iceState.seed) + k * 7919) >>> 0);
+      const sx = 12 + r() * 76;
+      const sy = 14 + r() * 72;
+      const q = Math.floor(r() * 4);
+      const angle = (q * 90 + 24 + r() * 42) * Math.PI / 180;
+      const speed = 750 + r() * 160;
+      const startAngle = r() * 360;
+      const points = iceSim(sx, sy, angle, speed);
+      best = { sp: [sx, sy], pts: points, ang: angle, sa: startAngle };
+      const end = points[Math.min(frames, points.length - 1)];
+      if (iceWinnerAt(end[0], end[1]).id === iceState.winnerId) break;
+    }
+    const flightAngle = best.ang * 180 / Math.PI + 90;
+    const endAngle = best.sa + 1440 + ((((flightAngle - best.sa) % 360) + 360) % 360);
+    icePuck.style.setProperty("--flight-angle", `${flightAngle}deg`);
+    icePuck.style.setProperty("--ice-spin-ms", "1400ms");
+    icePuck.style.setProperty("--start-angle", `${best.sa.toFixed(2)}deg`);
+    icePuck.style.setProperty("--end-angle", `${endAngle.toFixed(2)}deg`);
+    return best;
+  }
+
+  function iceSetPhase(phase) {
+    if (phase === icePhase) return;
+    icePhase = phase;
+    icePuck.classList.toggle("choosing", phase === "choosing");
+    icePuck.classList.toggle("aiming", phase === "aiming");
+    icePuck.classList.toggle("rushing", phase === "rushing");
+  }
+
+  function iceFrame(time) {
+    if (!icePlan) return;
+    if (time < 0) {
+      icePuck.style.visibility = "hidden";
+      icePlace(icePlan.sp[0], icePlan.sp[1]);
+      return;
+    }
+    icePuck.style.visibility = "visible";
+    iceSetPhase("rushing");
+    const frames = ICE_FLIGHT / 1000 * ICE_FRAMES;
+    const flightTime = Math.min(time, ICE_FLIGHT);
+    const frameIndex = Math.min(frames - 1, Math.floor(flightTime / 1000 * ICE_FRAMES));
+    const fraction = flightTime / 1000 * ICE_FRAMES - frameIndex;
+    const a = icePlan.pts[frameIndex], b = icePlan.pts[frameIndex + 1];
+    const x = a[0] + (b[0] - a[0]) * fraction;
+    const y = a[1] + (b[1] - a[1]) * fraction;
+    icePlace(x, y);
+
+    const zoomT = Math.max(0, Math.min(1, (flightTime - (ICE_FLIGHT - 3000)) / 3000));
+    if (zoomT > 0) {
+      if (!iceCam) { iceCam = { x, y }; iceArena.style.transition = "none"; }
+      iceCam.x += (x - iceCam.x) * 0.12;
+      iceCam.y += (y - iceCam.y) * 0.12;
+      const eased = zoomT * zoomT * (3 - 2 * zoomT);
+      const scale = 1 + 0.32 * eased;
+      const limit = (scale - 1) * 50;
+      const tx = Math.max(-limit, Math.min(limit, (50 - iceCam.x) * scale));
+      const ty = Math.max(-limit, Math.min(limit, (50 - iceCam.y) * scale));
+      iceArena.style.transform = `translate(${tx}%,${ty}%) scale(${scale})`;
+    }
+    if (flightTime >= ICE_FLIGHT && !iceFinished) {
+      iceFinished = true;
+      iceApplyResult();
+    }
+  }
+
+  function iceLoop() {
+    requestAnimationFrame(iceLoop);
+    if (!window.__iceArenaActive) return;
+    if ((iceState.status !== "RUNNING" && iceState.status !== "RESULT") || !iceState.startAt || !iceLayout.length) return;
+    if (icePlanFor !== iceState.roomId) {
+      icePlan = iceBuildPlan();
+      icePlanFor = iceState.roomId;
+      iceFinished = false;
+      iceCam = null;
+      iceWinner.classList.remove("show");
+      iceWinner.innerHTML = "";
+      iceSetPhase("choosing");
+    }
+    iceFrame(Date.now() + iceServerSkew - Number(iceState.startAt));
+  }
+  requestAnimationFrame(iceLoop);
+
+  function iceResetVisual() {
+    icePlan = null;
+    icePlanFor = null;
+    iceFinished = false;
+    iceCam = null;
+    icePhase = "";
+    iceArena.style.transition = "";
+    iceArena.style.transform = "scale(1)";
+    icePuck.classList.remove("choosing", "aiming", "rushing");
+    iceWinner.classList.remove("show");
+    iceWinner.innerHTML = "";
+    iceW = iceArena.clientWidth || iceW;
+    icePlace(50, 50);
+    icePuck.style.visibility = "hidden";
+  }
+
+  socket.on("ice_state", data => {
+    iceServerSkew = Number(data?.now || Date.now()) - Date.now();
+    iceState = {
+      status: data?.status || "WAITING",
+      players: Array.isArray(data?.players) ? data.players : [],
+      online: Number(data?.online || 0),
+      seed: Number(data?.seed || 0),
+      roomId: data?.roomId || "",
+      startAt: Number(data?.startAt || 0),
+      countdownEndsAt: Number(data?.countdownEndsAt || 0),
+      winnerId: data?.winnerId == null ? null : String(data.winnerId)
+    };
+    if (iceState.status === "WAITING" || iceState.status === "COUNTDOWN") iceResetVisual();
+    iceBuildLayout();
+    iceRender();
+  });
+
+  socket.on("joined", data => {
+    iceMe = {
+      id: String(data?.playerId || ""),
+      name: data?.user?.username ? `@${data.user.username}` : (data?.user?.first_name || "Игрок"),
+      avatar: data?.user?.photo_url || ""
+    };
+    iceUi();
+    socket.emit("request_ice_state");
+  });
+
+  socket.on("balance_updated", () => setTimeout(iceUi, 0));
+
+  $("#openIceArena")?.addEventListener("click", () => {
+    if (!initData) return handleNotTelegram();
+    $("#gamesList")?.classList.add("hidden");
+    $("#upgradeGame")?.classList.add("hidden");
+    $("#iceArenaGame")?.classList.remove("hidden");
+    window.__iceArenaActive = true;
+    iceBuildLayout();
+    iceRender();
+    socket.emit("request_ice_state");
+  });
+
+  $("#iceArenaBack")?.addEventListener("click", () => {
+    if (iceState.status === "RUNNING") return toast("Дождитесь окончания раунда.");
+    $("#iceArenaGame")?.classList.add("hidden");
+    $("#gamesList")?.classList.remove("hidden");
+    window.__iceArenaActive = false;
+  });
+
+  document.querySelectorAll("[data-ice-v]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const value = btn.dataset.iceV;
+      $("#iceBetAmt").value = value;
+      document.querySelectorAll("[data-ice-v]").forEach(b => b.classList.toggle("active", b === btn));
+    });
+  });
+  document.querySelector('[data-ice-v="1"]')?.classList.add("active");
+
+  $("#iceJoinBtn")?.addEventListener("click", () => {
+    if (!initData) return handleNotTelegram();
+    const amount = Number($("#iceBetAmt").value);
+    if (!Number.isInteger(amount) || amount <= 0) return toast("Введите целое число Stars.");
+    if (amount > Number(currentBalance || 0)) return toast("Недостаточно Stars на балансе.");
+    socket.emit("ice_bet", { amount });
+  });
+})();

@@ -114,6 +114,112 @@ const state = {
 
 let timerHandle = null;
 
+// ---------- ICE ARENA (separate room inside the same Mini App) ----------
+const ICE_COUNTDOWN = 10000;
+const ICE_CLOSE = 1000;
+const ICE_RUN_MS = 7900;
+const ICE_RESULT_MS = 4500;
+const ICE_COLORS = ["#ffc915", "#9c8429", "#d3ab24", "#5d652a", "#b79322", "#76691f", "#e0c24a", "#565f26", "#c5a02a", "#837329"];
+const iceState = { roomId: crypto.randomUUID(), status: "WAITING", countdownEndsAt: null, startAt: null, players: new Map(), winnerId: null, seed: 0 };
+let iceTimerHandle = null;
+
+function iceTotalBank() {
+  return Number([...iceState.players.values()].reduce((sum, p) => sum + Number(p.bet || 0), 0).toFixed(2));
+}
+
+function icePublicState() {
+  return {
+    roomId: iceState.roomId, status: iceState.status, countdownEndsAt: iceState.countdownEndsAt, startAt: iceState.startAt,
+    seed: iceState.seed, winnerId: iceState.winnerId, online: io.sockets?.sockets?.size || 0,
+    players: [...iceState.players.values()].map(p => ({ id:p.id, name:p.name, avatar:p.avatar, color:p.color, bet:Number(p.bet||0), sx:p.sx, sy:p.sy }))
+  };
+}
+
+function iceBroadcast() { io.emit("ice_state", icePublicState()); }
+
+function iceSpot() {
+  let best = [50,50], bd = -1;
+  for (let k=0;k<50;k++) {
+    const x=10+Math.random()*80, y=10+Math.random()*80;
+    const d=[...iceState.players.values()].reduce((m,p)=>Math.min(m,(p.sx-x)**2+(p.sy-y)**2),1e9);
+    if (d>bd) { bd=d; best=[x,y]; }
+  }
+  return best;
+}
+
+function iceAddPlayer(user) {
+  const id=String(user.id), old=iceState.players.get(id);
+  if (old) return old;
+  const used=new Set([...iceState.players.values()].map(p=>p.color));
+  const color=ICE_COLORS.find(c=>!used.has(c)) || ICE_COLORS[iceState.players.size%ICE_COLORS.length];
+  const [sx,sy]=iceSpot();
+  const p={id,name:user.username?"@"+user.username:(user.first_name||"Игрок"),avatar:user.photo_url||"",color,bet:0,sx,sy,betLocked:false};
+  iceState.players.set(id,p);
+  return p;
+}
+
+async function icePlaceBet(playerId, amount) {
+  const value=Number(amount);
+  if (!Number.isInteger(value) || value<=0) throw new Error("Ставка должна быть целым числом Stars больше 0.");
+  if (iceState.status!=="WAITING" && iceState.status!=="COUNTDOWN") throw new Error("Раунд уже идёт.");
+  if (iceState.status==="COUNTDOWN" && iceState.countdownEndsAt && Date.now()>=iceState.countdownEndsAt-ICE_CLOSE) throw new Error("Приём ставок закрыт.");
+  const dbUser=await getUser(playerId,{fresh:true});
+  if (!dbUser) throw new Error("Пользователь не найден.");
+  if (dbUser.banned) throw new Error("Ваш аккаунт заблокирован в приложении.");
+  let p=iceState.players.get(String(playerId));
+  if (!p) p=iceAddPlayer({id:playerId,username:dbUser.username,first_name:dbUser.first_name,photo_url:dbUser.avatar_url});
+  if (p.betLocked) throw new Error("Предыдущая ставка ещё обрабатывается.");
+  p.betLocked=true;
+  try {
+    const balance=await debitBalance(playerId,value,{type:"ice_bet",description:`Ice Arena: ставка ${value} ⭐`,countsAsWager:true});
+    p.bet+=value; p.betLocked=false;
+    const funded=[...iceState.players.values()].filter(x=>Number(x.bet)>0);
+    if (iceState.status==="WAITING" && funded.length>=2) {
+      iceState.status="COUNTDOWN"; iceState.countdownEndsAt=Date.now()+ICE_COUNTDOWN;
+      clearTimeout(iceTimerHandle); iceTimerHandle=setTimeout(iceStartRun,ICE_COUNTDOWN);
+    }
+    iceBroadcast();
+    return {bet:p.bet,balance};
+  } catch(e) { p.betLocked=false; throw e; }
+}
+
+function iceStartRun() {
+  if (iceState.status!=="COUNTDOWN") return;
+  const players=[...iceState.players.values()].filter(p=>Number(p.bet)>0);
+  if(players.length<2){iceState.status="WAITING";iceState.countdownEndsAt=null;iceBroadcast();return;}
+  const roundSeed=crypto.randomBytes(16).toString("hex");
+  const winner=weightedWinner(players,seededFloat(roundSeed,"ice-winner"));
+  if(!winner)return;
+  iceState.status="RUNNING"; iceState.countdownEndsAt=null; iceState.winnerId=winner.id;
+  iceState.seed=Number.parseInt(roundSeed.slice(0,8),16)>>>0; iceState.startAt=Date.now()+500;
+  iceBroadcast(); clearTimeout(iceTimerHandle); iceTimerHandle=setTimeout(iceFinish,ICE_RUN_MS);
+}
+
+async function iceFinish() {
+  if (iceState.status!=="RUNNING") return;
+  const players=[...iceState.players.values()], bank=iceTotalBank(), winnerId=iceState.winnerId;
+  let winnerBalanceAfter=null;
+  try {
+    const client=await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const r=await client.query(`UPDATE users SET balance=balance+$2, updated_at=NOW() WHERE telegram_id=$1 RETURNING balance::float AS balance`,[String(winnerId),bank]);
+      if(!r.rowCount) throw new Error("Победитель не найден при расчёте Ice Arena.");
+      winnerBalanceAfter=Number(r.rows[0].balance);
+      await client.query(`INSERT INTO balance_transactions (telegram_user_id,type,amount,balance_after,description) VALUES ($1,'ice_win',$2,$3,$4)`,[String(winnerId),bank,winnerBalanceAfter,`Победа Ice Arena, раунд ${iceState.roomId}`]);
+      for(const p of players){await client.query(`UPDATE users SET games_played=games_played+1,games_won=games_won+$2,total_wagered=total_wagered+$3,updated_at=NOW() WHERE telegram_id=$1`,[String(p.id),p.id===winnerId?1:0,Number(p.bet||0)]);}
+      await client.query("COMMIT"); invalidateUserCache(winnerId);
+    } catch(e){try{await client.query("ROLLBACK")}catch{} console.error("Ice Arena settlement error:",e.message);} finally{client.release();}
+  } catch(e){console.error("Ice Arena DB error:",e.message);}
+  iceState.status="RESULT"; iceBroadcast();
+  if(winnerBalanceAfter!=null) setTimeout(()=>io.to(`user:${String(winnerId)}`).emit("balance_updated",{balance:winnerBalanceAfter}),2200);
+  clearTimeout(iceTimerHandle); iceTimerHandle=setTimeout(iceReset,ICE_RESULT_MS);
+}
+
+function iceReset(){
+  clearTimeout(iceTimerHandle); iceState.roomId=crypto.randomUUID(); iceState.status="WAITING"; iceState.countdownEndsAt=null; iceState.startAt=null; iceState.players.clear(); iceState.winnerId=null; iceState.seed=0; iceBroadcast();
+}
+
 function safeName(name) {
   const s = String(name || "").trim();
   return s ? s.slice(0, 32) : "Игрок";
@@ -215,34 +321,6 @@ function weightedWinner(players, target) {
     if (target < cumulative) return p;
   }
   return funded[funded.length - 1];
-}
-
-// PVP commission is progressive: the rarer the win, the larger the house
-// cut. The curve is intentionally non-linear so high-chance wins stay around
-// 1.5–3% while very low-chance wins approach a 30% ceiling.
-function calculatePvpSettlement(bank, winnerBet) {
-  const safeBank = Math.max(0, Number(bank) || 0);
-  const safeBet = Math.max(0, Number(winnerBet) || 0);
-  if (safeBank <= 0) return { payout: 0, commission: 0, commissionRate: 0, chance: 0 };
-
-  const chance = Math.min(1, Math.max(0, safeBet / safeBank));
-  const inverseChance = 1 - chance;
-  const commissionRate = Math.min(0.30, 0.015 + 0.30 * inverseChance * inverseChance);
-  const targetCommission = safeBank * commissionRate;
-
-  // Stars are whole units. The commission can never reduce the payout below
-  // the winner's original stake, so the effective commission is capped.
-  const maxCommission = Math.max(0, safeBank - safeBet);
-  const commission = Math.min(targetCommission, maxCommission);
-  const payout = Math.max(safeBet, Math.floor(safeBank - commission));
-  const effectiveCommission = Math.max(0, Number((safeBank - payout).toFixed(2)));
-
-  return {
-    payout,
-    commission: effectiveCommission,
-    commissionRate,
-    chance
-  };
 }
 
 function validateTelegramInitData(initData) {
@@ -949,12 +1027,11 @@ async function finishRound() {
     sectorStart += share;
   }
 
-  // Telegram Stars are whole Stars. The commission now depends on the
-  // winner's actual probability in this round: the smaller the chance, the
-  // larger the commission, with a 30% ceiling.
-  const settlement = calculatePvpSettlement(bank, winner.bet);
-  const payout = settlement.payout;
-  const commission = settlement.commission;
+  // Telegram Stars are whole Stars, so production payout is rounded down.
+  // The winner still can never receive less than their original stake.
+  const normalPayout = Math.floor(bank * 0.92);
+  const payout = Math.max(Number(winner.bet), normalPayout);
+  const commission = Math.max(0, Number((bank - payout).toFixed(2)));
 
   state.payout = payout;
   state.commission = commission;
@@ -1237,7 +1314,9 @@ io.on("connection", socket => {
         isAdmin: isAdmin(p.id)
       });
       socket.emit("room_state", publicState());
+      socket.emit("ice_state", icePublicState());
       broadcast();
+      iceBroadcast();
     } catch (e) {
       socket.emit("error_message", e.message);
     }
@@ -1261,6 +1340,19 @@ io.on("connection", socket => {
       broadcast();
     } catch (e) { socket.emit("error_message", e.message); }
   });
+
+  socket.on("ice_bet", async data => {
+    try {
+      const id = socket.data.playerId;
+      if (maintenanceMode && !isAdmin(id)) throw new Error(maintenanceMessage());
+      if (!id) throw new Error("Авторизация Telegram не выполнена.");
+      const result = await icePlaceBet(id, data?.amount);
+      socket.emit("ice_bet_accepted", result);
+      socket.emit("balance_updated", { balance: result.balance });
+    } catch (e) { socket.emit("error_message", e.message); }
+  });
+
+  socket.on("request_ice_state", () => socket.emit("ice_state", icePublicState()));
 
   socket.on("upgrade_spin", async data => {
     try {
@@ -3090,7 +3182,7 @@ async function handleWithdrawalCallback(callback) {
       await telegramApi("editMessageReplyMarkup", {
         chat_id: callback.message?.chat?.id,
         message_id: callback.message?.message_id,
-        reply_markup: { inline_keyboard: [[{ text: '📢 Открыть канал', url: `https://t.me/${String(preview.rows[0].target_username || '').replace(/^@/, '')}` }]] }
+        reply_markup: { inline_keyboard: [] }
       }).catch(() => {});
       return true;
     }
@@ -4010,16 +4102,13 @@ function taskPrice(reward, activations) {
   return Number((Number(reward) * Number(activations) * safeMultiplier).toFixed(2));
 }
 
-function taskApprovalButtons(taskId, channelUsername = '') {
-  const clean = String(channelUsername || '').trim().replace(/^@/, '').split(/[/?#\s]/)[0];
-  const rows = [[
-    { text: "✅ Принять", callback_data: `task:approve:${taskId}` },
-    { text: "❌ Отклонить", callback_data: `task:reject:${taskId}` }
-  ]];
-  if (/^[A-Za-z0-9_]{5,32}$/.test(clean)) {
-    rows.push([{ text: "📢 Открыть канал", url: `https://t.me/${clean}` }]);
-  }
-  return { inline_keyboard: rows };
+function taskApprovalButtons(taskId) {
+  return {
+    inline_keyboard: [[
+      { text: "✅ Принять", callback_data: `task:approve:${taskId}` },
+      { text: "❌ Отклонить", callback_data: `task:reject:${taskId}` }
+    ]]
+  };
 }
 
 async function notifyTaskCreationAttempt(telegramUser, body) {
@@ -4045,24 +4134,18 @@ async function notifyTaskCreationAttempt(telegramUser, body) {
 async function notifyTaskPendingAdmins(telegramUser, body, taskResult) {
   const ids = getAdminIds();
   if (!ids.length || !process.env.TELEGRAM_BOT_TOKEN) return;
-  const channelRaw = String(taskResult?.channelUsername || body?.channel || taskResult?.channel || '—').trim();
-  const channelUsername = channelRaw.replace(/^@/, '').split(/[/?#\s]/)[0];
-  const channelUrl = /^[A-Za-z0-9_]{5,32}$/.test(channelUsername) ? `https://t.me/${channelUsername}` : '';
-  const channelLabel = /^[A-Za-z0-9_]{5,32}$/.test(channelUsername) ? `@${channelUsername}` : channelRaw;
+  const channel = String(body?.channel || taskResult?.channel || '—').trim();
   const reward = Number(body?.reward || 0);
   const activations = Number(body?.activations || 0);
   const price = Number(taskResult?.price || taskPrice(reward, activations));
   const username = telegramUser?.username ? `@${telegramUser.username}` : 'без username';
   const taskId = String(taskResult?.id || '');
-  const channelLine = channelUrl
-    ? `📢 Канал: <a href="${channelUrl}">${escapeHtmlTelegram(channelLabel)}</a>`
-    : `📢 Канал: <b>${escapeHtmlTelegram(channelLabel)}</b>`;
   const text = [
     '🟠 <b>Новое задание на проверку</b>',
     '',
     `👤 Пользователь: <b>${escapeHtmlTelegram(username)}</b>`,
     `🆔 ID: <code>${escapeHtmlTelegram(telegramUser?.id)}</code>`,
-    channelLine,
+    `📢 Канал: <b>${escapeHtmlTelegram(channel)}</b>`,
     `⭐ Награда: <b>${Number.isFinite(reward) ? reward.toFixed(2) : '0.00'} ⭐</b>`,
     `👥 Активации: <b>${Number.isFinite(activations) ? activations : 0}</b>`,
     `💳 Стоимость: <b>${price.toFixed(2)} ⭐</b>`,
@@ -4075,7 +4158,7 @@ async function notifyTaskPendingAdmins(telegramUser, body, taskResult) {
     chat_id: id,
     text,
     parse_mode: 'HTML',
-    reply_markup: taskApprovalButtons(taskId, channelLabel)
+    reply_markup: taskApprovalButtons(taskId)
   }).catch(e => console.error(`Task approval notify error (${id}):`, e.message))));
 }
 
@@ -4147,7 +4230,7 @@ async function handleTaskApprovalCallback(callback) {
       await telegramApi('editMessageText', {
         chat_id: callback.message?.chat?.id,
         message_id: callback.message?.message_id,
-        text: `✅ <b>Задание принято</b>\n\n📢 <a href="https://t.me/${encodeURIComponent(String(preview.rows[0].target_username || '').replace(/^@/, ''))}">${escapeHtmlTelegram(preview.rows[0].target_username)}</a> · ${Number(preview.rows[0].reward).toFixed(2)} ⭐ · ${Number(preview.rows[0].max_activations)} активаций\nПользователь: <code>${escapeHtmlTelegram(preview.rows[0].created_by)}</code>\nСтоимость: ${Number(preview.rows[0].price).toFixed(2)} ⭐`,
+        text: `✅ <b>Задание принято</b>\n\n${escapeHtmlTelegram(preview.rows[0].target_username)} · ${Number(preview.rows[0].reward).toFixed(2)} ⭐ · ${Number(preview.rows[0].max_activations)} активаций\nПользователь: <code>${escapeHtmlTelegram(preview.rows[0].created_by)}</code>\nСтоимость: ${Number(preview.rows[0].price).toFixed(2)} ⭐`,
         parse_mode: 'HTML',
         reply_markup: { inline_keyboard: [] }
       }).catch(() => {});
@@ -4205,9 +4288,9 @@ async function handleTaskApprovalCallback(callback) {
     await telegramApi('editMessageText', {
       chat_id: callback.message?.chat?.id,
       message_id: callback.message?.message_id,
-      text: `❌ <b>Задание отклонено</b>\n\n📢 <a href="https://t.me/${encodeURIComponent(String(task.target_username || '').replace(/^@/, ''))}">${escapeHtmlTelegram(task.target_username)}</a>\nПользователь: <code>${escapeHtmlTelegram(task.created_by)}</code>\nВозврат: ${Number(task.price || 0).toFixed(2)} ⭐`,
+      text: `❌ <b>Задание отклонено</b>\n\n${escapeHtmlTelegram(task.target_username)}\nПользователь: <code>${escapeHtmlTelegram(task.created_by)}</code>\nВозврат: ${Number(task.price || 0).toFixed(2)} ⭐`,
       parse_mode: 'HTML',
-      reply_markup: { inline_keyboard: [[{ text: '📢 Открыть канал', url: `https://t.me/${String(task.target_username || '').replace(/^@/, '')}` }]] }
+      reply_markup: { inline_keyboard: [] }
     }).catch(() => {});
     return true;
   } catch (e) {
@@ -4235,25 +4318,6 @@ async function createTaskForUser(userId, body) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-
-    // Do not let multiple paid tasks for the same subscription channel stack
-    // at the same time. The advisory lock closes the race where two requests
-    // arrive simultaneously before either one is inserted. Once the existing
-    // task reaches its activation limit and becomes finished, a new task may
-    // be purchased for the same channel again.
-    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [String(channel.id)]);
-    const existing = await client.query(
-      `SELECT id, status FROM tasks
-       WHERE status IN ('pending','active')
-         AND (target_chat_id=$1 OR LOWER(target_username)=LOWER($2))
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [String(channel.id), String(channel.username)]
-    );
-    if (existing.rowCount) {
-      const stateText = existing.rows[0].status === 'pending' ? 'на проверке у администратора' : 'уже активно';
-      throw new Error(`Задание на подписку на этот канал ${stateText}. Повторно купить его можно после завершения текущего задания.`);
-    }
 
     if (price > 0) {
       const debited = await client.query(
@@ -4288,17 +4352,7 @@ async function createTaskForUser(userId, body) {
 
     await client.query("COMMIT");
     invalidateUserCache(userId);
-    return {
-      ok: true,
-      id,
-      price,
-      balance,
-      free: adminCreator,
-      pending: !adminCreator,
-      status,
-      channelUsername: channel.username,
-      channelId: channel.id
-    };
+    return { ok: true, id, price, balance, free: adminCreator, pending: !adminCreator, status };
   } catch (e) {
     try { await client.query("ROLLBACK"); } catch {}
     throw e;

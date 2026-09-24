@@ -861,89 +861,95 @@ html,body{height:100%;overflow:hidden}
 .maintenance-text{margin-top:10px;color:#bdc4cc;font-size:13px;line-height:1.5}
 .maintenance-subtext{margin-top:5px;color:#7e8791;font-size:12px}
 
+/* ---------- ICE ARENA / Games ---------- */
+.ice-game-card{position:relative;overflow:hidden;display:block;width:calc(100% - 40px);margin:0 20px;height:190px;border-radius:28px;border:1px solid rgba(255,201,21,.22);padding:0;background:#12130d;color:#fff;text-align:left;cursor:pointer;box-shadow:inset 0 0 0 1px rgba(255,255,255,.04),0 14px 30px rgba(0,0,0,.28)}
+.ice-game-card:active{transform:translateY(1px)}
+.ice-preview{position:absolute;inset:0;background:radial-gradient(circle at 50% 50%,rgba(255,201,21,.08),transparent 48%),linear-gradient(145deg,#17180e,#0d0e0a);overflow:hidden}
+.ice-preview:before{content:"";position:absolute;inset:12px;border:1px solid rgba(255,201,21,.22);border-radius:18px;box-shadow:inset 0 0 26px rgba(255,201,21,.06)}
+.ice-preview-line{position:absolute;left:50%;top:12px;bottom:12px;width:1px;background:rgba(255,255,255,.12)}
+.ice-preview-line:after{content:"";position:absolute;left:50%;top:50%;width:54px;height:54px;border:1px solid rgba(255,201,21,.18);border-radius:50%;transform:translate(-50%,-50%)}
+.ice-preview-zone{position:absolute;top:0;bottom:0;opacity:.55;filter:saturate(.9)}
+.ice-preview-zone.z1{left:0;width:21%;background:#ffc915;clip-path:polygon(0 0,100% 10%,84% 44%,100% 100%,0 100%)}
+.ice-preview-zone.z2{left:18%;width:24%;background:#7e7127;clip-path:polygon(0 0,100% 14%,76% 56%,100% 100%,0 100%)}
+.ice-preview-zone.z3{left:39%;width:22%;background:#d3aa22;clip-path:polygon(0 0,100% 0,80% 51%,100% 100%,0 100%,18% 45%)}
+.ice-preview-zone.z4{left:58%;width:23%;background:#5f652c;clip-path:polygon(18% 0,100% 0,100% 100%,0 100%,25% 52%)}
+.ice-preview-zone.z5{right:0;width:20%;background:#a78c28;clip-path:polygon(22% 0,100% 0,100% 100%,0 100%,22% 54%)}
+.ice-preview-puck{position:absolute;z-index:3;left:50%;top:50%;width:48px;height:48px;border-radius:50%;transform:translate(-50%,-50%);background:radial-gradient(circle at 34% 30%,#fff 0 22%,#ddd 23% 34%,#9c9c89 35% 48%,#25271e 49% 72%,rgba(15,16,12,.3) 73%);box-shadow:0 6px 20px rgba(0,0,0,.45),0 0 22px rgba(255,201,21,.16)}
+.ice-card-copy{position:absolute;left:22px;bottom:18px;z-index:4;display:flex;flex-direction:column;gap:4px;text-shadow:0 2px 8px rgba(0,0,0,.55)}
+.ice-card-copy b{font-size:34px;line-height:.95;letter-spacing:-1.3px}
+.ice-card-copy small{font-size:11px;font-weight:900;letter-spacing:1px;color:rgba(255,255,255,.62)}
+.ice-card-arrow{position:absolute;right:18px;bottom:18px;z-index:4;width:40px;height:40px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.08);border:1px solid rgba(255,201,21,.28);font-size:28px;line-height:1;color:#ffc915}
+.games-soon-hint{margin:18px 20px 0;color:rgba(255,255,255,.34)}
 
-/* ---------- Raffle form polish ---------- */
-.raffle-modal-card{
-  background:linear-gradient(180deg,#101010 0%,#0c0c0c 100%) !important;
-  border:1px solid rgba(255,201,21,.10) !important;
-  border-radius:26px !important;
-  padding:20px 20px 18px !important;
-  box-sizing:border-box;
-}
-.raffle-modal-title{
-  display:block;
-  margin:0 0 15px !important;
-  text-align:center;
-  color:#fff;
-  font-size:17px !important;
-  font-weight:950 !important;
-  letter-spacing:.15px;
-}
-.raffle-modal-card .sheet-handle{margin-bottom:14px}
-.raffle-modal-card .raffle-type-toggle{margin:0 0 13px}
-.raffle-modal-card .raffle-field-label{
-  margin:11px 4px 6px;
-  color:#8f949b;
-  font-size:11px;
-  line-height:1.2;
-  font-weight:800;
-}
-.raffle-modal-card > .input-row,
-.raffle-modal-card .raffle-fields-2 .input-row,
-.raffle-modal-card #paidTicketField .input-row{
-  min-height:48px;
-  box-sizing:border-box;
-  border-radius:999px;
-  background:#090909;
-  border:1px solid #232323;
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.015);
-}
-.raffle-modal-card .input-row input{
-  min-width:0;
-  padding:13px 12px;
-  color:#f2f2f2;
-  font-size:15px;
-  font-weight:750;
-}
-.raffle-modal-card .input-row input::placeholder{color:#6d6d6d;opacity:1}
-.raffle-modal-card .raffle-fields-2{gap:10px;margin-top:0}
-.raffle-modal-card .raffle-fields-2 .raffle-field-label{margin-top:12px}
-.raffle-modal-card .raffle-each{
-  margin:11px 0 2px;
-  min-height:38px;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  box-sizing:border-box;
-  padding:9px 12px;
-  border-radius:999px;
-  background:#191919;
-  border:1px solid #2a2a2a;
-  color:#ffcf2a;
-  font-size:11px;
-}
-.raffle-modal-card .raffle-hint{
-  margin:11px 2px 12px;
-  color:#737373;
-  font-size:9px;
-  line-height:1.35;
-}
-.raffle-modal-card .raffle-confirm{
-  width:100%;
-  min-height:46px;
-  margin-top:0;
-  border-radius:999px;
-  font-size:14px;
-  font-weight:950;
-  box-shadow:0 10px 22px rgba(255,201,21,.16);
-}
-.raffle-modal-card #paidTicketField{margin:0}
-.raffle-modal-card .raffle-type-option{min-height:42px;padding:10px 7px}
-@media(max-width:420px){
-  .raffle-modal-card{padding:18px 16px 16px !important;border-radius:24px !important}
-  .raffle-modal-title{font-size:16px !important;margin-bottom:13px !important}
-  .raffle-modal-card .raffle-field-label{font-size:10px;margin-top:10px}
-  .raffle-modal-card > .input-row,
-  .raffle-modal-card .raffle-fields-2 .input-row,
-  .raffle-modal-card #paidTicketField .input-row{min-height:47px}
+.ice-game{width:100%;padding-bottom:12px}
+.ice-game-header{display:flex;align-items:center;gap:10px;margin:3px 20px 12px}
+.ice-game-header .upgrade-back{flex:0 0 auto}
+.ice-game-title{flex:1;min-width:0;text-align:center;margin-right:2px}
+.ice-game-title b{display:block;font-size:17px;letter-spacing:.5px}
+.ice-game-title small{display:block;margin-top:3px;color:#8e9397;font-size:10px;font-weight:800}
+.ice-game-title i{display:inline-block;width:6px;height:6px;border-radius:50%;background:#19e58f;box-shadow:0 0 8px rgba(25,229,143,.65);vertical-align:middle}
+.ice-game-badge{flex:0 0 auto;padding:8px 10px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:#1a1b14;color:#fff;font-size:12px;font-weight:900}
+.ice-stats-grid{display:grid;grid-template-columns:1fr 1.2fr 1fr;gap:6px;margin:5px 20px 12px}
+.ice-stats-grid>div{padding:10px 9px;border:1px solid rgba(255,255,255,.07);border-radius:13px;background:#151614;min-width:0;box-shadow:inset 0 1px 0 rgba(255,255,255,.02)}
+.ice-stats-grid span{display:block;color:#777b7f;font-size:8px;letter-spacing:.3px;font-weight:800}
+.ice-stats-grid b{display:block;margin-top:5px;color:#f2f3ed;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ice-stats-grid>div:nth-child(2){background:linear-gradient(135deg,#322b0d,#1d1d11);border-color:rgba(255,201,21,.14)}
+.ice-stats-grid>div:nth-child(2) b{color:#ffc915}
+.ice-arena-shell{position:relative;overflow:hidden;margin:0 20px;border:1px solid rgba(255,201,21,.18);border-radius:20px;background:#0f110c;box-shadow:inset 0 0 32px rgba(255,201,21,.05),0 12px 30px rgba(0,0,0,.25)}
+.ice-arena{position:relative;width:100%;aspect-ratio:1;overflow:hidden;background:radial-gradient(circle at 50% 48%,#1a1a11 0,#11120d 64%,#0c0d0a 100%);transform-origin:center;transition:transform 1.5s cubic-bezier(.17,.84,.28,1)}
+.ice-arena:before{content:"";position:absolute;inset:8px;border:1px solid rgba(255,201,21,.16);border-radius:14px;pointer-events:none;z-index:2}
+.ice-zone-map{position:absolute;inset:0;z-index:1;overflow:hidden}
+.ice-zone-item{position:absolute;inset:0;overflow:hidden}
+.ice-zone-item svg{position:absolute;inset:0;width:100%;height:100%;display:block}
+.ice-zone-item.mine{z-index:3;box-shadow:inset 0 0 0 2px #fff,0 0 12px rgba(255,255,255,.25)}
+.ice-zone-av{position:absolute;z-index:4;transform:translate(-50%,-50%);border-radius:50%;overflow:hidden;border:2px solid rgba(255,255,255,.84);box-shadow:0 5px 16px rgba(0,0,0,.3)}
+.ice-zone-av img{width:100%;height:100%;display:block;object-fit:cover}
+.ice-zone-av-fallback{display:grid;place-items:center;color:#15130a;font-weight:950;background:rgba(255,201,21,.94)}
+.ice-puck{position:absolute;z-index:5;left:0;top:0;width:24px;height:24px;transform:translate3d(0,0,0);pointer-events:none}
+.ice-puck-disc{position:absolute;left:-24px;top:-24px;width:48px;height:48px;border-radius:50%;background:radial-gradient(circle at 34% 30%,#fff 0 22%,#dfdfd7 23% 34%,#9a9a8b 35% 48%,#25271e 49% 72%,rgba(15,16,12,.3) 73%);box-shadow:0 7px 20px rgba(0,0,0,.48),0 0 15px rgba(255,201,21,.14)}
+.ice-arrow{position:absolute;left:50%;top:50%;width:0;height:0;pointer-events:none;opacity:0;transform:rotate(var(--flight-angle,0deg));transition:opacity .25s ease}
+.ice-arrow svg{position:absolute;left:-7px;top:-37px;width:14px;height:20px;overflow:visible;transform-origin:50% 100%;filter:drop-shadow(0 1px 2px rgba(0,0,0,.6)) drop-shadow(0 0 5px rgba(255,201,21,.55))}
+.ice-arrow:before{content:"";position:absolute;left:-34px;top:-34px;width:68px;height:68px;border-radius:50%;opacity:0;background:conic-gradient(from 0deg,transparent 0deg 285deg,rgba(255,201,21,.36) 360deg);-webkit-mask:radial-gradient(circle,transparent 0 16px,#000 17px 33px,transparent 34px);mask:radial-gradient(circle,transparent 0 16px,#000 17px 33px,transparent 34px)}
+.ice-puck.choosing .ice-arrow,.ice-puck.aiming .ice-arrow{opacity:1;transition:none}
+.ice-puck.choosing .ice-arrow{animation:iceArrowSettle var(--ice-spin-ms,1400ms) cubic-bezier(.3,.55,.15,1) forwards,iceArrowIn .2s ease-out}
+.ice-puck.choosing .ice-arrow svg{animation:iceArrowPop .2s ease-out}
+.ice-puck.choosing .ice-arrow:before{animation:iceTrailFade var(--ice-spin-ms,1400ms) ease-out forwards}
+.ice-puck.aiming .ice-arrow{transform:rotate(var(--flight-angle,0deg))}
+.ice-puck.rushing .ice-arrow{opacity:0}
+@keyframes iceArrowSettle{0%{transform:rotate(var(--start-angle,0deg))}100%{transform:rotate(var(--end-angle,0deg))}}
+@keyframes iceArrowIn{from{opacity:0;transform:scale(.85) rotate(var(--start-angle,0deg))}to{opacity:1}}
+@keyframes iceArrowPop{from{transform:scale(.65)}to{transform:scale(1)}}
+@keyframes iceTrailFade{from{opacity:.12}to{opacity:.85}}
+.ice-winner{position:absolute;z-index:7;inset:0;display:grid;place-items:center;opacity:0;pointer-events:none;transition:opacity .25s}
+.ice-winner.show{opacity:1}
+.ice-winner div{padding:0;text-align:center;text-shadow:0 2px 8px rgba(0,0,0,.76);transform:translateY(38px)}
+.ice-winner b{display:block;font-size:14px;color:#fff}
+.ice-winner small{display:block;margin-top:3px;color:#ffc915;font-size:11px;font-weight:900}
+.ice-zone-item.loser svg{filter:brightness(.30) saturate(.7)}
+.ice-zone-item.winner-zone{z-index:2}
+.ice-controls{margin:11px 20px 0;padding:13px;border:1px solid rgba(255,255,255,.07);border-radius:17px;background:#151614}
+.ice-stake-label{display:flex;justify-content:space-between;color:#7f8385;font-size:11px;font-weight:800}
+.ice-stake-label strong{color:#fff}
+.ice-stakes{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-top:10px}
+.ice-stakes button{padding:9px 2px;border:1px solid rgba(255,255,255,.08);border-radius:10px;background:#24261e;color:#babcb7;font:800 11px inherit;cursor:pointer}
+.ice-stakes button.active{border-color:rgba(255,201,21,.5);background:#3a3215;color:#ffe27a;box-shadow:inset 0 0 0 1px rgba(255,201,21,.08)}
+.ice-bet-field{margin-top:10px}
+.ice-bet-field input{box-sizing:border-box;width:100%;padding:12px;border:1px solid #33362e;border-radius:11px;background:#0f100d;color:#fff;font:800 14px inherit;outline:none}
+.ice-bet-field input:focus{border-color:rgba(255,201,21,.55);box-shadow:0 0 0 3px rgba(255,201,21,.07)}
+.ice-join{width:100%;margin-top:10px;border:0;border-radius:12px;padding:12px;background:linear-gradient(135deg,#ffd51f,#ffaf12);color:#161308;font:950 13px inherit;cursor:pointer;box-shadow:0 8px 24px rgba(255,201,21,.14)}
+.ice-join:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}
+.ice-legend{display:grid;grid-template-columns:repeat(2,1fr);gap:7px;margin:11px 20px 13px}
+.ice-player{display:flex;align-items:center;gap:7px;padding:8px;border:1px solid rgba(255,255,255,.07);border-radius:12px;background:#151614;min-width:0}
+.ice-player-av{width:20px;height:20px;border-radius:50%;overflow:hidden;flex:0 0 auto;display:grid;place-items:center;background:#ffc915;color:#171208;font-size:9px;font-weight:950}
+.ice-player-av img{width:100%;height:100%;object-fit:cover;display:block}
+.ice-player-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:800;flex:1}
+.ice-player-bet{font-size:10px;color:#ddd;font-weight:900;white-space:nowrap}
+.ice-hint{margin:11px 26px;color:#676b6c;font-size:10px;line-height:1.4;text-align:center}
+
+@media(max-width:600px){
+  .ice-game-card{width:calc(100% - 40px);margin-left:20px;margin-right:20px;height:150px;border-radius:26px}
+  .ice-card-copy{left:18px;bottom:15px}.ice-card-copy b{font-size:28px}.ice-card-copy small{font-size:9px}
+  .ice-card-arrow{right:14px;bottom:14px;width:36px;height:36px}
+  .ice-game-header{margin-left:20px;margin-right:20px}
+  .ice-stats-grid,.ice-arena-shell,.ice-controls,.ice-legend{margin-left:20px;margin-right:20px}
 }
