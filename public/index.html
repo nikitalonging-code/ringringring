@@ -125,21 +125,22 @@
 
       <div id="bounceGame" class="bounce-game hidden">
         <div class="bounce-header">
-          <button class="upgrade-back" id="bounceBack">‹ Игры</button>
+          <button class="upgrade-back bounce-back" id="bounceBack" type="button">‹ Игры</button>
           <div class="bounce-title">ОТСКОК</div>
+          <button class="bounce-sound" id="bounceSound" type="button" aria-label="Звук" title="Звук">🔊</button>
         </div>
         <div class="bounce-layout">
-          <section class="bounce-stage card">
+          <section class="bounce-stage">
             <canvas id="bounceCanvas" aria-label="ОТСКОК"></canvas>
             <div id="bounceTag" class="bounce-tag"></div>
           </section>
-          <section class="bounce-controls card">
-            <div class="bounce-balance"><span>Баланс</span><b>⭐ <span id="bounceBalance">0.00</span></b></div>
+          <section class="bounce-controls">
+            <div class="bounce-balance" aria-hidden="true"><span>Баланс</span><b>⭐ <span id="bounceBalance">0.00</span></b></div>
             <div class="bounce-tabs" id="bounceTabs"></div>
             <div class="bounce-field-label"><span>Сумма</span><span>0.1 – 50 000</span></div>
             <div class="bounce-amount">
               <button id="bounceDec" type="button">−</button>
-              <label class="bounce-input">★<input id="bounceBet" inputmode="decimal" value="1" aria-label="Сумма ставки"></label>
+              <label class="bounce-input"><span>⭐</span><input id="bounceBet" inputmode="decimal" value="1" aria-label="Сумма ставки"></label>
               <button id="bounceInc" type="button">+</button>
             </div>
             <div class="bounce-quick" id="bounceQuick"></div>

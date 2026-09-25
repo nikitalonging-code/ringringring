@@ -1582,6 +1582,75 @@ const bounceStars=Array.from({length:70},()=>[Math.random()*BW,Math.random()*(BH
 let bounceMode=0,bounceBetValue=1,bouncePhase="idle",bounceSpinResult=null,bounceS=null,bounceWin=false,bounceMult=0,bounceClk=0,bounceZoneW=BW*BOUNCE_MODES_CLIENT[0].p,bounceGlow=0,bounceFlash=0,bounceMsg=null,bounceTrail=[],bounceAcc=0,bounceLast=0,bounceSp=0,bouncePop=0,bounceT=4,bounceSpawn=0,bounceRenderStarted=false;
 const bounceUi = id => $("#"+id);
 
+const BounceAudioContext = window.AudioContext || window.webkitAudioContext;
+let bounceActx = null;
+let bounceSoundMuted = false;
+function bounceActxGet(){
+  if(!BounceAudioContext) return null;
+  if(!bounceActx) bounceActx = new BounceAudioContext();
+  if(bounceActx.state === "suspended") bounceActx.resume().catch(()=>{});
+  return bounceActx;
+}
+function bounceEnvGain(ctx,t0,peak,atk,dec){
+  const g=ctx.createGain();
+  g.gain.setValueAtTime(0,t0);
+  g.gain.linearRampToValueAtTime(peak,t0+atk);
+  g.gain.exponentialRampToValueAtTime(.0001,t0+atk+dec);
+  return g;
+}
+function bouncePlaySpawn(){
+  if(bounceSoundMuted)return;
+  const ctx=bounceActxGet(); if(!ctx)return;
+  const t0=ctx.currentTime;
+  const o=ctx.createOscillator();o.type='sine';
+  o.frequency.setValueAtTime(260,t0);
+  o.frequency.exponentialRampToValueAtTime(640,t0+.14);
+  const g=bounceEnvGain(ctx,t0,.13,.01,.16);
+  o.connect(g);g.connect(ctx.destination);o.start(t0);o.stop(t0+.18);
+}
+function bouncePlayBounceSound(n){
+  if(bounceSoundMuted)return;
+  const ctx=bounceActxGet(); if(!ctx)return;
+  const t0=ctx.currentTime;
+  const f=520+Math.min(n,14)*34;
+  const o=ctx.createOscillator();o.type='triangle';
+  o.frequency.setValueAtTime(f,t0);
+  o.frequency.exponentialRampToValueAtTime(f*.6,t0+.08);
+  const g=bounceEnvGain(ctx,t0,.2,.002,.1);
+  o.connect(g);g.connect(ctx.destination);o.start(t0);o.stop(t0+.12);
+  const bl=ctx.createBuffer(1,Math.floor(ctx.sampleRate*.018),ctx.sampleRate),d=bl.getChannelData(0);
+  for(let i=0;i<d.length;i++)d[i]=(Math.random()*2-1)*(1-i/d.length);
+  const ns=ctx.createBufferSource();ns.buffer=bl;
+  const ng=bounceEnvGain(ctx,t0,.08,.001,.018);
+  const hp=ctx.createBiquadFilter();hp.type='highpass';hp.frequency.value=1900;
+  ns.connect(hp);hp.connect(ng);ng.connect(ctx.destination);ns.start(t0);
+}
+function bouncePlayWinSound(mult){
+  if(bounceSoundMuted)return;
+  const ctx=bounceActxGet(); if(!ctx)return;
+  const t0=ctx.currentTime;
+  const notes=mult>=2?[523.25,659.25,783.99,1046.5]:[523.25,659.25,783.99];
+  notes.forEach((f,i)=>{
+    const t=t0+i*.075,o=ctx.createOscillator();o.type='triangle';o.frequency.value=f;
+    const g=bounceEnvGain(ctx,t,.16,.005,.22);o.connect(g);g.connect(ctx.destination);o.start(t);o.stop(t+.26);
+  });
+}
+function bouncePlayLoseSound(){
+  if(bounceSoundMuted)return;
+  const ctx=bounceActxGet(); if(!ctx)return;
+  const t0=ctx.currentTime;
+  const o=ctx.createOscillator();o.type='sawtooth';
+  o.frequency.setValueAtTime(220,t0);
+  o.frequency.exponentialRampToValueAtTime(90,t0+.32);
+  const lp=ctx.createBiquadFilter();lp.type='lowpass';lp.frequency.value=700;
+  const g=bounceEnvGain(ctx,t0,.15,.008,.34);
+  o.connect(lp);lp.connect(g);g.connect(ctx.destination);o.start(t0);o.stop(t0+.36);
+}
+function bounceSyncSoundButton(){
+  const btn=bounceUi('bounceSound');
+  if(btn) { btn.textContent=bounceSoundMuted?'🔇':'🔊'; btn.classList.toggle('muted',bounceSoundMuted); }
+}
+
 function bounceReadBet(){
   const el=bounceUi("bounceBet");
   let v=parseFloat(String(el?.value ?? bounceBetValue).replace(",","."));
@@ -1667,7 +1736,7 @@ function bounceRenderStage(now){
     if(!go){const n=bounceSp+dt;if(n>=BSPAWN){bounceAcc=n-BSPAWN;bounceSp=BSPAWN;go=true}else bounceSp=n}
     else bounceAcc+=dt;
     if(go&&bounceS){
-      while(bounceAcc>=BDT&&!bounceS.done){bounceS.px=bounceS.x;bounceS.py=bounceS.y;bounceStep(bounceS);bounceAcc-=BDT;if(bounceS.hit){bounceS.hit=0;bounceGlow=1;bouncePop=1;bounceMult=Number((bounceS.b*BOUNCE_MODES_CLIENT[bounceMode].s).toFixed(2));}}
+      while(bounceAcc>=BDT&&!bounceS.done){bounceS.px=bounceS.x;bounceS.py=bounceS.y;bounceStep(bounceS);bounceAcc-=BDT;if(bounceS.hit){bounceS.hit=0;bounceGlow=1;bouncePop=1;bounceMult=Number((bounceS.b*BOUNCE_MODES_CLIENT[bounceMode].s).toFixed(2));bouncePlayBounceSound(bounceS.b);}}
       if(bounceS.done){
         bouncePhase='result';
         bounceMult=Number(bounceSpinResult?.multiplier||bounceMult||0);
@@ -1684,7 +1753,7 @@ function bounceRenderStage(now){
         bounceSetControls(false);
         bounceUi("bouncePlay").textContent="Играть";
         setBalance(bounceSpinResult?.balance);
-        if(bounceWin)toast(`ОТСКОК: +${Number(bounceSpinResult?.payout||0).toFixed(2)} ⭐`);else toast("ОТСКОК: проигрыш");
+        if(bounceWin){bouncePlayWinSound(bounceMult);toast(`ОТСКОК: +${Number(bounceSpinResult?.payout||0).toFixed(2)} ⭐`);}else{bouncePlayLoseSound();toast("ОТСКОК: проигрыш");}
       }
     }
   }
@@ -1735,15 +1804,16 @@ function bounceStart(){
   const bet=bounceReadBet();
   if(!Number.isFinite(bet)||bet<.1||bet>50000)return toast("Ставка должна быть от 0.1 до 50 000 Stars.");
   if(bet>currentBalance)return toast("Недостаточно Stars на балансе.");
-  bouncePhase='waiting';bounceMsg=null;bounceS=null;bounceTrail=[];bounceMult=0;bounceUi("bounceErr").textContent="";bounceSetControls(true);bounceUi("bouncePlay").textContent="Отправляем…";
+  bounceActxGet();bouncePhase='waiting';bounceMsg=null;bounceS=null;bounceTrail=[];bounceMult=0;bounceUi("bounceErr").textContent="";bounceSetControls(true);bounceUi("bouncePlay").textContent="Отправляем…";
   socket.emit("bounce_spin",{bet,modeIndex:bounceMode});
 }
 function bouncePrepare(result){
-  bounceSpinResult=result||{};bounceWin=!!result?.win;bounceT=3+Math.round(Math.random()*30)/10;const g0=bounceRingAt(bounceClk+BSPAWN);const p=bouncePlan(g0,bounceWin);bounceS=bounceMk(p.a,p.v,g0);bounceAcc=0;bounceSp=0;bouncePhase='play';bounceMult=0;bounceMsg=null;bounceTrail=[];bounceFlash=0;bounceSetControls(true);bounceUi("bouncePlay").textContent="Идёт раунд…";
+  bounceSpinResult=result||{};bounceWin=!!result?.win;bounceT=3+Math.round(Math.random()*30)/10;const g0=bounceRingAt(bounceClk+BSPAWN);const p=bouncePlan(g0,bounceWin);bounceS=bounceMk(p.a,p.v,g0);bounceAcc=0;bounceSp=0;bouncePhase='play';bounceMult=0;bouncePlaySpawnSound();bounceMsg=null;bounceTrail=[];bounceFlash=0;bounceSetControls(true);bounceUi("bouncePlay").textContent="Идёт раунд…";
 }
 ["openBounce"].forEach(id=>{const b=bounceUi(id);if(b)b.onclick=openBounce});
 if(bounceUi("bounceBack"))bounceUi("bounceBack").onclick=closeBounce;
 if(bounceUi("bouncePlay"))bounceUi("bouncePlay").onclick=bounceStart;
+if(bounceUi("bounceSound"))bounceUi("bounceSound").onclick=()=>{ bounceSoundMuted=!bounceSoundMuted; bounceSyncSoundButton(); if(!bounceSoundMuted) bounceActxGet(); };
 if(bounceUi("bounceBet"))bounceUi("bounceBet").onchange=bounceReadBet;
 if(bounceUi("bounceDec"))bounceUi("bounceDec").onclick=()=>{const v=bounceReadBet();bounceSetBet(v>1?v-1:v-.1)};
 if(bounceUi("bounceInc"))bounceUi("bounceInc").onclick=()=>{const v=bounceReadBet();bounceSetBet(v>=1?v+1:v+.1)};
@@ -1752,7 +1822,7 @@ if(bounceUi("bounceQuick")){
   const sep=document.createElement("i");bounceUi("bounceQuick").append(sep);
   [1,5,25,100].forEach(v=>{const b=document.createElement("button");b.type="button";b.textContent=v;b.dataset.v=v;b.onclick=()=>bounceSetBet(v);bounceUi("bounceQuick").append(b)});
 }
-renderBounceTabs();bounceRenderTag();bounceSetBet(1);
+renderBounceTabs();bounceRenderTag();bounceSetBet(1);bounceSyncSoundButton();
 
 socket.on("bounce_result", result => bouncePrepare(result));
 function escapeHtml(value) {
