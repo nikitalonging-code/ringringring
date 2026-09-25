@@ -1695,19 +1695,27 @@ function bounceStep(q){
   }
   if(q.t>bounceT+.6){q.bad=1;q.done=1}
 }
-function bouncePlan(g0,winTarget){
+function bouncePlan(g0,winTarget,targetBounces){
   const px=BOUNCE_MODES_CLIENT[bounceMode].p*BW;
-  for(let i=0;i<3600;i++){
+  const target=Math.max(1,Math.min(25,Number(targetBounces)||1));
+  // The server is authoritative about the bounce count. Pick a client-side
+  // trajectory with exactly the same number of physical wall hits so the
+  // visible multiplier can never disagree with the final payout.
+  for(let i=0;i<12000;i++){
     const a=Math.random()*6.283,v=BVMIN+Math.random()*210,q=bounceMk(a,v,g0);
     while(!q.done)bounceStep(q);
-    if(q.bad||Math.abs(q.x-px)<24||Math.abs(q.t-bounceT)>.25)continue;
+    if(q.bad||q.b!==target||Math.abs(q.x-px)<24||Math.abs(q.t-bounceT)>.35)continue;
     if((q.x<px)===winTarget)return {a,v};
   }
-  for(let i=0;i<1800;i++){
+  // Wider fallback: exact bounce count and win/loss side are still preserved,
+  // while the landing-time tolerance is relaxed.
+  for(let i=0;i<12000;i++){
     const a=Math.random()*6.283,v=BVMIN+Math.random()*210,q=bounceMk(a,v,g0);
     while(!q.done)bounceStep(q);
+    if(q.bad||q.b!==target)continue;
     if((q.x<px)===winTarget)return {a,v};
   }
+  // Last-resort visual fallback: the multiplier remains tied to targetBounces.
   return {a:winTarget?Math.PI:0.2,v:520};
 }
 function bounceSetControls(disabled){
@@ -1739,7 +1747,7 @@ function bounceRenderStage(now){
       while(bounceAcc>=BDT&&!bounceS.done){bounceS.px=bounceS.x;bounceS.py=bounceS.y;bounceStep(bounceS);bounceAcc-=BDT;if(bounceS.hit){bounceS.hit=0;bounceGlow=1;bouncePop=1;bounceMult=Number((bounceS.b*BOUNCE_MODES_CLIENT[bounceMode].s).toFixed(2));bouncePlayBounceSound(bounceS.b);}}
       if(bounceS.done){
         bouncePhase='result';
-        bounceMult=Number(bounceSpinResult?.multiplier||bounceMult||0);
+        bounceMult=Number((bounceS.b*BOUNCE_MODES_CLIENT[bounceMode].s).toFixed(2));
         bounceMsg={win:bounceWin,t:bounceWin?'+'+Number(bounceSpinResult?.payout||0).toFixed(2)+' ⭐':'Проигрыш'};
         bounceFlash=1;
         const history=bounceUi("bounceHistory");
@@ -1786,6 +1794,7 @@ function bounceRenderStage(now){
 }
 function openBounce(){
   if(!initData)return handleNotTelegram();
+  installBounceZoomLock();
   if(bounceRenderStarted===false){bounceRenderStarted=true;bounceLast=performance.now();requestAnimationFrame(bounceRenderStage)}
   bouncePhase='idle';bounceMsg=null;bounceS=null;bounceSpinResult=null;bounceTrail=[];bounceMult=0;
   renderBounceTabs();
@@ -1798,6 +1807,26 @@ function closeBounce(){
   if(bouncePhase==='play')return toast("Дождитесь окончания прокрутки.");
   bounceUi("bounceGame").classList.add("hidden");bounceUi("gamesList").classList.remove("hidden");
 }
+// ОТСКОК: предотвращаем системный pinch/gesture zoom внутри игрового экрана.
+// Не меняет поведение остальных разделов приложения.
+function installBounceZoomLock(){
+  const root=bounceUi("bounceGame");
+  if(!root || root.dataset.zoomLockInstalled) return;
+  root.dataset.zoomLockInstalled="1";
+  root.addEventListener("gesturestart",e=>e.preventDefault(),{passive:false});
+  root.addEventListener("gesturechange",e=>e.preventDefault(),{passive:false});
+  root.addEventListener("gestureend",e=>e.preventDefault(),{passive:false});
+  root.addEventListener("touchstart",e=>{
+    if(e.touches && e.touches.length>1) e.preventDefault();
+  },{passive:false});
+  root.addEventListener("touchmove",e=>{
+    if(e.touches && e.touches.length>1) e.preventDefault();
+  },{passive:false});
+  root.addEventListener("wheel",e=>{
+    if(e.ctrlKey) e.preventDefault();
+  },{passive:false});
+}
+
 function bounceStart(){
   if(!initData)return handleNotTelegram();
   if(bouncePhase==='play')return;
@@ -1808,7 +1837,7 @@ function bounceStart(){
   socket.emit("bounce_spin",{bet,modeIndex:bounceMode});
 }
 function bouncePrepare(result){
-  bounceSpinResult=result||{};bounceWin=!!result?.win;bounceT=3+Math.round(Math.random()*30)/10;const g0=bounceRingAt(bounceClk+BSPAWN);const p=bouncePlan(g0,bounceWin);bounceS=bounceMk(p.a,p.v,g0);bounceAcc=0;bounceSp=0;bouncePhase='play';bounceMult=0;bouncePlaySpawnSound();bounceMsg=null;bounceTrail=[];bounceFlash=0;bounceSetControls(true);bounceUi("bouncePlay").textContent="Идёт раунд…";
+  bounceSpinResult=result||{};bounceWin=!!result?.win;bounceT=Math.max(3,Number(result?.durationMs||6350)/1000-BSPAWN);const g0=bounceRingAt(bounceClk+BSPAWN);const p=bouncePlan(g0,bounceWin,Number(result?.bounces)||1);bounceS=bounceMk(p.a,p.v,g0);bounceAcc=0;bounceSp=0;bouncePhase='play';bounceMult=0;bouncePlaySpawnSound();bounceMsg=null;bounceTrail=[];bounceFlash=0;bounceSetControls(true);bounceUi("bouncePlay").textContent="Идёт раунд…";
 }
 ["openBounce"].forEach(id=>{const b=bounceUi(id);if(b)b.onclick=openBounce});
 if(bounceUi("bounceBack"))bounceUi("bounceBack").onclick=closeBounce;
@@ -1822,7 +1851,7 @@ if(bounceUi("bounceQuick")){
   const sep=document.createElement("i");bounceUi("bounceQuick").append(sep);
   [1,5,25,100].forEach(v=>{const b=document.createElement("button");b.type="button";b.textContent=v;b.dataset.v=v;b.onclick=()=>bounceSetBet(v);bounceUi("bounceQuick").append(b)});
 }
-renderBounceTabs();bounceRenderTag();bounceSetBet(1);bounceSyncSoundButton();
+renderBounceTabs();bounceRenderTag();bounceSetBet(1);bounceSyncSoundButton();installBounceZoomLock();
 
 socket.on("bounce_result", result => bouncePrepare(result));
 function escapeHtml(value) {

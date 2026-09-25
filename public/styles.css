@@ -890,7 +890,9 @@ html,body{height:100%;overflow:hidden}
 
 
 /* ---------- ОТСКОК: app-native visual pass + original wheel sounds ---------- */
-.bounce-game{margin-top:2px;}
+.bounce-game{margin-top:2px;touch-action:manipulation;overscroll-behavior:contain;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;}
+.bounce-game input{touch-action:manipulation;font-size:16px!important;}
+.bounce-stage,#bounceCanvas,.bounce-controls{touch-action:manipulation;}
 .bounce-header{display:grid;grid-template-columns:72px 1fr 42px;align-items:center;gap:8px;margin:4px 0 12px;padding:0 2px;}
 .bounce-back{justify-self:start;min-width:72px;background:rgba(255,255,255,.055)!important;border:1px solid rgba(255,255,255,.10)!important;color:#d7d7d7!important;border-radius:999px!important;font-size:12px!important;font-weight:800;padding:8px 10px!important;}
 .bounce-title{margin:0!important;text-align:center;font-size:18px;font-weight:950;letter-spacing:2.5px;color:#fff;}
