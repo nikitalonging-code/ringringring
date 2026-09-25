@@ -1254,6 +1254,85 @@ async function playUpgrade(playerId, bet, target) {
   };
 }
 
+// ---------- ОТСКОК (solo game) ----------
+// A ball bounces inside a spinning ring with a small gap. Every wall hit
+// adds a fixed step to the multiplier; the ball eventually leaves through
+// the gap (win, paid at the accumulated multiplier) or the server rules the
+// round a loss up front, in which case the animation still plays out but is
+// scripted to end on the red side. All of this — win/lose AND the bounce
+// count that drives the multiplier — is decided here with crypto RNG before
+// a single pixel moves on the client; the client only has to render a
+// trajectory that matches these numbers, never to decide them.
+const BOUNCE_MODES = [
+  { step: 0.1, chance: 0.65 },
+  { step: 0.15, chance: 0.5 },
+  { step: 0.2, chance: 0.35 }
+];
+
+function cryptoRoll() {
+  const max = 1_000_000_000;
+  const r = Number(BigInt("0x" + crypto.randomBytes(8).toString("hex")) % BigInt(max));
+  return r / max; // [0, 1)
+}
+
+// Bounce count before the ball finds the gap: a short geometric-ish spread
+// so most rounds land around 3-7 hits but longer streaks stay possible.
+function rollBounces() {
+  let n = 2;
+  while (n < 18 && cryptoRoll() < 0.62) n++;
+  return n;
+}
+
+async function playBounce(playerId, modeIdx, bet) {
+  const mode = BOUNCE_MODES[modeIdx];
+  if (!mode) throw new Error("Неверный режим.");
+  if (!Number.isInteger(bet) || bet <= 0) throw new Error("Ставка должна быть целым числом Stars больше 0.");
+
+  const dbUser = await getUser(playerId);
+  if (!dbUser) throw new Error("Пользователь не найден в базе данных.");
+  if (dbUser.banned) throw new Error("Ваш аккаунт заблокирован в приложении.");
+
+  let balance = await debitBalance(playerId, bet, {
+    type: "bounce_bet",
+    description: `Отскок ×${bet} ⭐ (${["лёгкий","средний","сложный"][modeIdx] || "?"})`,
+    countsAsWager: true
+  });
+
+  const win = cryptoRoll() < mode.chance;
+  const bounces = rollBounces();
+  const multiplier = Number((bounces * mode.step).toFixed(2));
+  const payout = win ? Math.floor(bet * multiplier) : 0;
+  const duration = 3000 + Math.round(cryptoRoll() * 20) * 100; // 3.0–5.0s, 100ms steps
+
+  if (win && payout > 0) {
+    try {
+      balance = await creditBalance(playerId, payout, pool, {
+        type: "bounce_win",
+        description: `Выигрыш Отскок ×${multiplier} (${payout} ⭐)`
+      });
+    } catch (e) {
+      console.error("Bounce payout error:", e.message);
+    }
+  }
+
+  try {
+    await pool.query(
+      `UPDATE users
+       SET games_played = games_played + 1,
+           games_won = games_won + $2,
+           total_wagered = total_wagered + $3,
+           updated_at = NOW()
+       WHERE telegram_id=$1`,
+      [String(playerId), win ? 1 : 0, bet]
+    );
+    invalidateUserCache(playerId);
+  } catch (e) {
+    console.error("Bounce stats update error:", e.message);
+  }
+
+  return { win, mode: modeIdx, bet, bounces, multiplier, payout, duration, balance };
+}
+
 async function authenticatedUserFromInitData(initData, referralCode = null) {
   const checked = validateTelegramInitData(initData);
   if (!checked.ok) {
@@ -1357,20 +1436,6 @@ io.on("connection", socket => {
   });
 
   socket.on("request_ice_state", () => socket.emit("ice_state", icePublicState()));
-  socket.on("ice_history", async () => {
-    try {
-      const id = socket.data.playerId;
-      if (!id) throw new Error("Нужен Telegram.");
-      const r = await pool.query(
-        `SELECT type, amount::float AS amount, created_at
-         FROM balance_transactions
-         WHERE telegram_user_id=$1 AND type IN ('ice_bet','ice_win')
-         ORDER BY created_at DESC LIMIT 50`,
-        [String(id)]
-      );
-      socket.emit("ice_history_result", { list: r.rows.map(x => ({ type: x.type, amount: Number(x.amount), createdAt: x.created_at })) });
-    } catch (e) { socket.emit("error_message", e.message); }
-  });
   socket.on("ice_admin_users", async () => {
     try {
       const id = socket.data.playerId;
@@ -1414,6 +1479,21 @@ io.on("connection", socket => {
       // The balance itself reveals the result, so keep it hidden until the
       // arrow has visibly stopped on its yellow or gray sector.
       setTimeout(() => socket.emit("balance_updated", { balance: result.balance }), 6350);
+    } catch (e) { socket.emit("error_message", e.message); }
+  });
+
+  socket.on("bounce_play", async data => {
+    try {
+      const id = socket.data.playerId;
+      if (maintenanceMode && !isAdmin(id)) throw new Error(maintenanceMessage());
+      if (!id) throw new Error("Авторизация Telegram не выполнена.");
+      const modeIdx = Number(data?.mode);
+      const bet = Number(data?.bet);
+      const result = await playBounce(id, modeIdx, bet);
+      socket.emit("bounce_result", result);
+      // Same idea as Upgrade: don't reveal the new balance until the ball has
+      // had time to actually finish bouncing on screen.
+      setTimeout(() => socket.emit("balance_updated", { balance: result.balance }), result.duration + 500);
     } catch (e) { socket.emit("error_message", e.message); }
   });
 
@@ -1841,7 +1921,8 @@ async function sendAdminUserStats(chatId, userId, period) {
     freebet: "🎁 Фрибет",
     promo_bonus: "🏷 Промокод",
     admin_credit: "🛠 Начисление админом",
-    upgrade_win: "⬆️ Выигрыш Upgrade"
+    upgrade_win: "⬆️ Выигрыш Upgrade",
+    bounce_win: "⚫ Выигрыш Отскок"
   };
 
   const operationLabels = {
@@ -1861,7 +1942,9 @@ async function sendAdminUserStats(chatId, userId, period) {
     ton_topup: "💎 Пополнение TON / GRAM",
     raffle_ticket_income: "🎟 Доход с билетов",
     raffle_refund: "↩️ Возврат розыгрыша",
-    upgrade_win: "⬆️ Выигрыш Upgrade"
+    upgrade_win: "⬆️ Выигрыш Upgrade",
+    bounce_bet: "⚫ Ставка Отскок",
+    bounce_win: "⚫ Выигрыш Отскок"
   };
 
   const sourceLines = [
@@ -4580,7 +4663,7 @@ app.get("/api/admin/transactions", async (req, res) => {
 // spirit of the "Статистика" screen the client asked to match.
 const ADMIN_SUMMARY_METHOD_LABELS = {
   stars_topup: "Stars", balance_topup: "Stars", ton_topup: "TON / GRAM",
-  pvp_bet: "PVP", upgrade_bet: "Upgrade",
+  pvp_bet: "PVP", upgrade_bet: "Upgrade", bounce_bet: "Отскок",
   STAR: "Stars", GRAM: "GRAM", TON: "TON",
   true: "Выплачено", false: "Не выплачено"
 };
@@ -4602,7 +4685,7 @@ app.get("/api/admin/summary/:category", async (req, res) => {
         `SELECT t.type AS method, ABS(t.amount::float) AS amount, t.created_at,
                 COALESCE(NULLIF(u.username,''), u.first_name) AS name, u.username
          FROM balance_transactions t JOIN users u ON u.telegram_id=t.telegram_user_id
-         WHERE t.type IN ('pvp_bet','upgrade_bet') ORDER BY t.created_at DESC LIMIT 500`
+         WHERE t.type IN ('pvp_bet','upgrade_bet','bounce_bet') ORDER BY t.created_at DESC LIMIT 500`
       )).rows;
     } else if (category === "withdrawals") {
       rows = (await pool.query(

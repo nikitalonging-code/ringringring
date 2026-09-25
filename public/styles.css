@@ -1019,7 +1019,52 @@ body{display:flex;justify-content:center;overflow:hidden;}
 .adm-list{max-height:200px;overflow:auto;margin-top:12px}
 .adm-row{display:flex;justify-content:space-between;align-items:center;padding:9px 10px;border-radius:10px;background:#0f100d;margin-bottom:6px;cursor:pointer;font-size:13px;font-weight:700}
 .adm-row small{display:block;color:#7f7f78;font-size:10px;font-weight:600;margin-top:2px}
-.adm-row.win b{color:#19e58f}.adm-row.lose b{color:#ff6b6b}
-.ice-hist-empty{margin:14px 6px;color:var(--sub);font-size:12px;text-align:center}
 .ice-arrow{display:none!important}.ice-arrow:before{display:none!important}
 .ice-screen{width:390px;max-width:100vw;}
+
+/* ---------- ОТСКОК (bounce ring) ---------- */
+.bounce-game-card{background:#120c06;border-color:rgba(255,138,31,.28);margin-top:12px}
+.bounce-preview{position:absolute;inset:0;background:radial-gradient(circle at 50% 50%,rgba(255,138,31,.10),transparent 48%),linear-gradient(145deg,#1a0f06,#0a0705);overflow:hidden}
+.bounce-preview-ring{position:absolute;left:26px;top:22px;width:120px;height:120px;border-radius:50%;border:3px solid rgba(255,154,46,.55);box-shadow:0 0 18px rgba(255,138,31,.25);
+  clip-path:polygon(0 0,100% 0,100% 100%,0 100%);
+  -webkit-mask-image:conic-gradient(#000 0deg 340deg, transparent 340deg 360deg);
+  mask-image:conic-gradient(#000 0deg 340deg, transparent 340deg 360deg)}
+.bounce-preview-ball{position:absolute;left:74px;top:36px;width:16px;height:16px;border-radius:50%;background:radial-gradient(circle at 32% 28%,#fff,#ffb347 40%,#e26a00 100%);box-shadow:0 0 10px rgba(255,138,31,.7);animation:bouncePreview 2.6s ease-in-out infinite}
+@keyframes bouncePreview{
+  0%,100%{transform:translate(0,0)}
+  20%{transform:translate(28px,42px)}
+  40%{transform:translate(-10px,70px)}
+  60%{transform:translate(20px,30px)}
+  80%{transform:translate(-16px,58px)}
+}
+
+.bounce-game{padding:0 20px 24px}
+.bounce-stage{position:relative;border-radius:20px;overflow:hidden;background:#080604;border:1px solid rgba(255,138,31,.18);margin-top:6px}
+.bounce-stage canvas{display:block;width:100%;height:auto;aspect-ratio:560/600}
+.bounce-tag{position:absolute;left:16px;top:16px;background:rgba(18,13,9,.88);border:1px solid rgba(255,138,31,.22);border-radius:8px;padding:6px 10px;font-size:11px;color:#8f7d6a}
+.bounce-tag b{display:block;color:#f5ece2;font-size:13px;margin-top:2px}
+
+.bounce-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;background:#15100b;border:1px solid #2e2318;border-radius:12px;padding:5px;margin-top:12px}
+.bounce-tabs button{background:none;border:1px solid transparent;border-radius:9px;padding:8px 4px;text-align:center;color:#f5ece2;font:inherit;cursor:pointer}
+.bounce-tabs button b{display:block;font-size:13px}
+.bounce-tabs button small{display:block;font-size:10px;color:#8f7d6a;margin-top:2px}
+.bounce-tabs button.on{border-color:#ff8a1f;background:rgba(255,138,31,.12)}
+.bounce-tabs button.on small{color:#ffb347}
+
+.bounce-bet-row{margin-top:12px}
+.bounce-amt{display:grid;grid-template-columns:44px 1fr 44px;gap:6px}
+.bounce-amt button{background:#1d1610;border:1px solid #2e2318;border-radius:10px;color:#f5ece2;font:inherit;cursor:pointer}
+.bounce-inp{display:flex;align-items:center;gap:8px;background:#1d1610;border:1px solid #2e2318;border-radius:10px;padding:0 12px}
+.bounce-inp input{flex:1;min-width:0;background:none;border:0;color:#f5ece2;font:700 16px inherit;padding:10px 0}
+.bounce-quick{display:grid;grid-template-columns:repeat(4,1fr) 1px repeat(4,1fr);gap:5px;margin-top:6px;align-items:center}
+.bounce-quick i{background:#2e2318;height:70%}
+.bounce-quick button{padding:7px 0;font-size:12px;background:#1d1610;border:1px solid #2e2318;border-radius:8px;color:#f5ece2;cursor:pointer}
+.bounce-quick button.on{border-color:#ff8a1f;color:#ffb347}
+
+#bouncePlayBtn{margin-top:12px;background:linear-gradient(180deg,#ffa63f,#ff7a00);color:#1c0e00}
+#bouncePlayBtn:disabled{background:#4a3722;color:#a8916f}
+
+.bounce-hist{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;margin-top:12px}
+.bounce-hist .chip{flex:none;padding:6px 9px;border-radius:8px;font-weight:700;font-size:12px;border:1px solid #2e2318;background:#1d1610;color:#f5ece2}
+.bounce-hist .chip.w{color:#3bd47c;border-color:rgba(59,212,124,.5);background:rgba(59,212,124,.1)}
+.bounce-hist .chip.l{color:#ef4b4b;border-color:rgba(239,75,75,.5);background:rgba(239,75,75,.1)}
