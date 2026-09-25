@@ -80,49 +80,17 @@
             <span class="game-card-name upgrade-name">Upgrade</span>
           </button>
         </div>
-        <button class="games-locked-row ice-game-card" id="openIceArena" type="button" aria-label="Ice Arena">
-          <span class="ice-preview" aria-hidden="true">
-            <span class="ice-preview-zone z1"></span><span class="ice-preview-zone z2"></span><span class="ice-preview-zone z3"></span>
-            <span class="ice-preview-zone z4"></span><span class="ice-preview-zone z5"></span><span class="ice-preview-puck"></span>
-            <span class="ice-preview-line"></span>
-          </span>
-          <span class="ice-card-copy"><b>Ice Arena</b><small>PVP · АРЕНА НА ЛЬДУ</small></span>
-          <span class="ice-card-arrow">›</span>
-        </button>
-        <button class="games-locked-row bounce-game-card" id="openBounce" type="button" aria-label="Отскок">
-          <span class="bounce-preview" aria-hidden="true">
-            <span class="bounce-preview-ring"></span><span class="bounce-preview-ball"></span>
-          </span>
-          <span class="ice-card-copy"><b>Отскок</b><small>SOLO · КОЛЬЦО С ШАРИКОМ</small></span>
-          <span class="ice-card-arrow">›</span>
-        </button>
-        <div class="games-soon-hint">Новый режим уже доступен</div>
+        <div class="games-extra">
+          <button class="game-card bounce-card" id="openBounce" type="button">
+            <div class="bounce-card-art" aria-hidden="true">
+              <span class="bounce-card-ring"></span><span class="bounce-card-ball"></span><span class="bounce-card-glow"></span>
+            </div>
+            <span class="game-card-name bounce-name">ОТСКОК</span>
+          </button>
+        </div>
+        <div class="games-locked-row">??????</div>
+        <div class="games-soon-hint">New modes will be<br>available very soon!</div>
       </div>
-
-<div id="iceArenaGame" class="ice-game hidden ice-game-host">
-<div class="ice-screen active" id="iceScreen">
-  <div class="ice-topbar">
-    <button class="playhub-back" id="adminBtn" style="visibility:hidden" aria-label="Админка">⚙</button>
-    <div class="ice-title"><strong>Ice Arena</strong><small><i></i> <span id="online">0</span> онлайн</small></div>
-    <div class="playhub-balance"><span class="ton-icon">▽</span><span class="balance-val" id="bal">0</span></div>
-  </div>
-  <div class="ice-body">
-    <div class="ice-stats"><div><span>СТАТУС</span><b id="iceStatus">Подключение…</b></div><div><span>ПРИЗОВОЙ ПУЛ</span><b id="icePool">0.00 TON</b></div><div><span>ИГРОКОВ</span><b id="icePlayerCount">0</b></div></div>
-    <div class="ice-arena-shell" id="iceArenaShell"><div class="ice-arena" id="iceArena"><div class="ice-zone-map" id="iceZoneMap"></div><div class="ice-puck" id="icePuck"><img class="puck-img" alt="" draggable="false" src="/puck.png"><span class="ice-arrow"><svg viewBox="0 0 14 20" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 19V3M2.2 7.8 7 3l4.8 4.8"/></svg></span></div></div><div class="ice-winner" id="iceWinner"></div></div>
-    <div class="ice-controls"><div class="ice-stake-label">Ставка, TON <strong id="stakeInfo"></strong></div>
-      <div class="ice-stakes"><button data-v="0.1">0.1</button><button data-v="0.5">0.5</button><button data-v="1">1</button><button data-v="5">5</button></div>
-      <div class="ice-bet-field" style="margin:10px 0 0"><input id="betAmt" type="number" min="0.01" step="0.01" value="0.1" inputmode="decimal"></div>
-      <button class="ice-join" id="iceJoinBtn" disabled>Поставить</button></div>
-    <div class="ice-legend" id="iceLegend"></div>
-    <p class="ice-hint">Для старта нужно 2 игрока. После второго — 10 секунд на ставки. Площадь зоны равна доле ставки в пуле.</p>
-  </div>
-  <div class="ice-bet-modal" id="adminModal"><div class="ice-bet-sheet"><div class="ice-bet-head">Админ-панель <button class="ice-bet-close" id="adminClose">×</button></div>
-    <label class="ice-bet-field">Telegram ID игрока<input id="admId" inputmode="numeric" placeholder="нажмите на игрока в списке"></label>
-    <label class="ice-bet-field">Сумма, TON (минус — списать)<input id="admAmt" type="number" step="0.01" value="1" inputmode="decimal"></label>
-    <button class="ice-bet-confirm" id="admGive">Выдать / списать</button>
-    <div class="adm-list" id="adminList"></div></div></div>
-</div>
-</div>
 
       <div id="upgradeGame" class="upgrade-game hidden">
         <div class="upgrade-header">
@@ -156,29 +124,30 @@
       </div>
 
       <div id="bounceGame" class="bounce-game hidden">
-        <div class="upgrade-header">
+        <div class="bounce-header">
           <button class="upgrade-back" id="bounceBack">‹ Игры</button>
-          <div class="upgrade-title">ОТСКОК</div>
+          <div class="bounce-title">ОТСКОК</div>
         </div>
-
-        <div class="bounce-stage">
-          <canvas id="bounceCv"></canvas>
-          <div class="bounce-tag" id="bounceTag"></div>
+        <div class="bounce-layout">
+          <section class="bounce-stage card">
+            <canvas id="bounceCanvas" aria-label="ОТСКОК"></canvas>
+            <div id="bounceTag" class="bounce-tag"></div>
+          </section>
+          <section class="bounce-controls card">
+            <div class="bounce-balance"><span>Баланс</span><b>⭐ <span id="bounceBalance">0.00</span></b></div>
+            <div class="bounce-tabs" id="bounceTabs"></div>
+            <div class="bounce-field-label"><span>Сумма</span><span>0.1 – 50 000</span></div>
+            <div class="bounce-amount">
+              <button id="bounceDec" type="button">−</button>
+              <label class="bounce-input">★<input id="bounceBet" inputmode="decimal" value="1" aria-label="Сумма ставки"></label>
+              <button id="bounceInc" type="button">+</button>
+            </div>
+            <div class="bounce-quick" id="bounceQuick"></div>
+            <button class="bet-button bounce-play" id="bouncePlay" type="button">Играть</button>
+            <div id="bounceErr" class="bounce-error"></div>
+            <div class="bounce-history" id="bounceHistory"></div>
+          </section>
         </div>
-
-        <div class="bounce-tabs" id="bounceTabs"></div>
-
-        <div class="bounce-bet-row">
-          <div class="bounce-amt">
-            <button id="bounceDec" type="button">−</button>
-            <div class="bounce-inp"><span class="star-emoji">⭐</span><input id="bounceBet" inputmode="numeric" value="1" aria-label="Сумма ставки"></div>
-            <button id="bounceInc" type="button">+</button>
-          </div>
-          <div class="bounce-quick" id="bounceQuick"></div>
-        </div>
-
-        <button class="bet-button" id="bouncePlayBtn">Играть</button>
-        <div class="bounce-hist" id="bounceHist"></div>
       </div>
     </div>
 

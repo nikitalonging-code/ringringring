@@ -133,7 +133,7 @@ function setMaintenanceOverlay(enabled, message = "") {
   if (!overlay) return;
   overlay.classList.toggle("hidden", !clientMaintenance);
   if (message) $("#maintenanceOverlay .maintenance-text").textContent = message;
-  ["topupBtn", "betBtn", "withdrawBtn", "openCreateRaffle", "openUpgrade", "openIceArena", "iceJoinBtn", "openCreateTask"].forEach(id => {
+  ["topupBtn", "betBtn", "withdrawBtn", "openCreateRaffle", "openUpgrade", "openBounce", "openCreateTask"].forEach(id => {
     const el = $("#" + id);
     if (el) el.disabled = clientMaintenance;
   });
@@ -157,6 +157,8 @@ function setBalance(value) {
   currentBalance = Number(value || 0);
   $("#balance").textContent = currentBalance.toFixed(2);
   $("#modalBalance").textContent = currentBalance.toFixed(2) + " ⭐";
+  const bounceBalance = $("#bounceBalance");
+  if (bounceBalance) bounceBalance.textContent = currentBalance.toFixed(2);
 }
 
 function handleNotTelegram() {
@@ -487,14 +489,19 @@ socket.on("unbanned", () => {
   $("#topupBtn").disabled = false;
 });
 socket.on("error_message", message => {
-  // An Upgrade error used to leave its inputs disabled forever because the
-  // result event never arrives in that case.
+  // A failed request must unlock both solo-game controls because no result
+  // event will arrive after a server-side validation/authorization error.
   if (upgradeSpinning) {
     upgradeSpinning = false;
     setUpgradeControlsDisabled(false);
     $("#upgradePointerOrbit").style.opacity = "0";
   }
-  if (typeof window.__bounceOnError === "function") window.__bounceOnError();
+  if (bouncePhase === "waiting" || bouncePhase === "play") {
+    bouncePhase = "idle";
+    bounceSetControls(false);
+    bounceUi("bouncePlay").textContent = "Играть";
+    bounceUi("bounceErr").textContent = message || "Ошибка раунда.";
+  }
   toast(message);
 });
 socket.on("bet_accepted", data => {
@@ -672,13 +679,6 @@ function setView(view) {
 
   if (activeKey === "profile") loadProfile();
   if (activeKey === "raffles") loadRaffles();
-  if (activeKey === "games") {
-    $("#gamesList")?.classList.remove("hidden");
-    $("#upgradeGame")?.classList.add("hidden");
-    $("#iceArenaGame")?.classList.add("hidden");
-    $("#bounceGame")?.classList.add("hidden");
-    window.__iceArenaActive = false;
-  }
 
   document.querySelectorAll(".nav-item").forEach(btn => {
     btn.classList.toggle("active", btn.dataset.view === activeKey);
@@ -1547,13 +1547,214 @@ socket.on("upgrade_result", data => {
 });
 
 socket.on("disconnect", () => {
-  if (!upgradeSpinning) return;
-  upgradeSpinning = false;
-  setUpgradeControlsDisabled(false);
-  $("#upgradePointerOrbit").style.opacity = "0";
-  toast("Соединение потеряно. Попробуйте ещё раз.");
+  let changed = false;
+  if (upgradeSpinning) {
+    upgradeSpinning = false;
+    setUpgradeControlsDisabled(false);
+    $("#upgradePointerOrbit").style.opacity = "0";
+    changed = true;
+  }
+  if (bouncePhase === "waiting" || bouncePhase === "play") {
+    bouncePhase = "idle";
+    bounceSetControls(false);
+    bounceUi("bouncePlay").textContent = "Играть";
+    changed = true;
+  }
+  if (changed) toast("Соединение потеряно. Попробуйте ещё раз.");
 });
 
+
+// ---------- ОТСКОК (solo game) ----------
+// UI/animation is based on the supplied standalone wheel. The money source is
+// the app's real PostgreSQL balance via the `bounce_spin` socket event.
+const BOUNCE_MODES_CLIENT = [
+  { n: "Лёгкий", s: 0.10, p: 0.65 },
+  { n: "Средний", s: 0.15, p: 0.50 },
+  { n: "Сложный", s: 0.20, p: 0.35 }
+];
+const BW=560,BH=600,BCX=BW/2,BCY=255,BRING=185,BBR=18/1.3/1.5*1.3,BBAR=44,BFLOOR=BH-BBAR-BBR,BG=2190,BGAP=.72/1.3*1.3,BGEFF=BGAP/2-Math.asin((BBR+4/1.3)/BRING),BOM=2.97*1.3,BRING0=2.2,BSPAWN=1.2,BVMIN=593,BVMAX=1061,BDT=1/240;
+const bounceRingAt=t=>BRING0+BOM*t;
+const bounceCv=$("#bounceCanvas");
+const bounceC=bounceCv?.getContext("2d");
+const bounceDpr=Math.min(window.devicePixelRatio||1,2);
+if (bounceCv) { bounceCv.width=BW*bounceDpr; bounceCv.height=BH*bounceDpr; }
+const bounceStars=Array.from({length:70},()=>[Math.random()*BW,Math.random()*(BH-BBAR),.2+Math.random()*.6]);
+let bounceMode=0,bounceBetValue=1,bouncePhase="idle",bounceSpinResult=null,bounceS=null,bounceWin=false,bounceMult=0,bounceClk=0,bounceZoneW=BW*BOUNCE_MODES_CLIENT[0].p,bounceGlow=0,bounceFlash=0,bounceMsg=null,bounceTrail=[],bounceAcc=0,bounceLast=0,bounceSp=0,bouncePop=0,bounceT=4,bounceSpawn=0,bounceRenderStarted=false;
+const bounceUi = id => $("#"+id);
+
+function bounceReadBet(){
+  const el=bounceUi("bounceBet");
+  let v=parseFloat(String(el?.value ?? bounceBetValue).replace(",","."));
+  if (!(v>=0.1)) v=0.1;
+  v=Math.min(v,50000);
+  bounceBetValue=Math.round(v*100)/100;
+  if (el) el.value=bounceBetValue;
+  [...document.querySelectorAll("#bounceQuick button[data-v]")].forEach(b=>b.classList.toggle("on",Number(b.dataset.v)===bounceBetValue));
+  return bounceBetValue;
+}
+function bounceSetBet(v){
+  v=Math.max(.1,Math.min(50000,Math.round(Number(v)*100)/100));
+  bounceBetValue=v;
+  const el=bounceUi("bounceBet");
+  if(el)el.value=v;
+  [...document.querySelectorAll("#bounceQuick button[data-v]")].forEach(b=>b.classList.toggle("on",Number(b.dataset.v)===v));
+  return v;
+}
+function bounceMk(a,v,g0){return{t:0,g0,x:BCX,y:BCY-30,px:BCX,py:BCY-30,vx:Math.cos(a)*v,vy:Math.sin(a)*v,b:0,ph:0,done:0,bad:0,hit:0,out:0}}
+function bounceStep(q){
+  q.t+=BDT;q.vy+=BG*BDT;q.x+=q.vx*BDT;q.y+=q.vy*BDT;
+  const dx=q.x-BCX,dy=q.y-BCY,d=Math.hypot(dx,dy);
+  if(q.ph===0){
+    if(d>BRING-BBR){
+      let f=Math.atan2(dy,dx)-(q.g0+BOM*q.t);f=Math.atan2(Math.sin(f),Math.cos(f));
+      if(Math.abs(f)<BGEFF)q.ph=1;
+      else{
+        const nx=dx/d,ny=dy/d,vn=q.vx*nx+q.vy*ny;
+        if(vn>0){q.vx-=2*vn*nx;q.vy-=2*vn*ny;q.x=BCX+nx*(BRING-BBR);q.y=BCY+ny*(BRING-BBR);const sp=Math.hypot(q.vx,q.vy),k=Math.min(Math.max(sp,BVMIN),BVMAX)/sp;q.vx*=k;q.vy*=k;q.b++;q.hit=1}
+      }
+    }
+  }else{
+    if(d>BRING+BBR)q.out=1;
+    if(d<BRING-BBR-3){q.ph=0;q.out=0}
+    else if(q.out&&d<BRING+BBR){
+      let f=Math.atan2(dy,dx)-(q.g0+BOM*q.t);f=Math.atan2(Math.sin(f),Math.cos(f));
+      const nx=dx/d,ny=dy/d,vn=q.vx*nx+q.vy*ny;
+      if(Math.abs(f)>=BGEFF&&vn<0){q.vx-=1.75*vn*nx;q.vy-=1.75*vn*ny;q.x=BCX+nx*(BRING+BBR);q.y=BCY+ny*(BRING+BBR);q.b++;q.hit=1}
+    }
+    if(q.x<BBR||q.x>BW-BBR){q.vx=-q.vx;q.x=Math.min(Math.max(q.x,BBR),BW-BBR)}
+    if(q.y>=BFLOOR)q.done=1;
+  }
+  if(q.t>bounceT+.6){q.bad=1;q.done=1}
+}
+function bouncePlan(g0,winTarget){
+  const px=BOUNCE_MODES_CLIENT[bounceMode].p*BW;
+  for(let i=0;i<3600;i++){
+    const a=Math.random()*6.283,v=BVMIN+Math.random()*210,q=bounceMk(a,v,g0);
+    while(!q.done)bounceStep(q);
+    if(q.bad||Math.abs(q.x-px)<24||Math.abs(q.t-bounceT)>.25)continue;
+    if((q.x<px)===winTarget)return {a,v};
+  }
+  for(let i=0;i<1800;i++){
+    const a=Math.random()*6.283,v=BVMIN+Math.random()*210,q=bounceMk(a,v,g0);
+    while(!q.done)bounceStep(q);
+    if((q.x<px)===winTarget)return {a,v};
+  }
+  return {a:winTarget?Math.PI:0.2,v:520};
+}
+function bounceSetControls(disabled){
+  const ids=["bouncePlay","bounceBet","bounceDec","bounceInc"];
+  ids.forEach(id=>{const el=bounceUi(id);if(el)el.disabled=disabled});
+  [...document.querySelectorAll("#bounceTabs button,#bounceQuick button")].forEach(el=>el.disabled=disabled);
+}
+function renderBounceTabs(){
+  const root=bounceUi("bounceTabs");if(!root)return;
+  root.innerHTML=BOUNCE_MODES_CLIENT.map((m,i)=>`<button type="button" class="${i===bounceMode?'on':''}" data-mode="${i}"><b>${m.n}</b><small>+${m.s}× · ${Math.round(m.p*100)}% зелёной</small></button>`).join("");
+  root.querySelectorAll("button").forEach(b=>b.onclick=()=>{if(bouncePhase!=="play"){bounceMode=Number(b.dataset.mode);renderBounceTabs();bounceRenderTag();}});
+}
+function bounceRenderTag(){
+  const m=BOUNCE_MODES_CLIENT[bounceMode];
+  const tag=bounceUi("bounceTag");
+  if(tag)tag.innerHTML=`${m.n}<b>Каждый отскок +${m.s}×</b>`;
+}
+function bounceRenderStage(now){
+  if(!bounceC)return;
+  const rd=Math.min((now-bounceLast)/1000||0,.05);bounceLast=now;
+  bounceClk+=rd;
+  const dt=rd;
+  const ga=bounceRingAt(bounceClk-BDT);
+  if(bouncePhase==='play'){
+    let go=bounceSp>=BSPAWN;
+    if(!go){const n=bounceSp+dt;if(n>=BSPAWN){bounceAcc=n-BSPAWN;bounceSp=BSPAWN;go=true}else bounceSp=n}
+    else bounceAcc+=dt;
+    if(go&&bounceS){
+      while(bounceAcc>=BDT&&!bounceS.done){bounceS.px=bounceS.x;bounceS.py=bounceS.y;bounceStep(bounceS);bounceAcc-=BDT;if(bounceS.hit){bounceS.hit=0;bounceGlow=1;bouncePop=1;bounceMult=Number((bounceS.b*BOUNCE_MODES_CLIENT[bounceMode].s).toFixed(2));}}
+      if(bounceS.done){
+        bouncePhase='result';
+        bounceMult=Number(bounceSpinResult?.multiplier||bounceMult||0);
+        bounceMsg={win:bounceWin,t:bounceWin?'+'+Number(bounceSpinResult?.payout||0).toFixed(2)+' ⭐':'Проигрыш'};
+        bounceFlash=1;
+        const history=bounceUi("bounceHistory");
+        if(history){
+          const chip=document.createElement("span");
+          chip.className=`chip ${bounceWin ? "w" : "l"}`;
+          chip.textContent=`${Number(bounceSpinResult?.multiplier||0).toFixed(2)}×`;
+          history.prepend(chip);
+          while(history.children.length>30)history.lastElementChild.remove();
+        }
+        bounceSetControls(false);
+        bounceUi("bouncePlay").textContent="Играть";
+        setBalance(bounceSpinResult?.balance);
+        if(bounceWin)toast(`ОТСКОК: +${Number(bounceSpinResult?.payout||0).toFixed(2)} ⭐`);else toast("ОТСКОК: проигрыш");
+      }
+    }
+  }
+  if(bouncePhase==='result'&&bounceS){/* keep the final ball frozen */}
+  bounceGlow=Math.max(0,bounceGlow-dt*3);bouncePop=Math.max(0,bouncePop-dt*5);bounceFlash=Math.max(0,bounceFlash-dt*.8);
+  bounceZoneW+=(BOUNCE_MODES_CLIENT[bounceMode].p*BW-bounceZoneW)*Math.min(1,dt*8);
+  bounceC.setTransform(bounceDpr,0,0,bounceDpr,0,0);
+  const bg=bounceC.createRadialGradient(BCX,BCY,20,BCX,BCY,420);bg.addColorStop(0,'#2a1809');bg.addColorStop(1,'#080604');bounceC.fillStyle=bg;bounceC.fillRect(0,0,BW,BH);
+  bounceC.strokeStyle='rgba(255,138,31,.05)';bounceC.lineWidth=1;bounceC.beginPath();for(let i=40;i<BW;i+=40){bounceC.moveTo(i,0);bounceC.lineTo(i,BH)}for(let j=40;j<BH;j+=40){bounceC.moveTo(0,j);bounceC.lineTo(BW,j)}bounceC.stroke();
+  bounceC.fillStyle='#ffc98a';bounceStars.forEach(q=>{bounceC.globalAlpha=q[2];bounceC.fillRect(q[0],q[1],1.6,1.6)});bounceC.globalAlpha=1;
+  bounceC.textAlign='center';bounceC.textBaseline='middle';bounceC.font='800 '+(64+bouncePop*12)+'px "Segoe UI",system-ui,sans-serif';bounceC.fillStyle='rgba(255,138,31,'+(.18+bouncePop*.22)+')';bounceC.fillText(bounceMult.toFixed(2)+'×',BCX,BCY);
+  const a0=ga+BGAP/2,a1=ga+6.2832-BGAP/2;bounceC.lineCap='round';bounceC.strokeStyle='rgba(255,138,31,.14)';bounceC.lineWidth=18;bounceC.beginPath();bounceC.arc(BCX,BCY,BRING,a0,a1);bounceC.stroke();bounceC.shadowColor='#ff8a1f';bounceC.shadowBlur=14+bounceGlow*24;bounceC.strokeStyle='#ff9a2e';bounceC.lineWidth=6;bounceC.beginPath();bounceC.arc(BCX,BCY,BRING,a0,a1);bounceC.stroke();bounceC.shadowBlur=0;bounceC.fillStyle='#fff3e2';[a0,a1].forEach(a=>{bounceC.beginPath();bounceC.arc(BCX+BRING*Math.cos(a),BCY+BRING*Math.sin(a),5,0,6.2832);bounceC.fill()});
+  let ballX=null,ballY=null,alpha=1,scale=1;
+  if(bounceS){
+    if(bouncePhase==='idle'){alpha=0}
+    const k=(bouncePhase==='play'&&bounceSp>=BSPAWN&&!bounceS.done)?bounceAcc/BDT:1;ballX=bounceS.px+(bounceS.x-bounceS.px)*k;ballY=bounceS.py+(bounceS.y-bounceS.py)*k;
+    if(bouncePhase==='play'&&bounceSp<BSPAWN){const u=bounceSp/BSPAWN,e=Math.min(1,Math.max(0,(u-.2)/.7)),v=e-1;scale=.55+.45*(1+2.7*v*v*v+1.7*v*v);alpha=Math.min(1,Math.max(0,(u-.2)/.45));alpha=alpha*alpha*(3-2*alpha)}
+  }
+  if(ballX!=null){
+    if(bouncePhase==='play'&&bounceSp>=BSPAWN){bounceTrail.push([ballX,ballY]);if(bounceTrail.length>24)bounceTrail.shift()}
+    for(let i=0;i<bounceTrail.length;i++){const u=(i+1)/bounceTrail.length,p=bounceTrail[i],tr=BBR*(.12+.8*u),gr=bounceC.createRadialGradient(p[0],p[1],0,p[0],p[1],tr);gr.addColorStop(0,'rgba(255,170,60,'+(u*u*.5)+')');gr.addColorStop(1,'rgba(255,120,20,0)');bounceC.fillStyle=gr;bounceC.beginPath();bounceC.arc(p[0],p[1],tr,0,6.2832);bounceC.fill()}
+    const r=BBR*scale;bounceC.globalAlpha=alpha;const hg=bounceC.createRadialGradient(ballX,ballY,r*.6,ballX,ballY,r*2.1);hg.addColorStop(0,'rgba(255,150,40,.45)');hg.addColorStop(1,'rgba(255,150,40,0)');bounceC.fillStyle=hg;bounceC.beginPath();bounceC.arc(ballX,ballY,r*2.1,0,6.2832);bounceC.fill();const sg=bounceC.createRadialGradient(ballX-r*.35,ballY-r*.4,r*.1,ballX,ballY,r);sg.addColorStop(0,'#ffe2b0');sg.addColorStop(.35,'#ffab45');sg.addColorStop(.75,'#f07a14');sg.addColorStop(1,'#b8500a');bounceC.fillStyle=sg;bounceC.beginPath();bounceC.arc(ballX,ballY,r,0,6.2832);bounceC.fill();bounceC.strokeStyle='rgba(255,200,130,.35)';bounceC.lineWidth=1.2;bounceC.stroke();bounceC.fillStyle='rgba(255,255,255,.5)';bounceC.beginPath();bounceC.ellipse(ballX-r*.3,ballY-r*.38,r*.28,r*.18,-.6,0,6.2832);bounceC.fill();bounceC.globalAlpha=1;
+    if(bouncePhase==='play'){const tx=bounceMult.toFixed(2)+'×';bounceC.font='700 '+(14+bouncePop*4)+'px "Segoe UI",system-ui,sans-serif';const tw=bounceC.measureText(tx).width+16;bounceC.fillStyle='rgba(18,13,9,.8)';bounceC.beginPath();bounceC.roundRect(ballX-tw/2,ballY-BBR-28,tw,22,7);bounceC.fill();bounceC.fillStyle='#ffb347';bounceC.fillText(tx,ballX,ballY-BBR-16)}
+  }
+  const y=BH-BBAR;bounceC.fillStyle='rgba(59,212,124,.2)';bounceC.fillRect(0,y,bounceZoneW,BBAR);bounceC.fillStyle='#3bd47c';bounceC.fillRect(0,y,bounceZoneW,2);bounceC.fillStyle='rgba(239,75,75,.18)';bounceC.fillRect(bounceZoneW,y,BW-bounceZoneW,BBAR);bounceC.fillStyle='#ef4b4b';bounceC.fillRect(bounceZoneW,y,BW-bounceZoneW,2);bounceC.save();bounceC.beginPath();bounceC.rect(bounceZoneW,y,BW-bounceZoneW,BBAR);bounceC.clip();bounceC.strokeStyle='rgba(239,75,75,.22)';bounceC.lineWidth=2;bounceC.beginPath();for(let x=bounceZoneW-BBAR;x<BW;x+=9){bounceC.moveTo(x,y+BBAR);bounceC.lineTo(x+BBAR,y)}bounceC.stroke();bounceC.restore();
+  if(bounceFlash>0&&bounceMsg){bounceC.fillStyle='rgba(255,255,255,'+bounceFlash*.28+')';bounceMsg.win?bounceC.fillRect(0,y,bounceZoneW,BBAR):bounceC.fillRect(bounceZoneW,y,BW-bounceZoneW,BBAR)}
+  bounceC.font='800 15px "Segoe UI",system-ui,sans-serif';bounceC.fillStyle='#3bd47c';bounceC.fillText('★ WIN',bounceZoneW/2,y+BBAR/2+2);bounceC.fillStyle='#ef4b4b';bounceC.fillText('0×',bounceZoneW+(BW-bounceZoneW)/2,y+BBAR/2+2);
+  if(bounceMsg){bounceC.font='800 34px "Segoe UI",system-ui,sans-serif';bounceC.shadowColor='#000';bounceC.shadowBlur=12;bounceC.fillStyle=bounceMsg.win?'#3bd47c':'#ef4b4b';bounceC.fillText(bounceMsg.t,BCX,BCY+70);bounceC.shadowBlur=0}
+  requestAnimationFrame(bounceRenderStage);
+}
+function openBounce(){
+  if(!initData)return handleNotTelegram();
+  if(bounceRenderStarted===false){bounceRenderStarted=true;bounceLast=performance.now();requestAnimationFrame(bounceRenderStage)}
+  bouncePhase='idle';bounceMsg=null;bounceS=null;bounceSpinResult=null;bounceTrail=[];bounceMult=0;
+  renderBounceTabs();
+  bounceRenderTag();
+  bounceUi("gamesList").classList.add("hidden");bounceUi("upgradeGame").classList.add("hidden");bounceUi("bounceGame").classList.remove("hidden");
+  bounceSetBet(bounceBetValue);
+  bounceUi("bounceBalance").textContent=currentBalance.toFixed(2);
+}
+function closeBounce(){
+  if(bouncePhase==='play')return toast("Дождитесь окончания прокрутки.");
+  bounceUi("bounceGame").classList.add("hidden");bounceUi("gamesList").classList.remove("hidden");
+}
+function bounceStart(){
+  if(!initData)return handleNotTelegram();
+  if(bouncePhase==='play')return;
+  const bet=bounceReadBet();
+  if(!Number.isFinite(bet)||bet<.1||bet>50000)return toast("Ставка должна быть от 0.1 до 50 000 Stars.");
+  if(bet>currentBalance)return toast("Недостаточно Stars на балансе.");
+  bouncePhase='waiting';bounceMsg=null;bounceS=null;bounceTrail=[];bounceMult=0;bounceUi("bounceErr").textContent="";bounceSetControls(true);bounceUi("bouncePlay").textContent="Отправляем…";
+  socket.emit("bounce_spin",{bet,modeIndex:bounceMode});
+}
+function bouncePrepare(result){
+  bounceSpinResult=result||{};bounceWin=!!result?.win;bounceT=3+Math.round(Math.random()*30)/10;const g0=bounceRingAt(bounceClk+BSPAWN);const p=bouncePlan(g0,bounceWin);bounceS=bounceMk(p.a,p.v,g0);bounceAcc=0;bounceSp=0;bouncePhase='play';bounceMult=0;bounceMsg=null;bounceTrail=[];bounceFlash=0;bounceSetControls(true);bounceUi("bouncePlay").textContent="Идёт раунд…";
+}
+["openBounce"].forEach(id=>{const b=bounceUi(id);if(b)b.onclick=openBounce});
+if(bounceUi("bounceBack"))bounceUi("bounceBack").onclick=closeBounce;
+if(bounceUi("bouncePlay"))bounceUi("bouncePlay").onclick=bounceStart;
+if(bounceUi("bounceBet"))bounceUi("bounceBet").onchange=bounceReadBet;
+if(bounceUi("bounceDec"))bounceUi("bounceDec").onclick=()=>{const v=bounceReadBet();bounceSetBet(v>1?v-1:v-.1)};
+if(bounceUi("bounceInc"))bounceUi("bounceInc").onclick=()=>{const v=bounceReadBet();bounceSetBet(v>=1?v+1:v+.1)};
+if(bounceUi("bounceQuick")){
+  [["Мин",()=>.1],["÷2",()=>bounceReadBet()/2],["×2",()=>Math.min(bounceReadBet()*2,50000)],["Макс",()=>Math.max(.1,Math.min(currentBalance,50000))]].forEach(([t,f])=>{const b=document.createElement("button");b.type="button";b.textContent=t;b.onclick=()=>bounceSetBet(Math.max(.1,f()));bounceUi("bounceQuick").append(b)});
+  const sep=document.createElement("i");bounceUi("bounceQuick").append(sep);
+  [1,5,25,100].forEach(v=>{const b=document.createElement("button");b.type="button";b.textContent=v;b.dataset.v=v;b.onclick=()=>bounceSetBet(v);bounceUi("bounceQuick").append(b)});
+}
+renderBounceTabs();bounceRenderTag();bounceSetBet(1);
+
+socket.on("bounce_result", result => bouncePrepare(result));
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, ch => ({
     "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#039;"
@@ -1695,493 +1896,3 @@ if (historySearchInput) {
     navigator.clipboard.writeText(value).then(() => toast("Скопировано"));
   };
 });
-
-// ---------- ICE ARENA ----------
-// Ice Arena source structure, visuals, animations and physics are retained from the original project.
-// Only its color palette is adapted in styles.css; transport is bridged to RING's existing Socket.IO session.
-window.__RING_SOCKET = socket;
-window.__iceArenaActive = false;
-(function () {
-  const tg = window.Telegram && Telegram.WebApp;
-  if (tg) { tg.ready(); tg.expand && tg.expand(); }
-  const $ = id => document.getElementById(id);
-  const arena = $('iceArena'), puck = $('icePuck'), zoneMap = $('iceZoneMap'), legend = $('iceLegend'), winnerEl = $('iceWinner');
-  const SPIN = 0, HOLD = 0, FLIGHT = 7000, CLOSE = 1000, PUCK = 24, S = 100, N = FLIGHT / 1000 * 60;
-  let W = arena.clientWidth || 358, me = null, isAdmin = false, ws, skew = 0;
-  let st = { status: 'waiting', players: [], online: 0 }, L = [];
-  let plan = null, planFor = null, finished = false, phase = '', cam = null;
-
-  const fmt = v => String(+Number(v).toFixed(3));
-  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), 2600); }
-  function place(x, y) { puck.style.transform = `translate3d(${(x * W / 100 - PUCK / 2).toFixed(2)}px,${(y * W / 100 - PUCK / 2).toFixed(2)}px,0)`; }
-  window.addEventListener('resize', () => { W = arena.clientWidth || W; });
-  place(50, 50); puck.style.visibility = 'hidden';
-
-  // ---------- аватарка ----------
-  function avatar(p, cls, size) {
-    const el = document.createElement(p.photo ? 'img' : 'div');
-    el.className = cls; el.style.width = el.style.height = size + 'px';
-    const initial = () => { const d = document.createElement('div'); d.className = cls; d.style.cssText = `width:${size}px;height:${size}px;background:${p.color};font-size:${size * .45}px`; d.textContent = (p.name || '?')[0].toUpperCase(); return d; };
-    if (p.photo) { el.src = p.photo; el.referrerPolicy = 'no-referrer'; el.onerror = () => el.replaceWith(initial()); return el; }
-    return initial();
-  }
-
-  // ---------- геометрия зон ----------
-  function clip(poly, a, b, c) { const out = []; for (let i = 0; i < poly.length; i++) { const p = poly[i], q = poly[(i + 1) % poly.length], dp = a * p[0] + b * p[1] - c, dq = a * q[0] + b * q[1] - c; if (dp <= 0) out.push(p); if (dp * dq < 0) { const t = dp / (dp - dq); out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]); } } return out; }
-  function cells() { return L.map(p => { let poly = [[0, 0], [S, 0], [S, S], [0, S]]; for (const o of L) { if (o === p || !poly.length) continue; poly = clip(poly, 2 * (o.sx - p.sx), 2 * (o.sy - p.sy), o.sx * o.sx + o.sy * o.sy - p.sx * p.sx - p.sy * p.sy + p.w - o.w); } return poly; }); }
-  function info(poly) { let A = 0, cx = 0, cy = 0; for (let i = 0; i < poly.length; i++) { const p = poly[i], q = poly[(i + 1) % poly.length], f = p[0] * q[1] - q[0] * p[1]; A += f; cx += (p[0] + q[0]) * f; cy += (p[1] + q[1]) * f; } A /= 2; return A > 1e-9 ? { A, cx: cx / (6 * A), cy: cy / (6 * A) } : { A: 0, cx: 50, cy: 50 }; }
-  function inr(poly, cx, cy) { let m = 1e9; for (let i = 0; i < poly.length; i++) { const p = poly[i], q = poly[(i + 1) % poly.length], dx = q[0] - p[0], dy = q[1] - p[1], l = Math.hypot(dx, dy); if (l > 1e-6) m = Math.min(m, Math.abs(dx * (cy - p[1]) - dy * (cx - p[0])) / l); } return m; }
-  function solve() {
-    const sum = L.reduce((s, p) => s + p.stake, 0);
-    for (let it = 0; it < 400; it++) {
-      const inf = cells().map(info);
-      L.forEach((p, i) => { const e = p.stake / sum * S * S - inf[i].A, d = Math.sign(e); p.step = Math.min(3000, Math.max(.02, p.step * (d === p.dir ? 1.25 : .5))); p.dir = d; p.w += d * Math.min(p.step, Math.abs(e) * 3); if (it < 25 && inf[i].A > 0) { p.sx += (inf[i].cx - p.sx) * .3; p.sy += (inf[i].cy - p.sy) * .3; } });
-      const m = L.reduce((s, p) => s + p.w, 0) / L.length; L.forEach(p => p.w -= m);
-    }
-  }
-  function layout() { L = st.players.map(p => ({ id: p.id, stake: p.stake, sx: p.sx, sy: p.sy, w: 0, step: 200, dir: 0 })); if (L.length) solve(); }
-  function getWinner(x, y) { let best = L[0], bv = Infinity; for (const p of L) { const v = (x - p.sx) ** 2 + (y - p.sy) ** 2 - p.w; if (v < bv) { bv = v; best = p; } } return best; }
-
-  // ---------- отрисовка ----------
-  function render() {
-    zoneMap.innerHTML = ''; legend.innerHTML = '';
-    const sum = L.reduce((s, p) => s + p.stake, 0), cs = L.length ? cells() : [];
-    st.players.map((p, i) => i).sort((a, b) => (st.players[a].id === (me && me.id) ? 1 : 0) - (st.players[b].id === (me && me.id) ? 1 : 0)).forEach(i => {
-      const p = st.players[i], poly = cs[i], inf = info(poly), r = inr(poly, inf.cx, inf.cy);
-      const el = document.createElement('div'); el.className = 'zone-item' + (me && p.id === me.id ? ' mine' : '');
-      el.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none"><polygon points="${poly.map(v => v[0].toFixed(2) + ',' + v[1].toFixed(2)).join(' ')}" fill="${p.color}"/></svg>`;
-      const d = Math.min(46, r * W / 100 * 1.4);
-      if (d >= 14) { const a = avatar(p, 'zone-av', Math.round(d)); a.style.left = inf.cx + '%'; a.style.top = inf.cy + '%'; el.append(a); }
-      zoneMap.append(el); p.zone = el;
-    });
-    st.players.forEach(p => {
-      const it = document.createElement('div'); it.className = 'ice-player';
-      it.append(avatar(p, 'lg-av', 20));
-      it.insertAdjacentHTML('beforeend', `<span>${esc(p.name)}</span><b>${fmt(p.stake)} · ${(p.stake / sum * 100).toFixed(1)}%</b>`);
-      legend.append(it);
-    });
-    $('icePool').textContent = sum.toFixed(2) + ' TON';
-    $('icePlayerCount').textContent = st.players.length;
-    $('online').textContent = st.online || 0;
-    if (finished) applyResult();
-    ui();
-  }
-  function applyResult() {
-    st.players.forEach(p => p.zone && p.zone.classList.add(p.id === st.winnerId ? 'winner-zone' : 'loser'));
-    const w = st.players.find(p => p.id === st.winnerId); if (!w) return;
-    const pool = st.players.reduce((s, p) => s + p.stake, 0);
-    winnerEl.innerHTML = `<div><b>${esc(w.name)}</b><small>Победитель · +${fmt(pool)} TON</small></div>`;
-    winnerEl.classList.add('show');
-  }
-  function ui() {
-    const now = Date.now() + skew; let txt = '', can = false;
-    if (st.status === 'waiting') { txt = st.players.length ? 'Ждём 2-го игрока' : 'Набор игроков'; can = true; }
-    else if (st.status === 'countdown') { const left = st.endsAt - now; if (left > CLOSE) { txt = 'Старт через ' + Math.ceil(left / 1000) + ' с'; can = true; } else txt = 'Ставки закрыты'; }
-    else if (st.status === 'running') txt = phase === 'rushing' ? 'Шайба на льду' : 'Раунд начинается';
-    else txt = 'Раунд завершён';
-    $('iceStatus').textContent = txt;
-    $('iceJoinBtn').disabled = !can || !me;
-    const mine = me && st.players.find(p => p.id === me.id);
-    $('stakeInfo').textContent = mine ? 'Ваша: ' + fmt(mine.stake) : '';
-  }
-  setInterval(ui, 200);
-  window.__iceGetState = () => st.status;
-
-  // ---------- детерминированная физика шайбы ----------
-  function rng(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
-  function sim(x, y, ang, spd) {
-    let vx = Math.cos(ang) * spd, vy = Math.sin(ang) * spd; const dt = 1 / 60, decay = 4.5 / (FLIGHT / 1000), pts = [[x, y]];
-    for (let i = 1; i <= N; i++) {
-      const boost = 1 + Math.exp(-((i - 1) * dt) / .4); x += vx * dt * boost; y += vy * dt * boost;
-      let bx = false, by = false;
-      if (x < 0) { x = 0; if (vx < 0) { vx = Math.abs(vx) * .78; bx = true; } } else if (x > 100) { x = 100; if (vx > 0) { vx = -Math.abs(vx) * .78; bx = true; } }
-      if (y < 0) { y = 0; if (vy < 0) { vy = Math.abs(vy) * .78; by = true; } } else if (y > 100) { y = 100; if (vy > 0) { vy = -Math.abs(vy) * .78; by = true; } }
-      if (bx || by) {
-        const s = Math.hypot(vx, vy) || 1, m = .37 * s, ax = bx ? (x < 50 ? 1 : -1) : 0, ay = by ? (y < 50 ? 1 : -1) : 0; let nx = vx, ny = vy;
-        if (ax && ax * nx < m) { nx = ax * m; ny = (Math.sign(ny) || 1) * Math.sqrt(Math.max(0, s * s - nx * nx)); }
-        if (ay && ay * ny < m) { ny = ay * m; nx = (Math.sign(nx) || 1) * Math.sqrt(Math.max(0, s * s - ny * ny)); }
-        vx = nx; vy = ny;
-      }
-      if ((x < 12 || x > 88) && (y < 12 || y > 88)) { const s0 = Math.hypot(vx, vy); vx += (50 - x) * .02 * s0 * dt; vy += (50 - y) * .02 * s0 * dt; const s1 = Math.hypot(vx, vy) || 1; vx *= s0 / s1; vy *= s0 / s1; }
-      const f = Math.exp(-decay * dt); vx *= f; vy *= f; pts.push([x, y]);
-    }
-    return pts;
-  }
-  // Победитель определён сервером; подбираем траекторию (по общему seed), которая приводит шайбу в его зону.
-  function buildPlan() {
-    let best = null;
-    for (let k = 0; k < 4000; k++) {
-      const r = rng((st.seed + k * 7919) >>> 0);
-      const sx = 12 + r() * 76, sy = 14 + r() * 72, q = Math.floor(r() * 4), ang = (q * 90 + 24 + r() * 42) * Math.PI / 180, spd = 750 + r() * 160, sa = r() * 360;
-      const pts = sim(sx, sy, ang, spd); best = { sp: [sx, sy], pts, ang, sa };
-      const e = pts[N]; if (getWinner(e[0], e[1]).id === st.winnerId) break;
-    }
-    const fa = best.ang * 180 / Math.PI + 90, ea = best.sa + 1440 + ((((fa - best.sa) % 360) + 360) % 360);
-    puck.style.setProperty('--flight-angle', fa + 'deg'); puck.style.setProperty('--spin-ms', SPIN + 'ms');
-    puck.style.setProperty('--start-angle', best.sa.toFixed(2) + 'deg'); puck.style.setProperty('--end-angle', ea.toFixed(2) + 'deg');
-    return best;
-  }
-  function setPhase(p) {
-    if (p === phase) return; phase = p;
-    puck.classList.toggle('choosing', p === 'choosing'); puck.classList.toggle('aiming', p === 'aiming'); puck.classList.toggle('rushing', p === 'rushing');
-  }
-  function frame(t) {
-    if (t < 0) { puck.style.visibility = 'hidden'; place(plan.sp[0], plan.sp[1]); return; }
-    puck.style.visibility = 'visible';
-    setPhase('rushing');
-    const ft = Math.min(t - SPIN - HOLD, FLIGHT), idx = ft / 1000 * 60, i = Math.min(N - 1, Math.floor(idx)), f = idx - i;
-    const a = plan.pts[i], b = plan.pts[i + 1], x = a[0] + (b[0] - a[0]) * f, y = a[1] + (b[1] - a[1]) * f;
-    place(x, y);
-    const zt = Math.max(0, Math.min(1, (ft - (FLIGHT - 3000)) / 3000));
-    if (zt > 0) {
-      if (!cam) { cam = { x, y }; arena.style.transition = 'none'; }
-      cam.x += (x - cam.x) * .12; cam.y += (y - cam.y) * .12;
-      const e = zt * zt * (3 - 2 * zt), sc = 1 + .32 * e, lim = (sc - 1) * 50;
-      const tx = Math.max(-lim, Math.min(lim, (50 - cam.x) * sc)), ty = Math.max(-lim, Math.min(lim, (50 - cam.y) * sc));
-      arena.style.transform = `translate(${tx}%,${ty}%) scale(${sc})`;
-    }
-    if (ft >= FLIGHT && !finished) { finished = true; applyResult(); }
-  }
-  function loop() {
-    requestAnimationFrame(loop);
-    if ((st.status !== 'running' && st.status !== 'result') || !st.startAt || !L.length) return;
-    if (planFor !== st.id) { plan = buildPlan(); planFor = st.id; finished = false; cam = null; }
-    frame(Date.now() + skew - st.startAt);
-  }
-  requestAnimationFrame(loop);
-  function resetVisual() {
-    if (!plan && !finished) return;
-    plan = null; planFor = null; finished = false; cam = null; phase = '';
-    arena.style.transition = ''; arena.style.transform = 'scale(1)';
-    puck.classList.remove('choosing', 'aiming', 'rushing'); winnerEl.classList.remove('show'); winnerEl.innerHTML = '';
-    W = arena.clientWidth || W; place(50, 50); puck.style.visibility = 'hidden';
-  }
-
-  // ---------- сеть ----------
-  // RING adapter: gameplay/rendering/physics above are the original Ice Arena code.
-  const send = m => {
-    const s = window.__RING_SOCKET;
-    if (!s) return;
-    if (m.t === 'bet') s.emit('ice_bet', { amount: Number(m.amount) });
-    else if (m.t === 'admin_users') s.emit('ice_admin_users');
-    else if (m.t === 'admin_give') s.emit('ice_admin_give', { userId: String(m.userId || ''), amount: Number(m.amount) });
-  };
-
-  function connect() {
-    const s = window.__RING_SOCKET;
-    if (!s) { setTimeout(connect, 250); return; }
-    s.on('joined', m => {
-      const u = m?.user || {};
-      me = {
-        id: String(m?.playerId || u.id || ''),
-        name: [u.first_name, u.last_name].filter(Boolean).join(' ') || u.username || String(m?.playerId || ''),
-        photo: u.photo_url || ''
-      };
-      isAdmin = !!m?.isAdmin;
-      $('bal').textContent = fmt(m?.balance ?? 0);
-      $('adminBtn').style.visibility = isAdmin ? 'visible' : 'hidden';
-      ui();
-      s.emit('request_ice_state');
-    });
-    s.on('ice_state', m => {
-      skew = Number(m?.now || Date.now()) - Date.now();
-      st = {
-        status: String(m?.status || 'WAITING').toLowerCase(),
-        players: Array.isArray(m?.players) ? m.players.map(p => ({
-          id: String(p.id), name: p.name, photo: p.avatar || p.photo || '', color: p.color,
-          stake: Number(p.bet ?? p.stake ?? 0), sx: Number(p.sx), sy: Number(p.sy)
-        })) : [],
-        online: Number(m?.online || 0),
-        endsAt: Number(m?.countdownEndsAt || 0),
-        startAt: Number(m?.startAt || 0),
-        seed: Number(m?.seed || 0),
-        id: String(m?.roomId || ''),
-        winnerId: m?.winnerId == null ? null : String(m.winnerId)
-      };
-      if (st.status === 'waiting' || st.status === 'countdown') resetVisual();
-      layout(); render();
-    });
-    s.on('balance_updated', m => { $('bal').textContent = fmt(m?.balance ?? 0); ui(); });
-    s.on('ice_admin_users_result', m => renderUsers(m?.list || []));
-    s.on('ice_admin_ok', m => toast(m?.msg || 'Готово'));
-    s.on('error_message', m => toast(m));
-    s.emit('request_ice_state');
-  }
-  connect();
-
-  // ---------- ставки ----------
-  $('iceJoinBtn').addEventListener('click', () => send({ t: 'bet', amount: Number($('betAmt').value) }));
-  document.querySelectorAll('.ice-stakes button').forEach(b => b.addEventListener('click', () => { $('betAmt').value = b.dataset.v; }));
-
-  // ---------- админка ----------
-  function renderUsers(list) {
-    $('adminList').innerHTML = list.map(u => `<div class="adm-row" data-id="${u.id}"><span>${esc(u.name)}<small>${u.id}</small></span><b>${fmt(u.balance)}</b></div>`).join('') || '<p class="ice-hint">Пока никто не заходил</p>';
-    document.querySelectorAll('.adm-row').forEach(r => r.addEventListener('click', () => { $('admId').value = r.dataset.id; $('admAmt').focus(); }));
-  }
-  $('adminBtn').addEventListener('click', () => { if (isAdmin) { $('adminModal').classList.add('show'); send({ t: 'admin_users' }); } });
-  $('adminClose').addEventListener('click', () => $('adminModal').classList.remove('show'));
-  $('adminModal').addEventListener('click', e => { if (e.target === $('adminModal')) $('adminModal').classList.remove('show'); });
-  $('admGive').addEventListener('click', () => send({ t: 'admin_give', userId: $('admId').value, amount: Number($('admAmt').value) }));
-})();
-
-// Open/close wrapper belongs to the host Mini App, not the Arena UI itself.
-const iceHost = document.getElementById('iceArenaGame');
-const iceOpenBtn = document.getElementById('openIceArena');
-function openIceArenaView(){
-  if (!iceHost) return;
-  document.getElementById('gamesList')?.classList.add('hidden');
-  document.getElementById('upgradeGame')?.classList.add('hidden');
-  iceHost.classList.remove('hidden');
-  window.__iceArenaActive = true;
-  if (tg?.BackButton) { tg.BackButton.show(); tg.BackButton.offClick(closeIceArenaView); tg.BackButton.onClick(closeIceArenaView); }
-}
-function closeIceArenaView(){
-  if (!iceHost) return;
-  if (typeof window.__iceGetState === 'function' && window.__iceGetState() === 'running') return toast('Дождитесь окончания раунда.');
-  iceHost.classList.add('hidden');
-  window.__iceArenaActive = false;
-  if (tg?.BackButton) tg.BackButton.hide();
-}
-iceOpenBtn?.addEventListener('click', () => { if (!initData) return handleNotTelegram(); openIceArenaView(); });
-
-const ringSetViewWithIceGuard = setView;
-setView = function(view){
-  if (view !== 'games') closeIceArenaView();
-  ringSetViewWithIceGuard(view);
-};
-
-// ================= ОТСКОК (solo, real balance, server-authoritative) =================
-(function () {
-  const MODES = [
-    { n: "Лёгкий", s: 0.1, p: 0.65 },
-    { n: "Средний", s: 0.15, p: 0.5 },
-    { n: "Сложный", s: 0.2, p: 0.35 }
-  ];
-  const W = 560, H = 600, CX = W / 2, CY = 255, R = 185, BR = 12, BAR = 44, FLOOR = H - BAR - BR,
-    G = 900, GAP = 0.55, GEFF = GAP / 2 - Math.asin(BR / R) - 0.035, OM = 2.4, GA0 = 2.2,
-    SPAWN = 0.5, VMIN = 380, VMAX = 680, DT = 1 / 480;
-
-  const cv = $("#bounceCv");
-  if (!cv) return; // markup not present on this build
-  const bctx = cv.getContext("2d");
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  cv.width = W * dpr; cv.height = H * dpr;
-  const bgStars = Array.from({ length: 70 }, () => [Math.random() * W, Math.random() * (H - BAR), 0.2 + Math.random() * 0.6]);
-
-  let modeIdx = 0, phase = "idle", ball = null, win = false, targetBounces = 0, mult = 0, ga = GA0,
-    zoneW = W * MODES[0].p, glow = 0, flash = 0, msg = null, trail = [], acc = 0, last = 0, sp = 0, pop = 0, T = 4;
-  const hist = [];
-  const r2 = x => Math.round(x * 100) / 100;
-
-  function mk(a, v) {
-    return { t: 0, g0: GA0, x: CX, y: CY - 30, px: CX, py: CY - 30, vx: Math.cos(a) * v, vy: Math.sin(a) * v, b: 0, ph: 0, done: 0, bad: 0, hit: 0, out: 0, bounced: 0 };
-  }
-  function stp(q) {
-    q.t += DT; q.vy += G * DT; q.x += q.vx * DT; q.y += q.vy * DT;
-    const dx = q.x - CX, dy = q.y - CY, d = Math.hypot(dx, dy);
-    if (q.ph === 0) {
-      if (d > R - BR) {
-        let f = Math.atan2(dy, dx) - (q.g0 + OM * q.t); f = Math.atan2(Math.sin(f), Math.cos(f));
-        if (q.b > 0 && Math.abs(f) < GEFF) q.ph = 1;
-        else {
-          const nx = dx / d, ny = dy / d, vn = q.vx * nx + q.vy * ny;
-          if (vn > 0) {
-            q.vx -= 2 * vn * nx; q.vy -= 2 * vn * ny; q.x = CX + nx * (R - BR); q.y = CY + ny * (R - BR);
-            const spd = Math.hypot(q.vx, q.vy), k = Math.min(Math.max(spd, VMIN), VMAX) / spd;
-            q.vx *= k; q.vy *= k; q.b++; q.hit = 1;
-          }
-        }
-      }
-    } else {
-      if (d > R + BR) q.out = 1;
-      if (q.out ? d < R + BR - 3 : d < R - BR - 3) { q.bad = 1; q.done = 1; }
-      if (q.x < BR || q.x > W - BR) { q.vx = -q.vx; q.x = Math.min(Math.max(q.x, BR), W - BR); }
-      if (q.y >= FLOOR) q.done = 1;
-    }
-    if (q.t > T + 0.6) { q.bad = 1; q.done = 1; }
-  }
-  // Только визуализация: сервер уже решил win/bounces/multiplier/payout.
-  // Здесь подбирается траектория, которая физически даёт РОВНО столько же
-  // отскоков и ту же сторону выхода — никакой собственной логики выигрыша.
-  function plan() {
-    const px = MODES[modeIdx].p * W;
-    let best = null, bestScore = Infinity;
-    for (let i = 0; i < 4000; i++) {
-      const a = Math.random() * 6.283, v = VMIN + Math.random() * 140, q = mk(a, v);
-      while (!q.done) stp(q);
-      if (q.bad) continue;
-      const side = q.x < px, bounceErr = Math.abs(q.b - targetBounces), timeErr = Math.abs(q.t - T);
-      if (side === win && q.b === targetBounces && timeErr < 0.35) return { a, v };
-      const score = bounceErr * 5 + (side === win ? 0 : 3) + timeErr;
-      if (score < bestScore) { bestScore = score; best = { a, v }; }
-    }
-    return best || { a: 1, v: VMIN };
-  }
-
-  function ui() {
-    [...$("#bounceTabs").children].forEach((b, i) => { b.classList.toggle("on", i === modeIdx); b.disabled = phase === "play"; });
-    $("#bounceTag").innerHTML = MODES[modeIdx].n + "<b>Каждый отскок +" + MODES[modeIdx].s + "×</b>";
-    $("#bouncePlayBtn").disabled = phase === "play";
-    $("#bouncePlayBtn").textContent = phase === "play" ? "Идёт раунд…" : "Играть";
-    $("#bounceHist").innerHTML = hist.map(h => '<span class="chip ' + (!h.win ? "l" : "w") + '">' + h.m.toFixed(2) + "×</span>").join("");
-  }
-  MODES.forEach((m, i) => {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.innerHTML = "<b>" + m.n + "</b><small>+" + m.s + "× · " + Math.round(m.p * 100) + "% зелёной</small>";
-    b.onclick = () => { if (phase !== "play") { modeIdx = i; ui(); } };
-    $("#bounceTabs").append(b);
-  });
-
-  function readBet() {
-    let v = Math.round(Number(String($("#bounceBet").value).replace(",", ".")));
-    if (!(v >= 1)) v = 1;
-    return setBet(Math.min(v, 50000));
-  }
-  function setBet(v) {
-    v = Math.max(1, Math.round(v));
-    $("#bounceBet").value = v;
-    [...$("#bounceQuick").querySelectorAll("button[data-v]")].forEach(b => b.classList.toggle("on", +b.dataset.v === v));
-    return v;
-  }
-  [["Мин", () => 1], ["÷2", () => Math.round(readBet() / 2)], ["×2", () => Math.min(readBet() * 2, 50000)],
-   ["Макс", () => Math.max(1, Math.min(Math.floor(currentBalance), 50000))]].forEach(([t, f]) => {
-    const b = document.createElement("button");
-    b.type = "button"; b.textContent = t; b.onclick = () => setBet(Math.max(1, f()));
-    $("#bounceQuick").append(b);
-  });
-  $("#bounceQuick").append(document.createElement("i"));
-  [1, 5, 25, 100].forEach(v => {
-    const b = document.createElement("button");
-    b.type = "button"; b.textContent = v; b.dataset.v = v; b.onclick = () => setBet(v);
-    $("#bounceQuick").append(b);
-  });
-  $("#bounceDec").onclick = () => setBet(Math.max(1, readBet() - 1));
-  $("#bounceInc").onclick = () => setBet(Math.min(50000, readBet() + 1));
-  $("#bounceBet").onchange = readBet;
-  setBet(1);
-
-  function play() {
-    if (!initData) return handleNotTelegram();
-    if (phase === "play") return;
-    const bet = readBet();
-    if (bet > currentBalance) return toast("Недостаточно Stars на балансе.");
-    phase = "requesting"; ui();
-    socket.emit("bounce_play", { mode: modeIdx, bet });
-  }
-  $("#bouncePlayBtn").onclick = play;
-
-  window.__bounceOnError = function () {
-    if (phase === "requesting" || phase === "play") { phase = "idle"; ui(); }
-  };
-
-  socket.on("bounce_result", data => {
-    win = !!data.win;
-    targetBounces = Math.max(0, Math.round(Number(data.bounces) || 0));
-    T = Math.max(0.5, Number(data.duration || 4000) / 1000);
-    msg = null; trail = []; flash = 0; glow = 0; pop = 0; mult = 0;
-    const p = plan();
-    ball = mk(p.a, p.v); acc = 0; sp = 0; ga = GA0; phase = "play"; ui();
-    ball.__final = { multiplier: Number(data.multiplier) || 0, payout: Number(data.payout) || 0 };
-  });
-
-  function settle() {
-    phase = "idle"; trail = [];
-    const fin = ball.__final || { multiplier: r2(ball.b * MODES[modeIdx].s), payout: 0 };
-    mult = fin.multiplier;
-    hist.unshift({ m: mult, win }); hist.length = Math.min(hist.length, 30);
-    msg = { win, t: win ? "+" + fin.payout + " ★" : "Проигрыш" };
-    flash = 1; ui();
-  }
-
-  function draw(now) {
-    const dt = Math.min((now - last) / 1000 || 0, 0.05); last = now;
-    if (phase === "play") {
-      if (sp < SPAWN) { sp += dt; ga = GA0; }
-      else {
-        acc += dt; ball.bounced = 0;
-        while (acc >= DT && !ball.done) {
-          ball.px = ball.x; ball.py = ball.y; stp(ball); acc -= DT;
-          if (ball.hit) { ball.hit = 0; glow = 1; pop = 1; mult = r2(ball.b * MODES[modeIdx].s); ball.bounced = 1; }
-        }
-        ga = ball.g0 + OM * ball.t;
-        if (ball.done) settle();
-      }
-    } else { const e = Math.atan2(Math.sin(GA0 - ga), Math.cos(GA0 - ga)); ga += e * Math.min(1, dt * 4); }
-    glow = Math.max(0, glow - dt * 3); pop = Math.max(0, pop - dt * 5); flash = Math.max(0, flash - dt * 0.8);
-    zoneW += (MODES[modeIdx].p * W - zoneW) * Math.min(1, dt * 8);
-
-    bctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const bg = bctx.createRadialGradient(CX, CY, 20, CX, CY, 420);
-    bg.addColorStop(0, "#2a1809"); bg.addColorStop(1, "#080604");
-    bctx.fillStyle = bg; bctx.fillRect(0, 0, W, H);
-    bctx.strokeStyle = "rgba(255,138,31,.05)"; bctx.lineWidth = 1; bctx.beginPath();
-    for (let i = 40; i < W; i += 40) { bctx.moveTo(i, 0); bctx.lineTo(i, H); }
-    for (let j = 40; j < H; j += 40) { bctx.moveTo(0, j); bctx.lineTo(W, j); }
-    bctx.stroke();
-    bctx.fillStyle = "#ffc98a"; bgStars.forEach(q => { bctx.globalAlpha = q[2]; bctx.fillRect(q[0], q[1], 1.6, 1.6); }); bctx.globalAlpha = 1;
-    bctx.textAlign = "center"; bctx.textBaseline = "middle";
-    bctx.font = "800 " + (64 + pop * 12) + 'px "Segoe UI",system-ui,sans-serif';
-    bctx.fillStyle = "rgba(255,138,31," + (0.18 + pop * 0.22) + ")"; bctx.fillText(mult.toFixed(2) + "×", CX, CY);
-
-    const a0 = ga + GAP / 2, a1 = ga + 6.2832 - GAP / 2;
-    bctx.lineCap = "round"; bctx.strokeStyle = "rgba(255,138,31,.14)"; bctx.lineWidth = 18;
-    bctx.beginPath(); bctx.arc(CX, CY, R, a0, a1); bctx.stroke();
-    bctx.shadowColor = "#ff8a1f"; bctx.shadowBlur = 14 + glow * 24; bctx.strokeStyle = "#ff9a2e"; bctx.lineWidth = 6;
-    bctx.beginPath(); bctx.arc(CX, CY, R, a0, a1); bctx.stroke(); bctx.shadowBlur = 0;
-    bctx.fillStyle = "#fff3e2"; [a0, a1].forEach(a => { bctx.beginPath(); bctx.arc(CX + R * Math.cos(a), CY + R * Math.sin(a), 5, 0, 6.2832); bctx.fill(); });
-
-    if (ball) {
-      const k = (phase === "play" && sp >= SPAWN && !ball.done && !ball.bounced) ? acc / DT : 1;
-      const bx = ball.px + (ball.x - ball.px) * k, by = ball.py + (ball.y - ball.py) * k;
-      let sc = 1;
-      if (phase === "play" && sp < SPAWN) { const u = sp / SPAWN - 1; sc = Math.max(0, 1 + 2.7 * u * u * u + 1.7 * u * u); }
-      if (phase === "play" && sp >= SPAWN) { trail.push([bx, by]); if (trail.length > 10) trail.shift(); }
-      trail.forEach((p, i) => { bctx.fillStyle = "rgba(255,170,70," + (i / trail.length * 0.25) + ")"; bctx.beginPath(); bctx.arc(p[0], p[1], BR * (0.4 + i / trail.length * 0.5), 0, 6.2832); bctx.fill(); });
-      const rr = BR * sc, g = bctx.createRadialGradient(bx - rr * 0.3, by - rr * 0.3, 1, bx, by, rr + 0.01);
-      g.addColorStop(0, "#fff"); g.addColorStop(0.4, "#ffb347"); g.addColorStop(1, "#e26a00");
-      bctx.shadowColor = "#ff8a1f"; bctx.shadowBlur = 14; bctx.fillStyle = g;
-      bctx.beginPath(); bctx.arc(bx, by, rr, 0, 6.2832); bctx.fill(); bctx.shadowBlur = 0;
-      if (phase === "play") { bctx.font = "700 " + (14 + pop * 4) + 'px "Segoe UI",system-ui,sans-serif'; bctx.fillStyle = "#ffb347"; bctx.fillText(mult.toFixed(2) + "×", bx, by - BR - 12); }
-    }
-
-    const y = H - BAR;
-    bctx.fillStyle = "rgba(59,212,124,.2)"; bctx.fillRect(0, y, zoneW, BAR);
-    bctx.fillStyle = "#3bd47c"; bctx.fillRect(0, y, zoneW, 2);
-    bctx.fillStyle = "rgba(239,75,75,.18)"; bctx.fillRect(zoneW, y, W - zoneW, BAR);
-    bctx.fillStyle = "#ef4b4b"; bctx.fillRect(zoneW, y, W - zoneW, 2);
-    bctx.save(); bctx.beginPath(); bctx.rect(zoneW, y, W - zoneW, BAR); bctx.clip();
-    bctx.strokeStyle = "rgba(239,75,75,.22)"; bctx.lineWidth = 2; bctx.beginPath();
-    for (let x = zoneW - BAR; x < W; x += 9) { bctx.moveTo(x, y + BAR); bctx.lineTo(x + BAR, y); }
-    bctx.stroke(); bctx.restore();
-    if (flash > 0 && msg) {
-      bctx.fillStyle = "rgba(255,255,255," + flash * 0.28 + ")";
-      msg.win ? bctx.fillRect(0, y, zoneW, BAR) : bctx.fillRect(zoneW, y, W - zoneW, BAR);
-    }
-    bctx.font = "800 15px \"Segoe UI\",system-ui,sans-serif";
-    bctx.fillStyle = "#3bd47c"; bctx.fillText("★ WIN", zoneW / 2, y + BAR / 2 + 2);
-    bctx.fillStyle = "#ef4b4b"; bctx.fillText("0×", zoneW + (W - zoneW) / 2, y + BAR / 2 + 2);
-    if (msg) {
-      bctx.font = "800 34px \"Segoe UI\",system-ui,sans-serif"; bctx.shadowColor = "#000"; bctx.shadowBlur = 12;
-      bctx.fillStyle = msg.win ? "#3bd47c" : "#ef4b4b"; bctx.fillText(msg.t, CX, CY + 70); bctx.shadowBlur = 0;
-    }
-    requestAnimationFrame(draw);
-  }
-  requestAnimationFrame(draw);
-
-  function openBounce() {
-    if (!initData) return handleNotTelegram();
-    $("#gamesList").classList.add("hidden");
-    $("#bounceGame").classList.remove("hidden");
-    ui();
-  }
-  function closeBounce() {
-    if (phase === "play" || phase === "requesting") return toast("Дождитесь окончания раунда.");
-    $("#bounceGame").classList.add("hidden");
-    $("#gamesList").classList.remove("hidden");
-  }
-  $("#openBounce").onclick = openBounce;
-  $("#bounceBack").onclick = closeBounce;
-  ui();
-})();
