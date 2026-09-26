@@ -81,16 +81,6 @@
           </button>
         </div>
         <div class="games-extra">
-          <button class="game-card ice-card" id="openIceArena" type="button">
-            <div class="ice-card-art" aria-hidden="true">
-              <span class="ice-card-rink"><i></i><b></b></span>
-              <img src="/puck.png" alt="" class="ice-card-puck">
-              <span class="ice-card-glow"></span>
-            </div>
-            <span class="game-card-name ice-card-name">ICE ARENA</span>
-          </button>
-        </div>
-        <div class="games-extra">
           <button class="game-card bounce-card" id="openBounce" type="button">
             <div class="bounce-card-art" aria-hidden="true">
               <span class="bounce-card-ring"></span><span class="bounce-card-ball"></span><span class="bounce-card-glow"></span>
@@ -131,62 +121,6 @@
         </div>
 
         <button class="bet-button" id="upgradeSpinBtn">GO!</button>
-      </div>
-
-      <div id="iceArenaGame" class="ice-arena-game hidden">
-        <svg class="ice-mirage-defs" width="0" height="0" aria-hidden="true"><defs><filter id="iceMirageFilter" x="-20%" y="-20%" width="140%" height="140%">
-          <feTurbulence type="fractalNoise" baseFrequency="0.009 0.016" numOctaves="2" seed="7" result="iceNoise"><animate attributeName="baseFrequency" values="0.006 0.012;0.012 0.02;0.006 0.012" dur="7s" repeatCount="indefinite"/></feTurbulence>
-          <feDisplacementMap in="SourceGraphic" in2="iceNoise" scale="16" xChannelSelector="R" yChannelSelector="G"/>
-        </filter></defs></svg>
-        <div class="ice-arena-header">
-          <button class="ice-arena-back" id="iceArenaBack" type="button">‹ Игры</button>
-          <div class="ice-arena-title">ICE ARENA</div>
-          <button class="ice-arena-history-btn" id="iceArenaHistory" type="button" aria-label="История">История</button>
-        </div>
-        <div class="ice-arena-shell">
-          <div class="ice-arena-board" id="iceArenaBoard">
-            <div class="ice-zone-map" id="iceZoneMap"></div>
-            <div class="ice-puck" id="icePuck">
-              <span class="puck-ripple"></span>
-              <img class="puck-img" alt="" draggable="false" src="/puck.png">
-              <span class="ice-arrow"><svg viewBox="0 0 14 20" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 19V3M2.2 7.8 7 3l4.8 4.8"/></svg></span>
-            </div>
-            <div id="iceAnomalyBadge" class="ice-anomaly-badge"><span class="ab-ball"></span><span class="ab-icon"></span></div>
-            <div class="ice-winner" id="iceWinner"></div>
-            <div class="ice-status-overlay" id="iceStatusOverlay"></div>
-          </div>
-        </div>
-        <div class="ice-arena-bank-row"><span>Банк</span><b id="icePool">0.00</b><span>⭐</span><strong id="iceStatus">Подключение…</strong></div>
-        <div class="ice-arena-controls">
-          <div class="ice-arena-stake-label"><span>Ставка, ⭐</span><strong id="iceStakeInfo"></strong></div>
-          <div class="ice-arena-stakes"><button data-a="min" type="button">Мин</button><button data-a="-5" type="button">−5</button><button data-a="-1" type="button">−1</button><button data-a="+1" type="button">+1</button><button data-a="+5" type="button">+5</button><button data-a="max" type="button">Макс</button></div>
-          <div class="ice-arena-input"><span>⭐</span><input id="iceBetAmt" type="number" min="1" step="1" value="1" inputmode="numeric" aria-label="Ставка Ice Arena"></div>
-          <button class="ice-arena-bet" id="iceJoinBtn" type="button" disabled>ПОСТАВИТЬ</button>
-        </div>
-        <div class="ice-legend" id="iceLegend"></div>
-        <p class="ice-hint" id="iceHint">Бла-Бла-Бла это все равно никто не читает..</p>
-
-        <div class="ice-sheet-modal" id="iceHistoryModal">
-          <div class="ice-sheet">
-            <button class="ice-sheet-close" id="iceHistoryClose" type="button">×</button>
-            <div class="ice-sheet-title">История игр</div>
-            <div id="iceHistoryList" class="ice-history-list"></div>
-          </div>
-        </div>
-        <div class="ice-sheet-modal" id="iceGameModal">
-          <div class="ice-sheet ice-game-sheet">
-            <button class="ice-sheet-close" id="iceGameClose" type="button">×</button>
-            <div class="ice-sheet-title">Игра #<span id="iceGameId"></span></div>
-            <div class="ice-game-date" id="iceGameDate"></div>
-            <div class="ice-game-hashes">
-              <div><span>Хеш</span><b id="iceGameHash"></b><button class="ice-copy" data-t="hash" type="button">⧉</button></div>
-              <div><span>Сид</span><b id="iceGameSeed"></b><button class="ice-copy" data-t="seed" type="button">⧉</button></div>
-            </div>
-            <div class="ice-game-players" id="iceGamePlayers"></div>
-            <button class="ice-legit-check" id="iceLegitCheck" type="button">Legit check</button>
-            <div class="ice-legit-result" id="iceLegitResult"></div>
-          </div>
-        </div>
       </div>
 
       <div id="bounceGame" class="bounce-game hidden">
@@ -579,6 +513,5 @@
 
   <div class="toast" id="toast"></div>
   <script src="/app.js"></script>
-  <script src="/ice-arena.js?v=1"></script>
 </body>
 </html>

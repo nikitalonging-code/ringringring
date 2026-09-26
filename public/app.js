@@ -133,7 +133,7 @@ function setMaintenanceOverlay(enabled, message = "") {
   if (!overlay) return;
   overlay.classList.toggle("hidden", !clientMaintenance);
   if (message) $("#maintenanceOverlay .maintenance-text").textContent = message;
-  ["topupBtn", "betBtn", "withdrawBtn", "openCreateRaffle", "openUpgrade", "openBounce", "openCreateTask"].forEach(id => {
+  ["topupBtn", "betBtn", "withdrawBtn", "openCreateRaffle", "openUpgrade", "openBounce", "openIceArena", "openCreateTask"].forEach(id => {
     const el = $("#" + id);
     if (el) el.disabled = clientMaintenance;
   });
@@ -498,6 +498,7 @@ socket.on("error_message", message => {
   }
   if (bouncePhase === "waiting" || bouncePhase === "play") {
     bouncePhase = "idle";
+    bounceUi("bounceGame")?.classList.remove("is-playing");
     bounceSetControls(false);
     bounceUi("bouncePlay").textContent = "Играть";
     bounceUi("bounceErr").textContent = message || "Ошибка раунда.";
@@ -1669,7 +1670,7 @@ function bounceSetBet(v){
   [...document.querySelectorAll("#bounceQuick button[data-v]")].forEach(b=>b.classList.toggle("on",Number(b.dataset.v)===v));
   return v;
 }
-function bounceMk(a,v,g0){return{t:0,g0,x:BCX,y:BCY-30,px:BCX,py:BCY-30,vx:Math.cos(a)*v,vy:Math.sin(a)*v,b:0,ph:0,done:0,bad:0,hit:0,out:0}}
+function bounceMk(a,v,g0,targetBounces,bounceWinTarget){return{t:0,g0,target:Math.max(1,Math.min(15,Number(targetBounces)||1)),winTarget:!!bounceWinTarget,x:BCX,y:BCY-30,px:BCX,py:BCY-30,vx:Math.cos(a)*v,vy:Math.sin(a)*v,b:0,ph:0,done:0,bad:0,hit:0,out:0,released:false}}
 function bounceStep(q){
   q.t+=BDT;q.vy+=BG*BDT;q.x+=q.vx*BDT;q.y+=q.vy*BDT;
   const dx=q.x-BCX,dy=q.y-BCY,d=Math.hypot(dx,dy);
@@ -1679,9 +1680,20 @@ function bounceStep(q){
       if(Math.abs(f)<BGEFF)q.ph=1;
       else{
         const nx=dx/d,ny=dy/d,vn=q.vx*nx+q.vy*ny;
-        if(vn>0){q.vx-=2*vn*nx;q.vy-=2*vn*ny;q.x=BCX+nx*(BRING-BBR);q.y=BCY+ny*(BRING-BBR);const sp=Math.hypot(q.vx,q.vy),k=Math.min(Math.max(sp,BVMIN),BVMAX)/sp;q.vx*=k;q.vy*=k;q.b++;q.hit=1}
+        if(vn>0){q.vx-=2*vn*nx;q.vy-=2*vn*ny;q.x=BCX+nx*(BRING-BBR);q.y=BCY+ny*(BRING-BBR);const sp=Math.hypot(q.vx,q.vy),k=Math.min(Math.max(sp,BVMIN),BVMAX)/sp;q.vx*=k;q.vy*=k;q.b++;q.hit=1;if(q.b>=q.target){
+            const gapAng=q.g0+BOM*q.t, gx=BCX+Math.cos(gapAng)*(BRING+BBR+7), gy=BCY+Math.sin(gapAng)*(BRING+BBR+7);
+            const landingX=q.winTarget?(120+Math.random()*120):(BW-240+Math.random()*120);
+            const dy=BFLOOR-gy, disc=Math.max(1,q.vy*q.vy+2*BG*dy), tf=Math.max(.65,(-q.vy+Math.sqrt(disc))/(2*BG));
+            q.x=gx;q.y=gy;q.vx=(landingX-gx)/tf;q.vy=Math.max(250,q.vy*.25);q.ph=2;q.released=true;
+          }}
       }
     }
+  }else if(q.ph===2){
+    // Final release: no additional ring collisions are allowed after the
+    // server-selected bounce count. The ball exits and falls toward the
+    // winning/losing half, so the physical count, displayed multiplier and
+    // server payout use one exact number.
+    if(q.y>=BFLOOR)q.done=1;
   }else{
     if(d>BRING+BBR)q.out=1;
     if(d<BRING-BBR-3){q.ph=0;q.out=0}
@@ -1696,27 +1708,18 @@ function bounceStep(q){
   if(q.t>bounceT+.6){q.bad=1;q.done=1}
 }
 function bouncePlan(g0,winTarget,targetBounces){
-  const px=BOUNCE_MODES_CLIENT[bounceMode].p*BW;
-  const target=Math.max(1,Math.min(25,Number(targetBounces)||1));
-  // The server is authoritative about the bounce count. Pick a client-side
-  // trajectory with exactly the same number of physical wall hits so the
-  // visible multiplier can never disagree with the final payout.
-  for(let i=0;i<12000;i++){
-    const a=Math.random()*6.283,v=BVMIN+Math.random()*210,q=bounceMk(a,v,g0);
-    while(!q.done)bounceStep(q);
-    if(q.bad||q.b!==target||Math.abs(q.x-px)<24||Math.abs(q.t-bounceT)>.35)continue;
-    if((q.x<px)===winTarget)return {a,v};
+  const target=Math.max(1,Math.min(15,Number(targetBounces)||1));
+  // Find any natural path that can produce at least the requested number of
+  // wall hits before the fall. The live simulation will stop counting exactly
+  // on target and then release the ball, so the visible count and the server
+  // multiplier always agree.
+  for(let i=0;i<6000;i++){
+    const a=Math.random()*6.283,v=BVMIN+Math.random()*210,q=bounceMk(a,v,g0,target,winTarget);
+    while(!q.done && q.t<bounceT-.6){bounceStep(q); if(q.b>=target)break;}
+    if(q.b>=target)return {a,v};
   }
-  // Wider fallback: exact bounce count and win/loss side are still preserved,
-  // while the landing-time tolerance is relaxed.
-  for(let i=0;i<12000;i++){
-    const a=Math.random()*6.283,v=BVMIN+Math.random()*210,q=bounceMk(a,v,g0);
-    while(!q.done)bounceStep(q);
-    if(q.bad||q.b!==target)continue;
-    if((q.x<px)===winTarget)return {a,v};
-  }
-  // Last-resort visual fallback: the multiplier remains tied to targetBounces.
-  return {a:winTarget?Math.PI:0.2,v:520};
+  // Deterministic fallback; bounceStep still enforces the requested count.
+  return {a:winTarget?2.35:0.8,v:Math.max(BVMIN+20,520)};
 }
 function bounceSetControls(disabled){
   const ids=["bouncePlay","bounceBet","bounceDec","bounceInc"];
@@ -1744,10 +1747,10 @@ function bounceRenderStage(now){
     if(!go){const n=bounceSp+dt;if(n>=BSPAWN){bounceAcc=n-BSPAWN;bounceSp=BSPAWN;go=true}else bounceSp=n}
     else bounceAcc+=dt;
     if(go&&bounceS){
-      while(bounceAcc>=BDT&&!bounceS.done){bounceS.px=bounceS.x;bounceS.py=bounceS.y;bounceStep(bounceS);bounceAcc-=BDT;if(bounceS.hit){bounceS.hit=0;bounceGlow=1;bouncePop=1;bounceMult=Number((bounceS.b*BOUNCE_MODES_CLIENT[bounceMode].s).toFixed(2));bouncePlayBounceSound(bounceS.b);}}
+      while(bounceAcc>=BDT&&!bounceS.done){bounceS.px=bounceS.x;bounceS.py=bounceS.y;bounceStep(bounceS);bounceAcc-=BDT;if(bounceS.hit){bounceS.hit=0;bounceGlow=1;bouncePop=1;bounceMult=Number(((bounceS.released?bounceS.target:bounceS.b)*BOUNCE_MODES_CLIENT[bounceMode].s).toFixed(2));bouncePlayBounceSound(bounceS.b);}}
       if(bounceS.done){
         bouncePhase='result';
-        bounceMult=Number((bounceS.b*BOUNCE_MODES_CLIENT[bounceMode].s).toFixed(2));
+        bounceMult=Number(((bounceS.released?bounceS.target:bounceS.b)*BOUNCE_MODES_CLIENT[bounceMode].s).toFixed(2));
         bounceMsg={win:bounceWin,t:bounceWin?'+'+Number(bounceSpinResult?.payout||0).toFixed(2)+' ⭐':'Проигрыш'};
         bounceFlash=1;
         const history=bounceUi("bounceHistory");
@@ -1759,6 +1762,8 @@ function bounceRenderStage(now){
           while(history.children.length>30)history.lastElementChild.remove();
         }
         bounceSetControls(false);
+        bounceUi("bounceGame")?.classList.remove("is-playing");
+        window.scrollTo(0,0);
         bounceUi("bouncePlay").textContent="Играть";
         setBalance(bounceSpinResult?.balance);
         if(bounceWin){bouncePlayWinSound(bounceMult);toast(`ОТСКОК: +${Number(bounceSpinResult?.payout||0).toFixed(2)} ⭐`);}else{bouncePlayLoseSound();toast("ОТСКОК: проигрыш");}
@@ -1794,7 +1799,12 @@ function bounceRenderStage(now){
 }
 function openBounce(){
   if(!initData)return handleNotTelegram();
+  lockBounceViewport();
+  try{tg?.expand?.();tg?.disableVerticalSwipes?.();}catch{}
+  window.scrollTo(0,0);
   installBounceZoomLock();
+  const bounceRoot=bounceUi("bounceGame");
+  if(bounceRoot){bounceRoot.style.zoom="1";bounceRoot.style.transform="none";}
   if(bounceRenderStarted===false){bounceRenderStarted=true;bounceLast=performance.now();requestAnimationFrame(bounceRenderStage)}
   bouncePhase='idle';bounceMsg=null;bounceS=null;bounceSpinResult=null;bounceTrail=[];bounceMult=0;
   renderBounceTabs();
@@ -1806,7 +1816,22 @@ function openBounce(){
 function closeBounce(){
   if(bouncePhase==='play')return toast("Дождитесь окончания прокрутки.");
   bounceUi("bounceGame").classList.add("hidden");bounceUi("gamesList").classList.remove("hidden");
+  bounceUi("bounceGame")?.classList.remove("is-playing");
+  unlockBounceViewport();
+  window.scrollTo(0,0);
 }
+// ОТСКОК: временно фиксируем viewport только пока открыт ОТСКОК.
+// Это не меняет масштабирование остальных вкладок приложения.
+const bounceViewportMeta=document.querySelector('meta[name="viewport"]');
+const bounceViewportOriginal=bounceViewportMeta?.content||'';
+function lockBounceViewport(){
+  if(!bounceViewportMeta)return;
+  bounceViewportMeta.content='width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover';
+}
+function unlockBounceViewport(){
+  if(bounceViewportMeta&&bounceViewportOriginal)bounceViewportMeta.content=bounceViewportOriginal;
+}
+
 // ОТСКОК: предотвращаем системный pinch/gesture zoom внутри игрового экрана.
 // Не меняет поведение остальных разделов приложения.
 function installBounceZoomLock(){
@@ -1825,6 +1850,15 @@ function installBounceZoomLock(){
   root.addEventListener("wheel",e=>{
     if(e.ctrlKey) e.preventDefault();
   },{passive:false});
+  root.addEventListener("focusout",()=>{
+    setTimeout(()=>window.scrollTo(0,0),30);
+  });
+  let lastBounceTouch=0;
+  root.addEventListener("touchend",e=>{
+    const now=Date.now();
+    if(now-lastBounceTouch<280){e.preventDefault();}
+    lastBounceTouch=now;
+  },{passive:false});
 }
 
 function bounceStart(){
@@ -1833,11 +1867,16 @@ function bounceStart(){
   const bet=bounceReadBet();
   if(!Number.isFinite(bet)||bet<.1||bet>50000)return toast("Ставка должна быть от 0.1 до 50 000 Stars.");
   if(bet>currentBalance)return toast("Недостаточно Stars на балансе.");
-  bounceActxGet();bouncePhase='waiting';bounceMsg=null;bounceS=null;bounceTrail=[];bounceMult=0;bounceUi("bounceErr").textContent="";bounceSetControls(true);bounceUi("bouncePlay").textContent="Отправляем…";
+  bounceActxGet();
+  const bounceRoot=bounceUi("bounceGame");
+  if(document.activeElement && bounceRoot?.contains(document.activeElement))document.activeElement.blur();
+  bounceRoot?.classList.add("is-playing");
+  window.scrollTo(0,0);
+  bouncePhase='waiting';bounceMsg=null;bounceS=null;bounceTrail=[];bounceMult=0;bounceUi("bounceErr").textContent="";bounceSetControls(true);bounceUi("bouncePlay").textContent="Отправляем…";
   socket.emit("bounce_spin",{bet,modeIndex:bounceMode});
 }
 function bouncePrepare(result){
-  bounceSpinResult=result||{};bounceWin=!!result?.win;bounceT=Math.max(3,Number(result?.durationMs||6350)/1000-BSPAWN);const g0=bounceRingAt(bounceClk+BSPAWN);const p=bouncePlan(g0,bounceWin,Number(result?.bounces)||1);bounceS=bounceMk(p.a,p.v,g0);bounceAcc=0;bounceSp=0;bouncePhase='play';bounceMult=0;bouncePlaySpawnSound();bounceMsg=null;bounceTrail=[];bounceFlash=0;bounceSetControls(true);bounceUi("bouncePlay").textContent="Идёт раунд…";
+  bounceSpinResult=result||{};bounceWin=!!result?.win;bounceT=Math.max(3,Number(result?.durationMs||6350)/1000-BSPAWN);const targetBounces=Math.max(1,Math.min(15,Number(result?.bounces)||1));const g0=bounceRingAt(bounceClk+BSPAWN);const p=bouncePlan(g0,bounceWin,targetBounces);bounceS=bounceMk(p.a,p.v,g0,targetBounces,bounceWin);bounceAcc=0;bounceSp=0;bouncePhase='play';bounceMult=0;bouncePlaySpawnSound();bounceMsg=null;bounceTrail=[];bounceFlash=0;bounceSetControls(true);bounceUi("bouncePlay").textContent="Идёт раунд…";
 }
 ["openBounce"].forEach(id=>{const b=bounceUi(id);if(b)b.onclick=openBounce});
 if(bounceUi("bounceBack"))bounceUi("bounceBack").onclick=closeBounce;

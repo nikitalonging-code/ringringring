@@ -363,19 +363,6 @@ async function initDb() {
       commission NUMERIC(20,2),
       players JSONB NOT NULL
     )`,
-    `CREATE TABLE IF NOT EXISTS ice_rounds (
-      id TEXT PRIMARY KEY,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      bank NUMERIC(20,2) NOT NULL,
-      winner_id TEXT,
-      winner_bet NUMERIC(20,2),
-      payout NUMERIC(20,2),
-      anomaly TEXT,
-      players JSONB NOT NULL,
-      server_seed TEXT,
-      server_seed_hash TEXT
-    )`,
-    `CREATE INDEX IF NOT EXISTS ice_rounds_created_idx ON ice_rounds(created_at DESC)`,
     `CREATE TABLE IF NOT EXISTS referral_earnings (
       id BIGSERIAL PRIMARY KEY,
       referrer_id TEXT NOT NULL,
@@ -1113,7 +1100,7 @@ function randomBounceCount() {
   // Most real trajectories finish after a relatively small number of hits,
   // while long runs stay possible. The cap keeps the payout bounded.
   const u = Math.max(Number.EPSILON, secureUnit());
-  return Math.min(15, Math.max(1, 1 + Math.floor(-Math.log(u) * 5.5)));
+  return Math.min(25, Math.max(1, 1 + Math.floor(-Math.log(u) * 5.5)));
 }
 
 async function playBounce(playerId, bet, modeIndex) {
@@ -1186,209 +1173,6 @@ async function playBounce(playerId, bet, modeIndex) {
     // Fixed visible duration mirrors the supplied wheel animation.
     durationMs: 6350
   };
-}
-
-
-// ---------- ICE ARENA (integrated into the main RING balance/socket) ----------
-// This is the original Ice Arena game logic moved into the main application.
-// Its UI has no separate admin panel and all money operations use the same
-// PostgreSQL balance / transactions as the rest of RING.
-const ICE_COUNTDOWN = 10000;
-const ICE_CLOSE = 1000;
-const ICE_RUN_MS = 13600;
-const ICE_RUN_MS_REDO = 26000;
-const ICE_RESULT_MS = 4500;
-const ICE_COLORS = [
-  "#19e58f", "#ff19b9", "#ffd11a", "#32a8ff", "#a95cff",
-  "#ff7a18", "#00d9ff", "#ff4d6d", "#8dff3f", "#b7a2ff",
-  "#ff5ce1", "#35e0d0", "#ffb347", "#5b7cfa", "#e6ff4f",
-  "#7dffce", "#f15cff", "#ffde59", "#6ca7ff", "#ff8d6b"
-];
-const iceState = {
-  id: crypto.randomUUID(), status: "waiting", endsAt: 0, startAt: 0,
-  players: new Map(), winnerId: null, seed: crypto.randomBytes(16).toString("hex"),
-  hash: "", anomaly: null
-};
-iceState.hash = crypto.createHash("sha256").update(iceState.seed).digest("hex");
-let iceTimer = null;
-
-function iceSeededFloat(seed, salt = "") {
-  const h = crypto.createHash("sha256").update(`${seed}:${salt}`).digest();
-  return h.readUInt32BE(0) / 0x100000000;
-}
-function iceRng(a) {
-  return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
-}
-const ICE_ANOMALY_WEIGHTS = { race: 0.08, mirage: 0.06, redo: 0.06 };
-const ICE_ANOMALY_KEYS = Object.keys(ICE_ANOMALY_WEIGHTS);
-function iceRollAnomaly() {
-  const r = Math.random(); let acc = 0;
-  for (const k of ICE_ANOMALY_KEYS) { acc += ICE_ANOMALY_WEIGHTS[k]; if (r < acc) return k; }
-  return null;
-}
-function iceSpot() {
-  let best = [50, 50], bd = -1;
-  for (let k = 0; k < 40; k++) {
-    const x = 10 + Math.random() * 80, y = 10 + Math.random() * 80;
-    const d = [...iceState.players.values()].reduce((m, o) => Math.min(m, (o.sx - x) ** 2 + (o.sy - y) ** 2), 1e9);
-    if (d > bd) { bd = d; best = [x, y]; }
-  }
-  return best;
-}
-function iceColor() {
-  const used = new Set([...iceState.players.values()].map(p => p.color));
-  const free = ICE_COLORS.find(c => !used.has(c));
-  if (free) return free;
-  const i = iceState.players.size;
-  const hue = Math.round((i * 137.508) % 360);
-  return `hsl(${hue} 92% 62%)`;
-}
-function iceTotalBank() {
-  return Number([...iceState.players.values()].reduce((s, p) => s + Number(p.stake || 0), 0).toFixed(2));
-}
-function icePublicState() {
-  const revealed = iceState.status === "running" || iceState.status === "result";
-  return {
-    t: "state", now: Date.now(), id: iceState.id, status: iceState.status, endsAt: iceState.endsAt,
-    startAt: iceState.startAt, hash: iceState.hash, seed: revealed ? iceState.seed : null,
-    winnerId: revealed ? iceState.winnerId : null, anomaly: revealed ? (iceState.anomaly || null) : null,
-    players: [...iceState.players.values()].map(p => ({ id: p.id, name: p.name, photo: p.photo, stake: Number(p.stake || 0), color: p.color, sx: p.sx, sy: p.sy }))
-  };
-}
-function iceBroadcast() { io.emit("ice_state", icePublicState()); }
-async function iceHistoryMessage() {
-  requireDatabase();
-  const r = await pool.query(`SELECT id, created_at, bank::float AS bank, winner_id, winner_bet::float AS winner_bet, payout::float AS payout,
-                                     anomaly, players, server_seed, server_seed_hash
-                              FROM ice_rounds ORDER BY created_at DESC LIMIT 30`);
-  const list = r.rows.map(row => ({
-    id: row.id, createdAt: row.created_at, bank: Number(row.bank || 0), winnerId: row.winner_id,
-    winnerBet: Number(row.winner_bet || 0), payout: Number(row.payout || 0), anomaly: row.anomaly || null,
-    players: Array.isArray(row.players) ? row.players : [], seed: row.server_seed, hash: row.server_seed_hash
-  }));
-  return { t: "history", list };
-}
-async function iceResetRound() {
-  clearTimeout(iceTimer);
-  iceState.id = crypto.randomUUID(); iceState.status = "waiting"; iceState.endsAt = 0; iceState.startAt = 0;
-  iceState.players.clear(); iceState.winnerId = null; iceState.anomaly = iceRollAnomaly();
-  iceState.seed = crypto.randomBytes(16).toString("hex");
-  iceState.hash = crypto.createHash("sha256").update(iceState.seed).digest("hex");
-  iceBroadcast();
-}
-async function icePickWinner() {
-  const funded = [...iceState.players.values()].filter(p => Number(p.stake) > 0);
-  const bank = funded.reduce((s, p) => s + Number(p.stake), 0);
-  if (!bank) return null;
-  let x = iceRng(parseInt(iceState.seed.slice(0, 8), 16) || 0)() * bank;
-  let w = funded[0];
-  for (const p of funded) { if (x < p.stake) { w = p; break; } x -= p.stake; }
-  return w;
-}
-async function iceStartRound() {
-  if (iceState.status !== "countdown") return;
-  const winner = await icePickWinner();
-  if (!winner) return iceResetRound();
-  iceState.status = "running";
-  iceState.winnerId = winner.id;
-  iceState.startAt = Date.now() + 500;
-  iceBroadcast();
-  clearTimeout(iceTimer);
-  iceTimer = setTimeout(iceFinishRound, iceState.anomaly === "redo" ? ICE_RUN_MS_REDO : ICE_RUN_MS);
-}
-async function iceFinishRound() {
-  if (iceState.status !== "running") return;
-  const players = [...iceState.players.values()];
-  const bank = iceTotalBank();
-  const winner = players.find(p => p.id === iceState.winnerId);
-  if (!winner || bank <= 0) return iceResetRound();
-
-  let winnerBalanceAfter = null;
-  try {
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      const r = await client.query(
-        `UPDATE users SET balance=balance+$2, updated_at=NOW()
-         WHERE telegram_id=$1 RETURNING balance::float AS balance`,
-        [String(winner.id), bank]
-      );
-      if (!r.rowCount) throw new Error("Победитель не найден при расчёте Ice Arena.");
-      winnerBalanceAfter = Number(r.rows[0].balance);
-      await client.query(
-        `INSERT INTO balance_transactions (telegram_user_id,type,amount,balance_after,description)
-         VALUES ($1,'ice_win',$2,$3,$4)`,
-        [String(winner.id), bank, winnerBalanceAfter, `Победа Ice Arena, раунд ${iceState.id}`]
-      );
-      for (const p of players) {
-        await client.query(
-          `UPDATE users SET games_played=games_played+1, games_won=games_won+$2,
-             total_wagered=total_wagered+$3, updated_at=NOW() WHERE telegram_id=$1`,
-          [String(p.id), p.id === winner.id ? 1 : 0, Number(p.stake)]
-        );
-      }
-      await client.query(
-        `INSERT INTO ice_rounds (id,bank,winner_id,winner_bet,payout,anomaly,players,server_seed,server_seed_hash)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO NOTHING`,
-        [iceState.id, bank, String(winner.id), Number(winner.stake), bank, iceState.anomaly || null,
-          JSON.stringify(players.map(p => ({ id: p.id, name: p.name, photo: p.photo, color: p.color, stake: Number(p.stake), sx: p.sx, sy: p.sy }))), iceState.seed, iceState.hash]
-      );
-      await client.query("COMMIT");
-      invalidateUserCache(winner.id);
-      cacheUser(await getUser(winner.id, { fresh: true }));
-    } catch (e) {
-      try { await client.query("ROLLBACK"); } catch {}
-      console.error("Ice Arena settlement error:", e.message);
-      return;
-    } finally { client.release(); }
-  } catch (e) {
-    console.error("Ice Arena DB error:", e.message);
-    return;
-  }
-
-  for (const p of players) p.status = p.id === winner.id ? "winner" : "lost";
-  iceState.status = "result";
-  iceBroadcast();
-  if (winnerBalanceAfter != null) io.to(`user:${winner.id}`).emit("balance_updated", { balance: winnerBalanceAfter });
-  clearTimeout(iceTimer);
-  iceTimer = setTimeout(iceResetRound, ICE_RESULT_MS);
-}
-async function icePlaceBet(playerId, amount) {
-  amount = Number(amount);
-  if (!Number.isInteger(amount) || amount < 1) throw new Error("Ставка — целое число от 1 ⭐ (1, 2, 3…)");
-  if (iceState.status !== "waiting" && iceState.status !== "countdown") throw new Error("Раунд уже идёт");
-  if (iceState.status === "countdown" && Date.now() > iceState.endsAt - ICE_CLOSE) throw new Error("Приём ставок закрыт");
-
-  let p = iceState.players.get(String(playerId));
-  if (!p) {
-    const dbUser = await getUser(playerId, { fresh: true });
-    if (!dbUser) throw new Error("Пользователь не найден в базе данных.");
-    if (dbUser.banned) throw new Error("Ваш аккаунт заблокирован в приложении.");
-    p = { id: String(playerId), name: dbUser.username ? "@" + dbUser.username : dbUser.first_name, photo: dbUser.avatar_url, stake: 0, color: iceColor(), ...(() => { const [sx, sy] = iceSpot(); return { sx, sy }; })() };
-    iceState.players.set(String(playerId), p);
-  }
-
-  const balance = await debitBalance(playerId, amount, {
-    type: "ice_bet",
-    description: `Ice Arena · ставка ${amount} ⭐`,
-    countsAsWager: true
-  });
-  p.stake = Number((Number(p.stake) + amount).toFixed(2));
-
-  if (iceState.status === "waiting" && [...iceState.players.values()].filter(x => Number(x.stake) > 0).length >= 2) {
-    iceState.status = "countdown";
-    iceState.endsAt = Date.now() + ICE_COUNTDOWN;
-    clearTimeout(iceTimer);
-    iceTimer = setTimeout(iceStartRound, ICE_COUNTDOWN);
-  }
-  invalidateUserCache(playerId);
-  io.to(`user:${playerId}`).emit("balance_updated", { balance });
-  iceBroadcast();
-  return balance;
-}
-async function iceSendInitial(socket) {
-  socket.emit("ice_state", icePublicState());
-  try { socket.emit("ice_history", await iceHistoryMessage()); } catch (e) { console.error("Ice history load error:", e.message); }
 }
 
 async function playUpgrade(playerId, bet, target) {
@@ -1519,7 +1303,6 @@ io.on("connection", socket => {
         isAdmin: isAdmin(p.id)
       });
       socket.emit("room_state", publicState());
-      iceSendInitial(socket).catch(e => console.error("Ice bootstrap error:", e.message));
       broadcast();
     } catch (e) {
       socket.emit("error_message", e.message);
@@ -1543,23 +1326,6 @@ io.on("connection", socket => {
       socket.emit("balance_updated", { balance: result.balance });
       broadcast();
     } catch (e) { socket.emit("error_message", e.message); }
-  });
-
-  socket.on("ice_request_state", () => { iceSendInitial(socket).catch(e => socket.emit("ice_error", e.message)); });
-  socket.on("ice_request_history", async () => {
-    try { socket.emit("ice_history", await iceHistoryMessage()); }
-    catch (e) { socket.emit("ice_error", "Не удалось загрузить историю Ice Arena."); }
-  });
-  socket.on("ice_bet", async data => {
-    try {
-      const id = socket.data.playerId;
-      if (maintenanceMode && !isAdmin(id)) throw new Error(maintenanceMessage());
-      if (!id) throw new Error("Авторизация Telegram не выполнена.");
-      const dbUser = await getUser(id, { fresh: true });
-      if (!dbUser || dbUser.banned) throw new Error("Ваш аккаунт заблокирован в приложении.");
-      const balance = await icePlaceBet(id, Number(data?.amount));
-      socket.emit("ice_bet_accepted", { balance });
-    } catch (e) { socket.emit("ice_error", e.message); }
   });
 
   socket.on("upgrade_spin", async data => {
@@ -2016,15 +1782,12 @@ async function sendAdminUserStats(chatId, userId, period) {
     promo_bonus: "🏷 Промокод",
     admin_credit: "🛠 Начисление админом",
     upgrade_win: "⬆️ Выигрыш Upgrade",
-    bounce_win: "↩️ Выигрыш Отскок",
-    ice_win: "🏒 Победа Ice Arena"
+    bounce_win: "↩️ Выигрыш Отскок"
   };
 
   const operationLabels = {
     pvp_bet: "🎯 Ставка PVP",
     upgrade_bet: "⬆️ Ставка Upgrade",
-    bounce_bet: "↩️ Ставка Отскок",
-    ice_bet: "🏒 Ставка Ice Arena",
     raffle_ticket: "🎟 Билет розыгрыша",
     task_purchase: "📋 Покупка задания",
     raffle_create: "🎁 Создание розыгрыша",
