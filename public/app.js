@@ -1670,84 +1670,32 @@ function bounceSetBet(v){
   [...document.querySelectorAll("#bounceQuick button[data-v]")].forEach(b=>b.classList.toggle("on",Number(b.dataset.v)===v));
   return v;
 }
-function bounceMk(a,v,g0,targetBounces,bounceWinTarget){return{t:0,g0,target:Math.max(1,Math.min(15,Number(targetBounces)||1)),winTarget:!!bounceWinTarget,x:BCX,y:BCY-30,px:BCX,py:BCY-30,vx:Math.cos(a)*v,vy:Math.sin(a)*v,b:0,ph:0,done:0,bad:0,hit:0,out:0,released:false,releasePending:false,landX:BCX}}
+function bounceMk(a,v,g0){return{t:0,g0,x:BCX,y:BCY-30,px:BCX,py:BCY-30,vx:Math.cos(a)*v,vy:Math.sin(a)*v,b:0,ph:0,done:0,bad:0,hit:0,out:0}}
 function bounceStep(q){
-  q.t+=BDT;
-  q.vy+=BG*BDT;
-  q.x+=q.vx*BDT;
-  q.y+=q.vy*BDT;
+  q.t+=BDT; q.vy+=BG*BDT; q.x+=q.vx*BDT; q.y+=q.vy*BDT;
   const dx=q.x-BCX,dy=q.y-BCY,d=Math.hypot(dx,dy)||1;
   if(q.ph===0){
     if(d>BRING-BBR){
-      let f=Math.atan2(dy,dx)-(q.g0+BOM*q.t);
-      f=Math.atan2(Math.sin(f),Math.cos(f));
-      const inGap=Math.abs(f)<BGEFF;
-      if(inGap && q.releasePending){
-        // Target bounce is already complete. Release ONLY through the real gap.
-        q.ph=2;q.released=true;q.releasePending=false;
-      }else if(inGap){
-        q.ph=1;
-      }else{
+      let f=Math.atan2(dy,dx)-(q.g0+BOM*q.t); f=Math.atan2(Math.sin(f),Math.cos(f));
+      if(Math.abs(f)<BGEFF){ q.ph=1; }
+      else{
         const nx=dx/d,ny=dy/d,vn=q.vx*nx+q.vy*ny;
         if(vn>0){
-          q.vx-=2*vn*nx; q.vy-=2*vn*ny;
-          q.x=BCX+nx*(BRING-BBR); q.y=BCY+ny*(BRING-BBR);
-          const sp=Math.hypot(q.vx,q.vy)||1,k=Math.min(Math.max(sp,BVMIN),BVMAX)/sp;
-          q.vx*=k; q.vy*=k;
-          if(q.b<q.target){
-            q.b++; q.hit=1;
-            if(q.b>=q.target){
-              const liveZone=Math.max(40,Math.min(BW-40,bounceZoneW||BOUNCE_MODES_CLIENT[bounceMode].p*BW));
-              const sideW=q.winTarget?liveZone:(BW-liveZone);
-              const sideStart=q.winTarget?0:liveZone;
-              q.landX=sideStart+Math.max(20,sideW*.18)+Math.random()*Math.max(1,sideW*.64);
-              q.releasePending=true;
-            }
-          }
+          q.vx-=2*vn*nx; q.vy-=2*vn*ny; q.x=BCX+nx*(BRING-BBR); q.y=BCY+ny*(BRING-BBR);
+          const sp=Math.hypot(q.vx,q.vy)||1, k=Math.min(Math.max(sp,BVMIN),BVMAX)/sp;
+          q.vx*=k; q.vy*=k; q.b++; q.hit=1;
         }
       }
     }
-  }else if(q.ph===2){
-    // The ball is inside the actual moving opening. Keep its physical velocity
-    // until it is completely outside the ring; only then steer toward the
-    // selected WIN/LOSS landing sector. This prevents cutting through the ring.
-    const ringClear=d>=BRING+BBR+4;
-    if(ringClear){
-      const landingX=Number.isFinite(q.landX)?q.landX:(q.winTarget?BW*.5:BW*.75);
-      const remainY=Math.max(1,BFLOOR-q.y);
-      const disc=Math.max(1,q.vy*q.vy+2*BG*remainY);
-      const tf=Math.max(.18,(-q.vy+Math.sqrt(disc))/BG);
-      const desiredVx=Math.max(-850,Math.min(850,(landingX-q.x)/tf));
-      q.vx+=(desiredVx-q.vx)*Math.min(1,7*BDT);
-    }
-    // Keep the fall readable instead of accelerating without a visual cap.
-    q.vy=Math.min(q.vy,900);
+  }else{
+    q.vy=Math.min(q.vy,900); q.vx*=.9995;
     if(q.x<BBR){q.x=BBR;q.vx=Math.abs(q.vx)*.35}
     if(q.x>BW-BBR){q.x=BW-BBR;q.vx=-Math.abs(q.vx)*.35}
     if(q.y>=BFLOOR)q.done=1;
-  }else{
-    if(d>BRING+BBR)q.out=1;
-    if(d<BRING-BBR-3){q.ph=0;q.out=0}
-    else if(q.out&&d<BRING+BBR){
-      let f=Math.atan2(dy,dx)-(q.g0+BOM*q.t);f=Math.atan2(Math.sin(f),Math.cos(f));
-      const nx=dx/d,ny=dy/d,vn=q.vx*nx+q.vy*ny;
-      if(Math.abs(f)>=BGEFF&&vn<0){q.vx-=1.75*vn*nx;q.vy-=1.75*vn*ny;q.x=BCX+nx*(BRING+BBR);q.y=BCY+ny*(BRING+BBR);q.hit=1}
-    }
-    if(q.x<BBR||q.x>BW-BBR){q.vx=-q.vx;q.x=Math.min(Math.max(q.x,BBR),BW-BBR)}
-    if(q.y>=BFLOOR)q.done=1;
   }
-  if(q.t>bounceT+.6){q.bad=1;q.done=1}
+  if(q.t>bounceT+.8){q.bad=1;q.done=1}
 }
-
-function bouncePlan(g0,winTarget,targetBounces){
-  const target=Math.max(1,Math.min(15,Number(targetBounces)||1));
-  for(let i=0;i<6000;i++){
-    const a=Math.random()*6.283,v=BVMIN+Math.random()*210,q=bounceMk(a,v,g0,target,winTarget);
-    while(!q.done && q.t<bounceT-.15)bounceStep(q);
-    if(q.b>=target && (q.released||q.done))return {a,v};
-  }
-  return {a:winTarget?2.35:0.8,v:BVMIN+40};
-}
+function bouncePlan(g0,winTarget,targetBounces){ return {a:0,v:BVMIN,g0}; }
 
 function bounceSetControls(disabled){
   const ids=["bouncePlay","bounceBet","bounceDec","bounceInc"];
@@ -1769,16 +1717,16 @@ function bounceRenderStage(now){
   const rd=Math.min((now-bounceLast)/1000||0,.05);bounceLast=now;
   bounceClk+=rd;
   const dt=rd;
-  const ga=bounceRingAt(bounceClk-BDT);
+  const ga=(bounceS&&bouncePhase==='play')?(bounceS.g0+BOM*((bounceSp-BSPAWN)+bounceAcc)):bounceRingAt(bounceClk-BDT);
   if(bouncePhase==='play'){
     let go=bounceSp>=BSPAWN;
     if(!go){const n=bounceSp+dt;if(n>=BSPAWN){bounceAcc=n-BSPAWN;bounceSp=BSPAWN;go=true}else bounceSp=n}
     else bounceAcc+=dt;
     if(go&&bounceS){
-      while(bounceAcc>=BDT&&!bounceS.done){bounceS.px=bounceS.x;bounceS.py=bounceS.y;bounceStep(bounceS);bounceAcc-=BDT;if(bounceS.hit){bounceS.hit=0;bounceGlow=1;bouncePop=1;bounceMult=Number(((bounceS.released?bounceS.target:bounceS.b)*BOUNCE_MODES_CLIENT[bounceMode].s).toFixed(2));bouncePlayBounceSound(bounceS.b);}}
+      while(bounceAcc>=BDT&&!bounceS.done){bounceS.px=bounceS.x;bounceS.py=bounceS.y;bounceStep(bounceS);bounceAcc-=BDT;if(bounceS.hit){bounceS.hit=0;bounceGlow=1;bouncePop=1;bounceMult=Number((bounceS.b*BOUNCE_MODES_CLIENT[bounceMode].s).toFixed(2));bouncePlayBounceSound(bounceS.b);}}
       if(bounceS.done){
         bouncePhase='result';
-        bounceMult=Number(((bounceS.released?bounceS.target:bounceS.b)*BOUNCE_MODES_CLIENT[bounceMode].s).toFixed(2));
+        bounceMult=Number((bounceS.b*BOUNCE_MODES_CLIENT[bounceMode].s).toFixed(2));
         bounceMsg={win:bounceWin,t:bounceWin?'+'+Number(bounceSpinResult?.payout||0).toFixed(2)+' ⭐':'Проигрыш'};
         bounceFlash=1;
         const history=bounceUi("bounceHistory");
@@ -1904,7 +1852,12 @@ function bounceStart(){
   socket.emit("bounce_spin",{bet,modeIndex:bounceMode});
 }
 function bouncePrepare(result){
-  bounceSpinResult=result||{};bounceWin=!!result?.win;bounceT=Math.max(3,Number(result?.durationMs||6350)/1000-BSPAWN);const targetBounces=Math.max(1,Math.min(15,Number(result?.bounces)||1));const g0=bounceRingAt(bounceClk+BSPAWN);const p=bouncePlan(g0,bounceWin,targetBounces);bounceS=bounceMk(p.a,p.v,g0,targetBounces,bounceWin);bounceAcc=0;bounceSp=0;bouncePhase='play';bounceMult=0;bouncePlaySpawnSound();bounceMsg=null;bounceTrail=[];bounceFlash=0;bounceSetControls(true);bounceUi("bouncePlay").textContent="Идёт раунд…";
+  bounceSpinResult=result||{};bounceWin=!!result?.win;
+  bounceT=Math.max(2.2,Number(result?.durationMs||6350)/1000-BSPAWN);
+  const phys=result?.physics||{};
+  const a=Number(phys.a||0),v=Number(phys.v||BVMIN),g0=Number(phys.g0||bounceRingAt(bounceClk+BSPAWN));
+  bounceS=bounceMk(a,v,g0); bounceAcc=0;bounceSp=0;bouncePhase='play';bounceMult=0;
+  bouncePlaySpawnSound();bounceMsg=null;bounceTrail=[];bounceFlash=0;bounceSetControls(true);bounceUi("bouncePlay").textContent="Идёт раунд…";
 }
 ["openBounce"].forEach(id=>{const b=bounceUi(id);if(b)b.onclick=openBounce});
 if(bounceUi("bounceBack"))bounceUi("bounceBack").onclick=closeBounce;

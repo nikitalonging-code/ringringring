@@ -95,13 +95,21 @@
   function rng(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
   function sim(x,y,ang,spd,flightMs,n){let vx=Math.cos(ang)*spd,vy=Math.sin(ang)*spd;const dt=1/60,decay=4.5/(flightMs/1000),pts=[[x,y]];for(let i=1;i<=n;i++){const boost=1+3*Math.exp(-((i-1)*dt)/.4);x+=vx*dt*boost;y+=vy*dt*boost;let bx=false,by=false;if(x<0){x=0;if(vx<0){vx=Math.abs(vx)*.78;bx=true;}}else if(x>100){x=100;if(vx>0){vx=-Math.abs(vx)*.78;bx=true;}}if(y<0){y=0;if(vy<0){vy=Math.abs(vy)*.78;by=true;}}else if(y>100){y=100;if(vy>0){vy=-Math.abs(vy)*.78;by=true;}}if(bx||by){const s=Math.hypot(vx,vy)||1,m=.37*s,ax=bx?(x<50?1:-1):0,ay=by?(y<50?1:-1):0;let nx=vx,ny=vy;if(ax&&ax*nx<m){nx=ax*m;ny=(Math.sign(ny)||1)*Math.sqrt(Math.max(0,s*s-nx*nx));}if(ay&&ay*ny<m){ny=ay*m;nx=(Math.sign(nx)||1)*Math.sqrt(Math.max(0,s*s-ny*ny));}vx=nx;vy=ny;}if((x<12||x>88)&&(y<12||y>88)){const s0=Math.hypot(vx,vy);vx+=(50-x)*.02*s0*dt;vy+=(50-y)*.02*s0*dt;const s1=Math.hypot(vx,vy)||1;vx*=s0/s1;vy*=s0/s1;}const f=Math.exp(-decay*dt);vx*=f;vy*=f;pts.push([x,y]);}return pts;}
   function getWinnerAt(x,y){let best=L[0],bv=Infinity;for(const p of L){const v=(x-p.sx)**2+(y-p.sy)**2-p.w;if(v<bv){bv=v;best=p;}}return best;}
+  function fallbackPlan(){
+    const target=st.players.find(p=>String(p.id)===String(st.winnerId))||st.players[0]||{sx:72,sy:55};
+    const sp=[50,50],ep=[Number(target.sx)||72,Number(target.sy)||55],n=420,pts=[];
+    for(let i=0;i<=n;i++){const u=i/n,e=u*u*(3-2*u);pts.push([sp[0]+(ep[0]-sp[0])*e,sp[1]+(ep[1]-sp[1])*e]);}
+    return {sp,pts,ang:0,sa:0,flightMs:7000,n};
+  }
+
   function buildPlan(){
-    if(st.anomaly==="redo")return buildRedoPlan();
+    try { if(st.anomaly==="redo")return buildRedoPlan();
     const flightMs=BASE_FLIGHT,n=Math.round(flightMs/1000*60);let best=null;
     for(let k=0;k<4000;k++){
       const seedNum=parseInt(String(st.seed||"0").slice(0,8),16)||0,r=rng((seedNum+k*7919)>>>0),sx=12+r()*76,sy=14+r()*72,qdir=Math.floor(r()*4),ang=(qdir*90+24+r()*42)*Math.PI/180,spd=750+r()*160,sa=r()*360,pts=sim(sx,sy,ang,spd,flightMs,n);best={sp:[sx,sy],pts,ang,sa,flightMs,n};const e=pts[n];if(getWinnerAt(e[0],e[1])?.id===st.winnerId)break;
     }
     const fa=best.ang*180/Math.PI+90;best.fa=fa;best.ea=best.sa+720+((((fa-best.sa)%360)+360)%360);return best;
+    } catch (e) { return fallbackPlan(); }
   }
   function buildRedoPlan(){
     const seedNum=parseInt(String(st.seed||"0").slice(0,8),16)||0,r1=rng((seedNum^0x1a2b3c4d)>>>0),flight1Ms=BASE_FLIGHT,n1=Math.round(flight1Ms/1000*60),sx1=12+r1()*76,sy1=14+r1()*72,q1=Math.floor(r1()*4),ang1=(q1*90+24+r1()*42)*Math.PI/180,spd1=750+r1()*160,sa1=r1()*360,pts1=sim(sx1,sy1,ang1,spd1,flight1Ms,n1),stop=pts1[n1],flight2Ms=BASE_FLIGHT,n2=Math.round(flight2Ms/1000*60);let best2=null;

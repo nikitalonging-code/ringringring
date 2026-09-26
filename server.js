@@ -1095,97 +1095,138 @@ async function placeBet(playerId, amount) {
 // themselves are the house edge.
 
 // ---------- ОТСКОК (solo game) ----------
-// The client supplies only the stake and mode. The server debits the real
-// PostgreSQL balance, determines the result with crypto randomness and
-// credits the authoritative payout before sending the visual result.
+// Server-authoritative physics: the server creates a real trajectory, counts the
+// actual ring bounces and bases the payout on that count. The client only replays
+// the same deterministic trajectory, so the visible x and the paid x cannot diverge.
 const BOUNCE_MODES = [
   { key: "easy", name: "Лёгкий", step: 0.10, chance: 0.65 },
   { key: "medium", name: "Средний", step: 0.15, chance: 0.50 },
   { key: "hard", name: "Сложный", step: 0.20, chance: 0.35 }
 ];
+const BOUNCE_PHYS = {
+  W: 560, H: 600, CX: 280, CY: 255, R: 185,
+  BR: 18, BAR: 44, FLOOR: 600 - 44 - 18,
+  G: 2190, GAP: 0.72, OM: 2.97 * 1.3,
+  VMIN: 593, VMAX: 1061, DT: 1 / 240,
+  SPAWN_S: 1.2, MIN_FLIGHT_S: 2.8, MAX_FLIGHT_S: 5.9,
+  MIN_BOUNCES: 3, MAX_BOUNCES: 12
+};
+BOUNCE_PHYS.GEFF = BOUNCE_PHYS.GAP / 2 - Math.asin((BOUNCE_PHYS.BR + 4) / BOUNCE_PHYS.R);
 const activeBounceGames = new Map();
-
-function secureUnit() {
-  return crypto.randomInt(0, 1_000_000_000) / 1_000_000_000;
-}
-
-function randomBounceCount() {
-  // Most real trajectories finish after a relatively small number of hits,
-  // while long runs stay possible. The cap keeps the payout bounded.
-  const u = Math.max(Number.EPSILON, secureUnit());
-  return Math.min(15, Math.max(1, 1 + Math.floor(-Math.log(u) * 5.5)));
-}
-
-async function playBounce(playerId, bet, modeIndex) {
-  if (!Number.isFinite(bet) || bet < 0.1 || bet > 50000) {
-    throw new Error("Ставка должна быть от 0.1 до 50 000 Stars.");
+function secureUnit() { return crypto.randomInt(0, 1_000_000_000) / 1_000_000_000; }
+function bounceStepServer(q) {
+  const B = BOUNCE_PHYS;
+  q.t += B.DT;
+  q.vy += B.G * B.DT;
+  q.x += q.vx * B.DT;
+  q.y += q.vy * B.DT;
+  const dx = q.x - B.CX, dy = q.y - B.CY, d = Math.hypot(dx, dy) || 1;
+  if (q.ph === 0) {
+    if (d > B.R - B.BR) {
+      let f = Math.atan2(dy, dx) - (q.g0 + B.OM * q.t);
+      f = Math.atan2(Math.sin(f), Math.cos(f));
+      if (Math.abs(f) < B.GEFF) {
+        q.ph = 1; // the ball is allowed through the real moving opening
+      } else {
+        const nx = dx / d, ny = dy / d, vn = q.vx * nx + q.vy * ny;
+        if (vn > 0) {
+          q.vx -= 2 * vn * nx;
+          q.vy -= 2 * vn * ny;
+          q.x = B.CX + nx * (B.R - B.BR);
+          q.y = B.CY + ny * (B.R - B.BR);
+          const speed = Math.hypot(q.vx, q.vy) || 1;
+          const k = Math.min(Math.max(speed, B.VMIN), B.VMAX) / speed;
+          q.vx *= k; q.vy *= k; q.bounces += 1;
+        }
+      }
+    }
+  } else {
+    // Outside the ring: controlled fall, no runaway acceleration.
+    q.vy = Math.min(q.vy, 900);
+    q.vx *= 0.9995;
+    if (q.x < B.BR) { q.x = B.BR; q.vx = Math.abs(q.vx) * 0.35; }
+    if (q.x > B.W - B.BR) { q.x = B.W - B.BR; q.vx = -Math.abs(q.vx) * 0.35; }
+    if (q.y >= B.FLOOR) q.done = true;
   }
+  if (q.t > B.MAX_FLIGHT_S + 0.8) { q.done = true; q.bad = true; }
+}
+function makeBouncePhysics(a, v, g0) {
+  const B = BOUNCE_PHYS;
+  const q = { t: 0, g0, x: B.CX, y: B.CY - 30, vx: Math.cos(a) * v, vy: Math.sin(a) * v,
+    bounces: 0, ph: 0, done: false, bad: false };
+  while (!q.done && q.t < B.MAX_FLIGHT_S + 0.8) bounceStepServer(q);
+  return q;
+}
+function planBouncePhysics(winTarget, mode) {
+  const zoneW = BOUNCE_PHYS.W * mode.chance;
+  for (let i = 0; i < 20000; i++) {
+    const a = secureUnit() * Math.PI * 2;
+    const v = BOUNCE_PHYS.VMIN + secureUnit() * (BOUNCE_PHYS.VMAX - BOUNCE_PHYS.VMIN);
+    const g0 = secureUnit() * Math.PI * 2;
+    const q = makeBouncePhysics(a, v, g0);
+    if (q.bad || q.t < BOUNCE_PHYS.MIN_FLIGHT_S || q.t > BOUNCE_PHYS.MAX_FLIGHT_S) continue;
+    if (q.bounces < BOUNCE_PHYS.MIN_BOUNCES || q.bounces > BOUNCE_PHYS.MAX_BOUNCES) continue;
+    const wanted = winTarget ? q.x < zoneW - 24 : q.x > zoneW + 24;
+    if (!wanted) continue;
+    return { a, v, g0, flightMs: Math.round(q.t * 1000), bounces: q.bounces, endX: q.x };
+  }
+  // Extremely unlikely emergency path: keep searching until the geometry is valid.
+  for (let i = 0; i < 50000; i++) {
+    const a = secureUnit() * Math.PI * 2;
+    const v = 600 + secureUnit() * 420;
+    const g0 = secureUnit() * Math.PI * 2;
+    const q = makeBouncePhysics(a, v, g0);
+    if (!q.bad && q.bounces >= 1 && q.t >= 2 && q.t <= 6.7) {
+      const wanted = winTarget ? q.x < zoneW : q.x >= zoneW;
+      if (wanted) return { a, v, g0, flightMs: Math.round(q.t * 1000), bounces: q.bounces, endX: q.x };
+    }
+  }
+  throw new Error("Не удалось построить траекторию ОТСКОКА.");
+}
+async function playBounce(playerId, bet, modeIndex) {
+  if (!Number.isFinite(bet) || bet < 0.1 || bet > 50000) throw new Error("Ставка должна быть от 0.1 до 50 000 Stars.");
   const normalizedBet = Number(bet.toFixed(2));
   const mode = BOUNCE_MODES[Number(modeIndex)] || BOUNCE_MODES[0];
-
   const dbUser = await getUser(playerId, { fresh: true });
   if (!dbUser) throw new Error("Пользователь не найден в базе данных.");
   if (dbUser.banned) throw new Error("Ваш аккаунт заблокирован в приложении.");
   const activeKey = String(playerId);
   if (activeBounceGames.has(activeKey)) throw new Error("Предыдущий раунд «ОТСКОК» ещё не закончился.");
   activeBounceGames.set(activeKey, { startedAt: Date.now(), bet: normalizedBet });
-
-  let balance;
   try {
-    balance = await debitBalance(playerId, normalizedBet, {
-    type: "bounce_bet",
-    description: `ОТСКОК · ${mode.name} · ставка ${normalizedBet} ⭐`,
-    countsAsWager: true
+    const balance = await debitBalance(playerId, normalizedBet, {
+      type: "bounce_bet",
+      description: `ОТСКОК · ${mode.name} · ставка ${normalizedBet} ⭐`,
+      countsAsWager: true
     });
-  } catch (e) {
-    activeBounceGames.delete(activeKey);
-    throw e;
+    const win = secureUnit() < mode.chance;
+    const trajectory = planBouncePhysics(win, mode);
+    const multiplier = Number((trajectory.bounces * mode.step).toFixed(2));
+    const payout = win ? Number((normalizedBet * multiplier).toFixed(2)) : 0;
+    let balanceAfter = balance;
+    if (payout > 0) {
+      balanceAfter = await creditBalance(playerId, payout, pool, {
+        type: "bounce_win",
+        description: `ОТСКОК · ${multiplier.toFixed(2)}× · ${trajectory.bounces} отскоков · выплата ${payout.toFixed(2)} ⭐`
+      });
+    }
+    try {
+      await pool.query(
+        `UPDATE users SET games_played=games_played+1, games_won=games_won+$2,
+         total_wagered=total_wagered+$3, updated_at=NOW() WHERE telegram_id=$1`,
+        [String(playerId), win ? 1 : 0, normalizedBet]
+      );
+      invalidateUserCache(playerId);
+    } catch (e) { console.error("Bounce stats update error:", e.message); }
+    return {
+      win, mode: mode.key, modeIndex: BOUNCE_MODES.indexOf(mode), chance: Number((mode.chance * 100).toFixed(2)),
+      step: mode.step, bet: normalizedBet, bounces: trajectory.bounces, multiplier, payout,
+      balance: balanceAfter, durationMs: Math.round(1200 + trajectory.flightMs + 250),
+      physics: { a: trajectory.a, v: trajectory.v, g0: trajectory.g0, flightMs: trajectory.flightMs }
+    };
+  } finally {
+    setTimeout(() => activeBounceGames.delete(activeKey), 8000);
   }
-
-  const win = secureUnit() < mode.chance;
-  const bounces = randomBounceCount();
-  const multiplier = Number((bounces * mode.step).toFixed(2));
-  let payout = win ? Number((normalizedBet * multiplier).toFixed(2)) : 0;
-  let balanceAfter = balance;
-
-  if (payout > 0) {
-    balanceAfter = await creditBalance(playerId, payout, pool, {
-      type: "bounce_win",
-      description: `ОТСКОК · ${multiplier.toFixed(2)}× · выплата ${payout.toFixed(2)} ⭐`
-    });
-  }
-
-  try {
-    await pool.query(
-      `UPDATE users
-       SET games_played = games_played + 1,
-           games_won = games_won + $2,
-           total_wagered = total_wagered + $3,
-           updated_at = NOW()
-       WHERE telegram_id=$1`,
-      [String(playerId), win ? 1 : 0, normalizedBet]
-    );
-    invalidateUserCache(playerId);
-  } catch (e) {
-    console.error("Bounce stats update error:", e.message);
-  }
-
-  setTimeout(() => activeBounceGames.delete(activeKey), 6800);
-
-  return {
-    win,
-    mode: mode.key,
-    modeIndex: BOUNCE_MODES.indexOf(mode),
-    chance: Number((mode.chance * 100).toFixed(2)),
-    step: mode.step,
-    bet: normalizedBet,
-    bounces,
-    multiplier,
-    payout,
-    balance: balanceAfter,
-    // Fixed visible duration mirrors the supplied wheel animation.
-    durationMs: 6350
-  };
 }
 
 
