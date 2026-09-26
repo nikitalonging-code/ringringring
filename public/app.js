@@ -1681,18 +1681,33 @@ function bounceStep(q){
       else{
         const nx=dx/d,ny=dy/d,vn=q.vx*nx+q.vy*ny;
         if(vn>0){q.vx-=2*vn*nx;q.vy-=2*vn*ny;q.x=BCX+nx*(BRING-BBR);q.y=BCY+ny*(BRING-BBR);const sp=Math.hypot(q.vx,q.vy),k=Math.min(Math.max(sp,BVMIN),BVMAX)/sp;q.vx*=k;q.vy*=k;q.b++;q.hit=1;if(q.b>=q.target){
-            const gapAng=q.g0+BOM*q.t, gx=BCX+Math.cos(gapAng)*(BRING+BBR+7), gy=BCY+Math.sin(gapAng)*(BRING+BBR+7);
-            const landingX=q.winTarget?(120+Math.random()*120):(BW-240+Math.random()*120);
-            const dy=BFLOOR-gy, disc=Math.max(1,q.vy*q.vy+2*BG*dy), tf=Math.max(.65,(-q.vy+Math.sqrt(disc))/(2*BG));
-            q.x=gx;q.y=gy;q.vx=(landingX-gx)/tf;q.vy=Math.max(250,q.vy*.25);q.ph=2;q.released=true;
+            // Finish the exact target bounce without teleporting the ball.
+            // Keep its real collision position/velocity and smoothly steer it
+            // through the opening toward the selected landing half.
+            const liveZone=Math.max(40,Math.min(BW-40,bounceZoneW||BOUNCE_MODES_CLIENT[bounceMode].p*BW));
+            const sideW=q.winTarget?liveZone:(BW-liveZone);
+            const sideStart=q.winTarget?0:liveZone;
+            q.landX=sideStart+Math.max(20,sideW*.18)+Math.random()*Math.max(1,sideW*.64);
+            q.ph=2;q.released=true;
           }}
       }
     }
   }else if(q.ph===2){
-    // Final release: no additional ring collisions are allowed after the
-    // server-selected bounce count. The ball exits and falls toward the
-    // winning/losing half, so the physical count, displayed multiplier and
-    // server payout use one exact number.
+    // Final release: preserve the current position and velocity. We only
+    // steer the horizontal component smoothly toward the selected landing
+    // half, so there is no coordinate jump/teleport after the last bounce.
+    const landingX=Number.isFinite(q.landX)?q.landX:(q.winTarget?BW*.5:BW*.75);
+    const remainY=Math.max(1,BFLOOR-q.y);
+    const disc=Math.max(1,q.vy*q.vy+2*BG*remainY);
+    const tf=Math.max(.16,(-q.vy+Math.sqrt(disc))/BG);
+    const desiredVx=Math.max(-1100,Math.min(1100,(landingX-q.x)/tf));
+    const steer=Math.min(1,12*BDT);
+    q.vx+= (desiredVx-q.vx)*steer;
+    q.vy+=BG*BDT;
+    q.x+=q.vx*BDT;
+    q.y+=q.vy*BDT;
+    if(q.x<BBR){q.x=BBR;q.vx=Math.abs(q.vx)*.35}
+    if(q.x>BW-BBR){q.x=BW-BBR;q.vx=-Math.abs(q.vx)*.35}
     if(q.y>=BFLOOR)q.done=1;
   }else{
     if(d>BRING+BBR)q.out=1;
