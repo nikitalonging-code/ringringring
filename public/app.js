@@ -1581,6 +1581,7 @@ const bounceDpr=Math.min(window.devicePixelRatio||1,2);
 if (bounceCv) { bounceCv.width=BW*bounceDpr; bounceCv.height=BH*bounceDpr; }
 const bounceStars=Array.from({length:70},()=>[Math.random()*BW,Math.random()*(BH-BBAR),.2+Math.random()*.6]);
 let bounceMode=0,bounceBetValue=1,bouncePhase="idle",bounceSpinResult=null,bounceS=null,bounceWin=false,bounceMult=0,bounceClk=0,bounceZoneW=BW*BOUNCE_MODES_CLIENT[0].p,bounceGlow=0,bounceFlash=0,bounceMsg=null,bounceTrail=[],bounceAcc=0,bounceLast=0,bounceSp=0,bouncePop=0,bounceT=4,bounceSpawn=0,bounceRenderStarted=false;
+let bounceServerSkew=0,bouncePhysicsStartPerf=0,bounceFinalAngle=null;
 const bounceUi = id => $("#"+id);
 
 const BounceAudioContext = window.AudioContext || window.webkitAudioContext;
@@ -1670,33 +1671,31 @@ function bounceSetBet(v){
   [...document.querySelectorAll("#bounceQuick button[data-v]")].forEach(b=>b.classList.toggle("on",Number(b.dataset.v)===v));
   return v;
 }
-function bounceMk(a,v,g0){return{t:0,g0,x:BCX,y:BCY-30,px:BCX,py:BCY-30,vx:Math.cos(a)*v,vy:Math.sin(a)*v,b:0,ph:0,done:0,bad:0,hit:0,out:0}}
-function bounceStep(q){
-  q.t+=BDT; q.vy+=BG*BDT; q.x+=q.vx*BDT; q.y+=q.vy*BDT;
-  const dx=q.x-BCX,dy=q.y-BCY,d=Math.hypot(dx,dy)||1;
-  if(q.ph===0){
-    if(d>BRING-BBR){
-      let f=Math.atan2(dy,dx)-(q.g0+BOM*q.t); f=Math.atan2(Math.sin(f),Math.cos(f));
-      if(Math.abs(f)<BGEFF){ q.ph=1; }
-      else{
-        const nx=dx/d,ny=dy/d,vn=q.vx*nx+q.vy*ny;
-        if(vn>0){
-          q.vx-=2*vn*nx; q.vy-=2*vn*ny; q.x=BCX+nx*(BRING-BBR); q.y=BCY+ny*(BRING-BBR);
-          const sp=Math.hypot(q.vx,q.vy)||1, k=Math.min(Math.max(sp,BVMIN),BVMAX)/sp;
-          q.vx*=k; q.vy*=k; q.b++; q.hit=1;
-        }
-      }
-    }
-  }else{
-    q.vy=Math.min(q.vy,900); q.vx*=.9995;
-    if(q.x<BBR){q.x=BBR;q.vx=Math.abs(q.vx)*.35}
-    if(q.x>BW-BBR){q.x=BW-BBR;q.vx=-Math.abs(q.vx)*.35}
-    if(q.y>=BFLOOR)q.done=1;
-  }
-  if(q.t>bounceT+.8){q.bad=1;q.done=1}
+function bounceMk(result){
+  const phys=result?.physics||{};
+  const pts=Array.isArray(phys.points)?phys.points.map(p=>({t:Number(p?.[0]||0),x:Number(p?.[1]||0),y:Number(p?.[2]||0)})).filter(p=>Number.isFinite(p.t)&&Number.isFinite(p.x)&&Number.isFinite(p.y)):[];
+  return {
+    g0:Number(phys.g0||0), flightMs:Number(phys.flightMs||0), points:pts,
+    ringStartAt:Number(result?.ringStartAt||Date.now()+BSPAWN*1000),
+    startAngle:null, targetAngle:Number(phys.g0||0),
+    physicsStarted:false, done:false
+  };
 }
-function bouncePlan(g0,winTarget,targetBounces){ return {a:0,v:BVMIN,g0}; }
-
+function bounceLerpAngle(a,b,t){
+  const tau=Math.PI*2; let d=((b-a+Math.PI)%tau+tau)%tau-Math.PI; return a+d*t;
+}
+function bounceGlobalRingAt(ms){
+  const tau=Math.PI*2, a=BRING0+BOM*(Number(ms)/1000); return ((a%tau)+tau)%tau;
+}
+function bouncePointAt(s,seconds){
+  const pts=s?.points||[]; if(!pts.length)return {x:BCX,y:BCY-30};
+  if(seconds<=pts[0].t)return {x:pts[0].x,y:pts[0].y};
+  const last=pts[pts.length-1]; if(seconds>=last.t)return {x:last.x,y:last.y};
+  let lo=0,hi=pts.length-1;
+  while(lo+1<hi){const mid=(lo+hi)>>1;if(pts[mid].t<=seconds)lo=mid;else hi=mid;}
+  const a=pts[lo],b=pts[hi],f=(seconds-a.t)/Math.max(1e-6,b.t-a.t);
+  return {x:a.x+(b.x-a.x)*f,y:a.y+(b.y-a.y)*f};
+}
 function bounceSetControls(disabled){
   const ids=["bouncePlay","bounceBet","bounceDec","bounceInc"];
   ids.forEach(id=>{const el=bounceUi(id);if(el)el.disabled=disabled});
@@ -1716,61 +1715,62 @@ function bounceRenderStage(now){
   if(!bounceC)return;
   const rd=Math.min((now-bounceLast)/1000||0,.05);bounceLast=now;
   bounceClk+=rd;
-  const dt=rd;
-  const ga=(bounceS&&bouncePhase==='play')?(bounceS.g0+BOM*((bounceSp-BSPAWN)+bounceAcc)):bounceRingAt(bounceClk-BDT);
-  if(bouncePhase==='play'){
-    let go=bounceSp>=BSPAWN;
-    if(!go){const n=bounceSp+dt;if(n>=BSPAWN){bounceAcc=n-BSPAWN;bounceSp=BSPAWN;go=true}else bounceSp=n}
-    else bounceAcc+=dt;
-    if(go&&bounceS){
-      while(bounceAcc>=BDT&&!bounceS.done){bounceS.px=bounceS.x;bounceS.py=bounceS.y;bounceStep(bounceS);bounceAcc-=BDT;if(bounceS.hit){bounceS.hit=0;bounceGlow=1;bouncePop=1;bounceMult=Number((bounceS.b*BOUNCE_MODES_CLIENT[bounceMode].s).toFixed(2));bouncePlayBounceSound(bounceS.b);}}
-      if(bounceS.done){
+  const nowServer=Date.now()+bounceServerSkew;
+  let ga=bouncePhase==='result'&&bounceFinalAngle!=null ? bounceFinalAngle : bounceGlobalRingAt(nowServer);
+  if(bouncePhase==='play'&&bounceS){
+    const sinceStart=performance.now()-(bouncePhysicsStartPerf-BSPAWN*1000);
+    if(sinceStart<BSPAWN*1000){
+      const u=Math.max(0,Math.min(1,sinceStart/(BSPAWN*1000))),e=u*u*(3-2*u);
+      ga=bounceLerpAngle(bounceS.startAngle,bounceS.g0,e);
+    } else {
+      const ft=Math.max(0,Math.min(bounceS.flightMs,performance.now()-bouncePhysicsStartPerf))/1000;
+      ga=bounceS.g0+BOM*ft;
+      if(ft>=bounceS.flightMs&&!bounceS.done){
+        bounceS.done=true;
+        bounceFinalAngle=bounceS.g0+BOM*(bounceS.flightMs/1000);
         bouncePhase='result';
-        bounceMult=Number((bounceS.b*BOUNCE_MODES_CLIENT[bounceMode].s).toFixed(2));
+        bounceMult=Number((bounceS?.points?.length&&bounceSpinResult?.multiplier||bounceSpinResult?.multiplier||0).toFixed(2));
         bounceMsg={win:bounceWin,t:bounceWin?'+'+Number(bounceSpinResult?.payout||0).toFixed(2)+' ⭐':'Проигрыш'};
         bounceFlash=1;
         const history=bounceUi("bounceHistory");
         if(history){
-          const chip=document.createElement("span");
-          chip.className=`chip ${bounceWin ? "w" : "l"}`;
-          chip.textContent=`${Number(bounceSpinResult?.multiplier||0).toFixed(2)}×`;
-          history.prepend(chip);
-          while(history.children.length>30)history.lastElementChild.remove();
+          const chip=document.createElement("span");chip.className=`chip ${bounceWin ? "w" : "l"}`;chip.textContent=`${Number(bounceSpinResult?.multiplier||0).toFixed(2)}×`;history.prepend(chip);while(history.children.length>30)history.lastElementChild.remove();
         }
-        bounceSetControls(false);
-        bounceUi("bounceGame")?.classList.remove("is-playing");
-        window.scrollTo(0,0);
-        bounceUi("bouncePlay").textContent="Играть";
-        setBalance(bounceSpinResult?.balance);
+        bounceSetControls(false);bounceUi("bounceGame")?.classList.remove("is-playing");bounceUi("bouncePlay").textContent="Играть";setBalance(bounceSpinResult?.balance);
         if(bounceWin){bouncePlayWinSound(bounceMult);toast(`ОТСКОК: +${Number(bounceSpinResult?.payout||0).toFixed(2)} ⭐`);}else{bouncePlayLoseSound();toast("ОТСКОК: проигрыш");}
       }
     }
   }
-  if(bouncePhase==='result'&&bounceS){/* keep the final ball frozen */}
-  bounceGlow=Math.max(0,bounceGlow-dt*3);bouncePop=Math.max(0,bouncePop-dt*5);bounceFlash=Math.max(0,bounceFlash-dt*.8);
-  bounceZoneW+=(BOUNCE_MODES_CLIENT[bounceMode].p*BW-bounceZoneW)*Math.min(1,dt*8);
+  bounceGlow=Math.max(0,bounceGlow-rd*3);bouncePop=Math.max(0,bouncePop-rd*5);bounceFlash=Math.max(0,bounceFlash-rd*.8);
+  bounceZoneW+=(BOUNCE_MODES_CLIENT[bounceMode].p*BW-bounceZoneW)*Math.min(1,rd*8);
   bounceC.setTransform(bounceDpr,0,0,bounceDpr,0,0);
   const bg=bounceC.createRadialGradient(BCX,BCY,20,BCX,BCY,420);bg.addColorStop(0,'#2a1809');bg.addColorStop(1,'#080604');bounceC.fillStyle=bg;bounceC.fillRect(0,0,BW,BH);
   bounceC.strokeStyle='rgba(255,138,31,.05)';bounceC.lineWidth=1;bounceC.beginPath();for(let i=40;i<BW;i+=40){bounceC.moveTo(i,0);bounceC.lineTo(i,BH)}for(let j=40;j<BH;j+=40){bounceC.moveTo(0,j);bounceC.lineTo(BW,j)}bounceC.stroke();
   bounceC.fillStyle='#ffc98a';bounceStars.forEach(q=>{bounceC.globalAlpha=q[2];bounceC.fillRect(q[0],q[1],1.6,1.6)});bounceC.globalAlpha=1;
   bounceC.textAlign='center';bounceC.textBaseline='middle';bounceC.font='800 '+(64+bouncePop*12)+'px "Segoe UI",system-ui,sans-serif';bounceC.fillStyle='rgba(255,138,31,'+(.18+bouncePop*.22)+')';bounceC.fillText(bounceMult.toFixed(2)+'×',BCX,BCY);
-  const a0=ga+BGAP/2,a1=ga+6.2832-BGAP/2;bounceC.lineCap='round';bounceC.strokeStyle='rgba(255,138,31,.14)';bounceC.lineWidth=18;bounceC.beginPath();bounceC.arc(BCX,BCY,BRING,a0,a1);bounceC.stroke();bounceC.shadowColor='#ff8a1f';bounceC.shadowBlur=14+bounceGlow*24;bounceC.strokeStyle='#ff9a2e';bounceC.lineWidth=6;bounceC.beginPath();bounceC.arc(BCX,BCY,BRING,a0,a1);bounceC.stroke();bounceC.shadowBlur=0;bounceC.fillStyle='#fff3e2';[a0,a1].forEach(a=>{bounceC.beginPath();bounceC.arc(BCX+BRING*Math.cos(a),BCY+BRING*Math.sin(a),5,0,6.2832);bounceC.fill()});
+  const a0=ga+BGAP/2,a1=ga+6.2832-BGAP/2;
+  bounceC.lineCap='round';bounceC.strokeStyle='rgba(255,138,31,.14)';bounceC.lineWidth=18;bounceC.beginPath();bounceC.arc(BCX,BCY,BRING,a0,a1);bounceC.stroke();
+  bounceC.shadowColor='#ff8a1f';bounceC.shadowBlur=14+bounceGlow*24;bounceC.strokeStyle='#ff9a2e';bounceC.lineWidth=6;bounceC.beginPath();bounceC.arc(BCX,BCY,BRING,a0,a1);bounceC.stroke();bounceC.shadowBlur=0;
+  bounceC.fillStyle='#fff3e2';[a0,a1].forEach(a=>{bounceC.beginPath();bounceC.arc(BCX+BRING*Math.cos(a),BCY+BRING*Math.sin(a),5,0,6.2832);bounceC.fill()});
   let ballX=null,ballY=null,alpha=1,scale=1;
   if(bounceS){
-    if(bouncePhase==='idle'){alpha=0}
-    const k=(bouncePhase==='play'&&bounceSp>=BSPAWN&&!bounceS.done)?bounceAcc/BDT:1;ballX=bounceS.px+(bounceS.x-bounceS.px)*k;ballY=bounceS.py+(bounceS.y-bounceS.py)*k;
-    if(bouncePhase==='play'&&bounceSp<BSPAWN){const u=bounceSp/BSPAWN,e=Math.min(1,Math.max(0,(u-.2)/.7)),v=e-1;scale=.55+.45*(1+2.7*v*v*v+1.7*v*v);alpha=Math.min(1,Math.max(0,(u-.2)/.45));alpha=alpha*alpha*(3-2*alpha)}
+    const sinceStart=performance.now()-(bouncePhysicsStartPerf-BSPAWN*1000);
+    if(bouncePhase==='play'&&sinceStart<BSPAWN*1000){
+      const u=Math.max(0,Math.min(1,sinceStart/(BSPAWN*1000))),e=Math.min(1,Math.max(0,(u-.2)/.7)),v=e-1;scale=.55+.45*(1+2.7*v*v*v+1.7*v*v);alpha=Math.min(1,Math.max(0,(u-.2)/.45));alpha=alpha*alpha*(3-2*alpha);ballX=BCX;ballY=BCY-30;
+    } else {
+      const ft=Math.max(0,Math.min(bounceS.flightMs,(performance.now()-bouncePhysicsStartPerf)))/1000;const p=bouncePointAt(bounceS,ft);ballX=p.x;ballY=p.y;
+    }
   }
   if(ballX!=null){
-    if(bouncePhase==='play'&&bounceSp>=BSPAWN){bounceTrail.push([ballX,ballY]);if(bounceTrail.length>24)bounceTrail.shift()}
-    for(let i=0;i<bounceTrail.length;i++){const u=(i+1)/bounceTrail.length,p=bounceTrail[i],tr=BBR*(.12+.8*u),gr=bounceC.createRadialGradient(p[0],p[1],0,p[0],p[1],tr);gr.addColorStop(0,'rgba(255,170,60,'+(u*u*.5)+')');gr.addColorStop(1,'rgba(255,120,20,0)');bounceC.fillStyle=gr;bounceC.beginPath();bounceC.arc(p[0],p[1],tr,0,6.2832);bounceC.fill()}
+    if(bouncePhase==='play'&&bounceS&&!bounceS.done){bounceTrail.push([ballX,ballY]);if(bounceTrail.length>24)bounceTrail.shift();}
+    for(let i=0;i<bounceTrail.length;i++){const u=(i+1)/bounceTrail.length,p=bounceTrail[i],tr=BBR*(.12+.8*u),gr=bounceC.createRadialGradient(p[0],p[1],0,p[0],p[1],tr);gr.addColorStop(0,'rgba(255,170,60,'+(u*u*.5)+')');gr.addColorStop(1,'rgba(255,120,20,0)');bounceC.fillStyle=gr;bounceC.beginPath();bounceC.arc(p[0],p[1],tr,0,6.2832);bounceC.fill();}
     const r=BBR*scale;bounceC.globalAlpha=alpha;const hg=bounceC.createRadialGradient(ballX,ballY,r*.6,ballX,ballY,r*2.1);hg.addColorStop(0,'rgba(255,150,40,.45)');hg.addColorStop(1,'rgba(255,150,40,0)');bounceC.fillStyle=hg;bounceC.beginPath();bounceC.arc(ballX,ballY,r*2.1,0,6.2832);bounceC.fill();const sg=bounceC.createRadialGradient(ballX-r*.35,ballY-r*.4,r*.1,ballX,ballY,r);sg.addColorStop(0,'#ffe2b0');sg.addColorStop(.35,'#ffab45');sg.addColorStop(.75,'#f07a14');sg.addColorStop(1,'#b8500a');bounceC.fillStyle=sg;bounceC.beginPath();bounceC.arc(ballX,ballY,r,0,6.2832);bounceC.fill();bounceC.strokeStyle='rgba(255,200,130,.35)';bounceC.lineWidth=1.2;bounceC.stroke();bounceC.fillStyle='rgba(255,255,255,.5)';bounceC.beginPath();bounceC.ellipse(ballX-r*.3,ballY-r*.38,r*.28,r*.18,-.6,0,6.2832);bounceC.fill();bounceC.globalAlpha=1;
-    if(bouncePhase==='play'){const tx=bounceMult.toFixed(2)+'×';bounceC.font='700 '+(14+bouncePop*4)+'px "Segoe UI",system-ui,sans-serif';const tw=bounceC.measureText(tx).width+16;bounceC.fillStyle='rgba(18,13,9,.8)';bounceC.beginPath();bounceC.roundRect(ballX-tw/2,ballY-BBR-28,tw,22,7);bounceC.fill();bounceC.fillStyle='#ffb347';bounceC.fillText(tx,ballX,ballY-BBR-16)}
+    if(bouncePhase==='play'){const tx=bounceMult.toFixed(2)+'×';bounceC.font='700 '+(14+bouncePop*4)+'px "Segoe UI",system-ui,sans-serif';const tw=bounceC.measureText(tx).width+16;bounceC.fillStyle='rgba(18,13,9,.8)';bounceC.beginPath();bounceC.roundRect(ballX-tw/2,ballY-BBR-28,tw,22,7);bounceC.fill();bounceC.fillStyle='#ffb347';bounceC.fillText(tx,ballX,ballY-BBR-16);}
   }
   const y=BH-BBAR;bounceC.fillStyle='rgba(59,212,124,.2)';bounceC.fillRect(0,y,bounceZoneW,BBAR);bounceC.fillStyle='#3bd47c';bounceC.fillRect(0,y,bounceZoneW,2);bounceC.fillStyle='rgba(239,75,75,.18)';bounceC.fillRect(bounceZoneW,y,BW-bounceZoneW,BBAR);bounceC.fillStyle='#ef4b4b';bounceC.fillRect(bounceZoneW,y,BW-bounceZoneW,2);bounceC.save();bounceC.beginPath();bounceC.rect(bounceZoneW,y,BW-bounceZoneW,BBAR);bounceC.clip();bounceC.strokeStyle='rgba(239,75,75,.22)';bounceC.lineWidth=2;bounceC.beginPath();for(let x=bounceZoneW-BBAR;x<BW;x+=9){bounceC.moveTo(x,y+BBAR);bounceC.lineTo(x+BBAR,y)}bounceC.stroke();bounceC.restore();
   if(bounceFlash>0&&bounceMsg){bounceC.fillStyle='rgba(255,255,255,'+bounceFlash*.28+')';bounceMsg.win?bounceC.fillRect(0,y,bounceZoneW,BBAR):bounceC.fillRect(bounceZoneW,y,BW-bounceZoneW,BBAR)}
   bounceC.font='800 15px "Segoe UI",system-ui,sans-serif';bounceC.fillStyle='#3bd47c';bounceC.fillText('★ WIN',bounceZoneW/2,y+BBAR/2+2);bounceC.fillStyle='#ef4b4b';bounceC.fillText('0×',bounceZoneW+(BW-bounceZoneW)/2,y+BBAR/2+2);
-  if(bounceMsg){bounceC.font='800 34px "Segoe UI",system-ui,sans-serif';bounceC.shadowColor='#000';bounceC.shadowBlur=12;bounceC.fillStyle=bounceMsg.win?'#3bd47c':'#ef4b4b';bounceC.fillText(bounceMsg.t,BCX,BCY+70);bounceC.shadowBlur=0}
+  if(bounceMsg){bounceC.font='800 34px "Segoe UI",system-ui,sans-serif';bounceC.shadowColor='#000';bounceC.shadowBlur=12;bounceC.fillStyle=bounceMsg.win?'#3bd47c':'#ef4b4b';bounceC.fillText(bounceMsg.t,BCX,BCY+70);bounceC.shadowBlur=0;}
   requestAnimationFrame(bounceRenderStage);
 }
 function openBounce(){
@@ -1782,7 +1782,7 @@ function openBounce(){
   const bounceRoot=bounceUi("bounceGame");
   if(bounceRoot){bounceRoot.style.zoom="1";bounceRoot.style.transform="none";}
   if(bounceRenderStarted===false){bounceRenderStarted=true;bounceLast=performance.now();requestAnimationFrame(bounceRenderStage)}
-  bouncePhase='idle';bounceMsg=null;bounceS=null;bounceSpinResult=null;bounceTrail=[];bounceMult=0;
+  bouncePhase='idle';bounceMsg=null;bounceS=null;bounceSpinResult=null;bounceTrail=[];bounceMult=0;bounceServerSkew=0;bounceFinalAngle=null;
   renderBounceTabs();
   bounceRenderTag();
   bounceUi("gamesList").classList.add("hidden");bounceUi("upgradeGame").classList.add("hidden");bounceUi("bounceGame").classList.remove("hidden");
@@ -1853,11 +1853,14 @@ function bounceStart(){
 }
 function bouncePrepare(result){
   bounceSpinResult=result||{};bounceWin=!!result?.win;
-  bounceT=Math.max(2.2,Number(result?.durationMs||6350)/1000-BSPAWN);
-  const phys=result?.physics||{};
-  const a=Number(phys.a||0),v=Number(phys.v||BVMIN),g0=Number(phys.g0||bounceRingAt(bounceClk+BSPAWN));
-  bounceS=bounceMk(a,v,g0); bounceAcc=0;bounceSp=0;bouncePhase='play';bounceMult=0;
-  bouncePlaySpawnSound();bounceMsg=null;bounceTrail=[];bounceFlash=0;bounceSetControls(true);bounceUi("bouncePlay").textContent="Идёт раунд…";
+  bounceT=Number(result?.physics?.flightMs||0)/1000;
+  bounceS=bounceMk(result); bounceAcc=0;bounceSp=0;bouncePhase='play';bounceMult=0;
+  bounceServerSkew=Number(result?.serverNow||Date.now())-Date.now();
+  bounceFinalAngle=null;
+  bouncePlaySpawn();bounceMsg=null;bounceTrail=[];bounceFlash=0;bounceSetControls(true);bounceUi("bouncePlay").textContent="Идёт раунд…";
+  bouncePhysicsStartPerf=performance.now()+BSPAWN*1000;
+  const currentAngle=bounceGlobalRingAt(Date.now()+bounceServerSkew);
+  bounceS.startAngle=currentAngle;
 }
 ["openBounce"].forEach(id=>{const b=bounceUi(id);if(b)b.onclick=openBounce});
 if(bounceUi("bounceBack"))bounceUi("bounceBack").onclick=closeBounce;

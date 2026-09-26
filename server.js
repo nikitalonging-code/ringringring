@@ -1154,31 +1154,49 @@ function makeBouncePhysics(a, v, g0) {
   const B = BOUNCE_PHYS;
   const q = { t: 0, g0, x: B.CX, y: B.CY - 30, vx: Math.cos(a) * v, vy: Math.sin(a) * v,
     bounces: 0, ph: 0, done: false, bad: false };
-  while (!q.done && q.t < B.MAX_FLIGHT_S + 0.8) bounceStepServer(q);
+  const points = [{ t: 0, x: q.x, y: q.y }];
+  let nextSample = 1;
+  while (!q.done && q.t < B.MAX_FLIGHT_S + 0.8) {
+    bounceStepServer(q);
+    // Sample the authoritative trajectory at ~120 FPS. The browser only interpolates
+    // these points; it no longer runs a second, slightly different physics engine.
+    while (q.t + 1e-9 >= nextSample / 120) {
+      points.push({ t: q.t, x: q.x, y: q.y });
+      nextSample++;
+    }
+  }
+  const last = points[points.length - 1];
+  if (!last || Math.abs(last.t - q.t) > 1e-6) points.push({ t: q.t, x: q.x, y: q.y });
+  q.points = points;
   return q;
 }
-function planBouncePhysics(winTarget, mode) {
+function bounceRingAngleAtMs(ms) {
+  const tau = Math.PI * 2;
+  const a = BOUNCE_PHYS.OM * (Number(ms) / 1000) + 2.2;
+  return ((a % tau) + tau) % tau;
+}
+function planBouncePhysics(winTarget, mode, fixedG0) {
   const zoneW = BOUNCE_PHYS.W * mode.chance;
+  const g0 = Number.isFinite(fixedG0) ? fixedG0 : bounceRingAngleAtMs(Date.now() + BOUNCE_PHYS.SPAWN_S * 1000);
   for (let i = 0; i < 20000; i++) {
     const a = secureUnit() * Math.PI * 2;
     const v = BOUNCE_PHYS.VMIN + secureUnit() * (BOUNCE_PHYS.VMAX - BOUNCE_PHYS.VMIN);
-    const g0 = secureUnit() * Math.PI * 2;
     const q = makeBouncePhysics(a, v, g0);
     if (q.bad || q.t < BOUNCE_PHYS.MIN_FLIGHT_S || q.t > BOUNCE_PHYS.MAX_FLIGHT_S) continue;
     if (q.bounces < BOUNCE_PHYS.MIN_BOUNCES || q.bounces > BOUNCE_PHYS.MAX_BOUNCES) continue;
     const wanted = winTarget ? q.x < zoneW - 24 : q.x > zoneW + 24;
     if (!wanted) continue;
-    return { a, v, g0, flightMs: Math.round(q.t * 1000), bounces: q.bounces, endX: q.x };
+    return { a, v, g0, flightMs: Math.round(q.t * 1000), bounces: q.bounces, endX: q.x,
+      points: q.points.map(pt => [Number(pt.t.toFixed(4)), Number(pt.x.toFixed(3)), Number(pt.y.toFixed(3))]) };
   }
-  // Extremely unlikely emergency path: keep searching until the geometry is valid.
   for (let i = 0; i < 50000; i++) {
     const a = secureUnit() * Math.PI * 2;
     const v = 600 + secureUnit() * 420;
-    const g0 = secureUnit() * Math.PI * 2;
     const q = makeBouncePhysics(a, v, g0);
     if (!q.bad && q.bounces >= 1 && q.t >= 2 && q.t <= 6.7) {
       const wanted = winTarget ? q.x < zoneW : q.x >= zoneW;
-      if (wanted) return { a, v, g0, flightMs: Math.round(q.t * 1000), bounces: q.bounces, endX: q.x };
+      if (wanted) return { a, v, g0, flightMs: Math.round(q.t * 1000), bounces: q.bounces, endX: q.x,
+        points: q.points.map(pt => [Number(pt.t.toFixed(4)), Number(pt.x.toFixed(3)), Number(pt.y.toFixed(3))]) };
     }
   }
   throw new Error("Не удалось построить траекторию ОТСКОКА.");
@@ -1200,7 +1218,12 @@ async function playBounce(playerId, bet, modeIndex) {
       countsAsWager: true
     });
     const win = secureUnit() < mode.chance;
-    const trajectory = planBouncePhysics(win, mode);
+    // The ring keeps a continuous visual rotation. The trajectory is planned against
+    // the exact ring angle that will be shown when the ball finishes its 1.2s spawn.
+    const serverNow = Date.now();
+    const ringStartAt = serverNow + Math.round(BOUNCE_PHYS.SPAWN_S * 1000);
+    const fixedG0 = bounceRingAngleAtMs(ringStartAt);
+    const trajectory = planBouncePhysics(win, mode, fixedG0);
     const multiplier = Number((trajectory.bounces * mode.step).toFixed(2));
     const payout = win ? Number((normalizedBet * multiplier).toFixed(2)) : 0;
     let balanceAfter = balance;
@@ -1222,7 +1245,9 @@ async function playBounce(playerId, bet, modeIndex) {
       win, mode: mode.key, modeIndex: BOUNCE_MODES.indexOf(mode), chance: Number((mode.chance * 100).toFixed(2)),
       step: mode.step, bet: normalizedBet, bounces: trajectory.bounces, multiplier, payout,
       balance: balanceAfter, durationMs: Math.round(1200 + trajectory.flightMs + 250),
-      physics: { a: trajectory.a, v: trajectory.v, g0: trajectory.g0, flightMs: trajectory.flightMs }
+      physics: { a: trajectory.a, v: trajectory.v, g0: trajectory.g0, flightMs: trajectory.flightMs,
+        points: trajectory.points, ringStartAt },
+      serverNow, ringStartAt
     };
   } finally {
     setTimeout(() => activeBounceGames.delete(activeKey), 8000);
@@ -1236,8 +1261,8 @@ async function playBounce(playerId, bet, modeIndex) {
 // PostgreSQL balance / transactions as the rest of RING.
 const ICE_COUNTDOWN = 10000;
 const ICE_CLOSE = 1000;
-const ICE_RUN_MS = 13600;
-const ICE_RUN_MS_REDO = 26000;
+const ICE_RUN_MS = 11600;
+const ICE_RUN_MS_REDO = 23100;
 const ICE_RESULT_MS = 4500;
 const ICE_COLORS = [
   "#19e58f", "#ff19b9", "#ffd11a", "#32a8ff", "#a95cff",

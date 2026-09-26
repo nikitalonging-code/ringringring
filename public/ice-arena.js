@@ -25,6 +25,8 @@
   }
   function place(x,y){ puck.style.transform = `translate3d(${(x*W/100-PUCK/2).toFixed(2)}px,${(y*W/100-PUCK/2).toFixed(2)}px,0)`; }
   window.addEventListener("resize", () => { W = arena.clientWidth || W; });
+  puckImg.addEventListener("error",()=>puck.classList.add("fallback"),{once:true});
+  puckImg.addEventListener("load",()=>puck.classList.remove("fallback"));
   place(50,50); puck.style.visibility = "hidden";
 
   function iceAvatar(p, cls="ice-zone-av", size=30){
@@ -122,11 +124,42 @@
   function applyCamZoom(ft,flightMs,x,y){const zt=Math.max(0,Math.min(1,(ft-(flightMs-3000))/3000));if(zt>0){if(!cam){cam={x,y};arena.style.transition="none";}cam.x+=(x-cam.x)*.12;cam.y+=(y-cam.y)*.12;const e=zt*zt*(3-2*zt),sc=1+.32*e,lim=(sc-1)*50;const tx=Math.max(-lim,Math.min(lim,(50-cam.x)*sc)),ty=Math.max(-lim,Math.min(lim,(50-cam.y)*sc));arena.style.transform=`translate(${tx}%,${ty}%) scale(${sc})`;}}
   function updateRaceScroll(t){if(!raceTrackEl||finished)return;raceOffset=(Math.max(0,t)%RACE_MS)/RACE_MS*100;raceTrackEl.style.transform=`translateY(${(-raceOffset/100*W).toFixed(2)}px)`;}
   function frame(t){
-    if(plan.mode==="redo"){frameRedo(t);return;}updateRaceScroll(t);if(finished)return;if(t<0){puck.style.visibility="hidden";place(plan.sp[0],plan.sp[1]);fx(0,plan.sa,plan.ea);return;}puck.style.visibility="visible";fx(t,plan.sa,plan.ea);if(t<INTRO){setPhase(t<SPIN?"choosing":"aiming");place(plan.sp[0],plan.sp[1]);return;}setPhase("rushing");const ft=Math.min(t-INTRO,plan.flightMs),idx=ft/1000*60,i=Math.min(plan.n-1,Math.floor(idx)),f=idx-i,a=plan.pts[i],b=plan.pts[i+1],x=a[0]+(b[0]-a[0])*f,y=a[1]+(b[1]-a[1])*f;place(x,y);applyCamZoom(ft,plan.flightMs,x,y);if(ft>=plan.flightMs&&!finished){finished=true;applyResult();}}
-  function frameRedo(t){const p1=plan.phase1,p2=plan.phase2,T1=INTRO,T2=T1+p1.flightMs,T3=T2+STILL_HOLD,T4=T3+INTRO;if(finished)return;if(t<0){puck.style.visibility="hidden";place(p1.sp[0],p1.sp[1]);fx(0,p1.sa,p1.ea);return;}puck.style.visibility="visible";if(t<T1){fx(t,p1.sa,p1.ea);setPhase(t<SPIN?"choosing":"aiming");place(p1.sp[0],p1.sp[1]);return;}if(t<T2){setPhase("rushing");const ft=t-T1,idx=ft/1000*60,i=Math.min(p1.n-1,Math.floor(idx)),f=idx-i,a=p1.pts[i],b=p1.pts[i+1],x=a[0]+(b[0]-a[0])*f,y=a[1]+(b[1]-a[1])*f;place(x,y);arrow.style.opacity=0;ripple.style.opacity=0;applyCamZoom(ft,p1.flightMs,x,y);return;}if(t<T3){if(cam){cam=null;arena.style.transition="";arena.style.transform="scale(1)";}setPhase("");place(plan.stop[0],plan.stop[1]);arrow.style.opacity=0;ripple.style.opacity=0;return;}if(t<T4){const lt=t-T3;setPhase(lt<SPIN?"choosing":"aiming");puckImg.style.opacity="1";puckImg.style.transform="scale(1)";const ang2=p2.sa+(p2.ea-p2.sa)*easeOut(clamp01(lt/SPIN)),pop2=1+.25*Math.sin(Math.PI*clamp01((lt-SPIN)/350));arrow.style.opacity=(clamp01(lt/150)*(1-clamp01((lt-INTRO)/250))).toFixed(3);arrow.style.transform=`rotate(${ang2.toFixed(2)}deg) scale(${pop2.toFixed(3)})`;ripple.style.opacity="0";place(p2.sp[0],p2.sp[1]);return;}setPhase("rushing");const ft=Math.min(t-T4,p2.flightMs),idx=ft/1000*60,i=Math.min(p2.n-1,Math.floor(idx)),f=idx-i,a=p2.pts[i],b=p2.pts[i+1],x=a[0]+(b[0]-a[0])*f,y=a[1]+(b[1]-a[1])*f;place(x,y);arrow.style.opacity=0;ripple.style.opacity=0;applyCamZoom(ft,p2.flightMs,x,y);if(ft>=p2.flightMs&&!finished){finished=true;applyResult();}}
-  function loop(){requestAnimationFrame(loop);if((st.status!=="running"&&st.status!=="result")||!st.startAt||!L.length)return;if(planFor!==st.id||!plan){plan=buildPlan();planFor=st.id;finished=false;cam=null;}frame(Date.now()+skew-st.startAt);}
+    if(plan.mode==="redo"){frameRedo(t);return;}
+    updateRaceScroll(t); if(finished)return;
+    if(t<0){puck.style.visibility="hidden";place(plan.sp[0],plan.sp[1]);fx(0,plan.sa,plan.ea);return;}
+    puck.style.visibility="visible";fx(t,plan.sa,plan.ea);
+    if(t<INTRO){setPhase(t<SPIN?"choosing":"aiming");place(plan.sp[0],plan.sp[1]);return;}
+    setPhase("rushing");
+    const ft=Math.min(Math.max(0,t-INTRO),plan.flightMs);
+    const idx=ft/1000*60, i=Math.min(plan.n-1,Math.max(0,Math.floor(idx))), f=Math.max(0,Math.min(1,idx-i));
+    const a=plan.pts[i]||plan.pts[plan.pts.length-1], b=plan.pts[i+1]||a;
+    const x=a[0]+(b[0]-a[0])*f,y=a[1]+(b[1]-a[1])*f;place(x,y);applyCamZoom(ft,plan.flightMs,x,y);
+    if(ft>=plan.flightMs&&!finished){finished=true;applyResult();}
+  }
+  function frameRedo(t){
+    const p1=plan.phase1,p2=plan.phase2,T1=INTRO,T2=T1+p1.flightMs,T3=T2+STILL_HOLD,T4=T3+INTRO;
+    if(finished)return;
+    if(t<0){puck.style.visibility="hidden";place(p1.sp[0],p1.sp[1]);fx(0,p1.sa,p1.ea);return;}
+    puck.style.visibility="visible";
+    if(t<T1){fx(t,p1.sa,p1.ea);setPhase(t<SPIN?"choosing":"aiming");place(p1.sp[0],p1.sp[1]);return;}
+    if(t<T2){setPhase("rushing");const ft=Math.min(Math.max(0,t-T1),p1.flightMs),idx=ft/1000*60,i=Math.min(p1.n-1,Math.max(0,Math.floor(idx))),f=Math.max(0,Math.min(1,idx-i));const a=p1.pts[i]||p1.pts[p1.pts.length-1],b=p1.pts[i+1]||a,x=a[0]+(b[0]-a[0])*f,y=a[1]+(b[1]-a[1])*f;place(x,y);arrow.style.opacity=0;ripple.style.opacity=0;applyCamZoom(ft,p1.flightMs,x,y);return;}
+    if(t<T3){if(cam){cam=null;arena.style.transition="";arena.style.transform="scale(1)";}setPhase("");place(plan.stop[0],plan.stop[1]);arrow.style.opacity=0;ripple.style.opacity=0;return;}
+    if(t<T4){const lt=Math.min(Math.max(0,t-T3),INTRO);setPhase(lt<SPIN?"choosing":"aiming");puckImg.style.opacity="1";puckImg.style.transform="scale(1)";const ang2=p2.sa+(p2.ea-p2.sa)*easeOut(clamp01(lt/SPIN)),pop2=1+.25*Math.sin(Math.PI*clamp01((lt-SPIN)/350));arrow.style.opacity=(clamp01(lt/150)*(1-clamp01((lt-INTRO)/250))).toFixed(3);arrow.style.transform=`rotate(${ang2.toFixed(2)}deg) scale(${pop2.toFixed(3)})`;ripple.style.opacity="0";place(p2.sp[0],p2.sp[1]);return;}
+    setPhase("rushing");const ft=Math.min(Math.max(0,t-T4),p2.flightMs),idx=ft/1000*60,i=Math.min(p2.n-1,Math.max(0,Math.floor(idx))),f=Math.max(0,Math.min(1,idx-i));const a=p2.pts[i]||p2.pts[p2.pts.length-1],b=p2.pts[i+1]||a,x=a[0]+(b[0]-a[0])*f,y=a[1]+(b[1]-a[1])*f;place(x,y);arrow.style.opacity=0;ripple.style.opacity=0;applyCamZoom(ft,p2.flightMs,x,y);if(ft>=p2.flightMs&&!finished){finished=true;applyResult();}
+  }
+  let lastAnimT=-Infinity;
+  function loop(){
+    requestAnimationFrame(loop);
+    if((st.status!=="running"&&st.status!=="result")||!st.startAt||!L.length)return;
+    if(planFor!==st.id||!plan){plan=buildPlan();planFor=st.id;finished=false;cam=null;lastAnimT=-Infinity;}
+    const raw=Date.now()+skew-st.startAt;
+    const visualT=Math.max(lastAnimT,raw); lastAnimT=visualT;
+    const endT=plan.mode==="redo" ? (INTRO+plan.phase1.flightMs+STILL_HOLD+INTRO+plan.phase2.flightMs) : (INTRO+plan.flightMs);
+    if(st.status==="result" && visualT<endT) { frame(endT); return; }
+    if(plan.mode==="redo") frameRedo(Math.min(visualT,endT)); else frame(Math.min(visualT,endT));
+  }
   requestAnimationFrame(loop);
-  function resetVisual(){plan=null;planFor=null;finished=false;cam=null;phase="";arena.style.transition="";arena.style.transform="scale(1)";puck.classList.remove("choosing","aiming","rushing");winnerEl.classList.remove("show");winnerEl.innerHTML="";W=arena.clientWidth||W;place(50,50);puck.style.visibility="hidden";}
+  function resetVisual(){plan=null;planFor=null;finished=false;cam=null;phase="";lastAnimT=-Infinity;arena.style.transition="";arena.style.transform="scale(1)";puck.classList.remove("choosing","aiming","rushing");winnerEl.classList.remove("show");winnerEl.innerHTML="";W=arena.clientWidth||W;place(50,50);puck.style.visibility="hidden";}
 
   const ANOMALY_NAMES={race:"Гонка",mirage:"Hide",redo:"Вторая жизнь!"}, ANOMALY_ICON={race:"ic-race",mirage:"ic-mirage",redo:"ic-redo"}, ANOMALY_CYCLE=["ic-race","ic-mirage","ic-redo"];
   let shownAnomalyFor=null,anomalySpin=null,anomalyRollT=null;
@@ -174,6 +207,7 @@
 
   socketRef.on("ice_state",m=>{
     if(!m)return;skew=Number(m.now||Date.now())-Date.now();st=m;me=me||String(tgRef?.initDataUnsafe?.user?.id||"");
+    if(st.status==="running"||st.status==="result"){puck.style.display="block";}
     if(st.status==="waiting"||st.status==="countdown"){resetVisual();}
     updateAnomalyUI();layout();render();
   });
