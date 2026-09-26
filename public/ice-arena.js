@@ -23,7 +23,6 @@
     const n = Number(String(q("balance")?.textContent || "0").replace(/[^0-9.,-]/g, "").replace(",", "."));
     return Number.isFinite(n) ? n : 0;
   }
-  function syncBalancePill(){ const el=q("iceMainBalance"); if(el) el.textContent=Number(currentBalance()).toFixed(2); }
   function place(x,y){ puck.style.transform = `translate3d(${(x*W/100-PUCK/2).toFixed(2)}px,${(y*W/100-PUCK/2).toFixed(2)}px,0)`; }
   window.addEventListener("resize", () => { W = arena.clientWidth || W; });
   place(50,50); puck.style.visibility = "hidden";
@@ -58,9 +57,9 @@
     const frag=document.createDocumentFragment(),cs=L.length?cells():[];const zones=[];
     st.players.map((p,i)=>i).sort((a,b)=>(st.players[a].id===me?1:0)-(st.players[b].id===me?1:0)).forEach(i=>{
       const p=st.players[i], poly=cs[i], inf=info(poly), rr=inr(poly,inf.cx,inf.cy);
-      const el=document.createElement("div");el.className="zone-item"+(p.id===me?" mine":"");
+      const el=document.createElement("div");el.className="ice-zone"+(p.id===me?" mine":"");
       el.innerHTML=`<svg viewBox="0 0 100 100" preserveAspectRatio="none"><polygon points="${poly.map(v=>v[0].toFixed(2)+","+v[1].toFixed(2)).join(" ")}" fill="${p.color||"#ffc61a"}"/></svg>`;
-      const d=Math.min(46,rr*W/100*1.4);if(d>=14){const av=iceAvatar(p,"zone-av",Math.round(d));av.style.left=inf.cx+"%";av.style.top=inf.cy+"%";el.append(av);}
+      const d=Math.min(46,rr*W/100*1.4);if(d>=14){const av=iceAvatar(p,"ice-zone-av",Math.round(d));av.style.left=inf.cx+"%";av.style.top=inf.cy+"%";el.append(av);}
       frag.append(el);zones.push({p,el});
     });
     return {frag,zones};
@@ -72,7 +71,7 @@
     const {frag,zones}=buildMosaic();zones.forEach(({p,el})=>p.zone=el);
     if(racing){const track=document.createElement("div");track.className="race-track";const f1=document.createElement("div");f1.className="race-frame";f1.append(frag);const f2=document.createElement("div");f2.className="race-frame";f2.innerHTML=f1.innerHTML;track.append(f1,f2);zoneMap.append(track);raceTrackEl=track;track.style.transform=`translateY(${(-raceOffset/100*W).toFixed(2)}px)`;}
     else{zoneMap.append(frag);raceTrackEl=null;}
-    st.players.forEach(p=>{const row=document.createElement("div");row.className="ice-player";row.append((() => { const av=iceAvatar(p,"lg-av",22); av.style.background=p.color||"#ffc61a"; return av; })());row.insertAdjacentHTML("beforeend",`<span>${esc(p.name)}</span><b>${fmt(p.stake)} · ${(sum? p.stake/sum*100:0).toFixed(1)}%</b>`);legend.append(row);});
+    st.players.forEach(p=>{const row=document.createElement("div");row.className="ice-player";row.append(iceAvatarForLegend(p));row.insertAdjacentHTML("beforeend",`<span>${esc(p.name)}</span><b>${fmt(p.stake)} · ${(sum? p.stake/sum*100:0).toFixed(1)}%</b>`);legend.append(row);});
     poolEl.textContent=fmt(sum);
     if(finished)applyResult();
     ui();
@@ -117,9 +116,9 @@
   function frame(t){
     if(plan.mode==="redo"){frameRedo(t);return;}updateRaceScroll(t);if(finished)return;if(t<0){puck.style.visibility="hidden";place(plan.sp[0],plan.sp[1]);fx(0,plan.sa,plan.ea);return;}puck.style.visibility="visible";fx(t,plan.sa,plan.ea);if(t<INTRO){setPhase(t<SPIN?"choosing":"aiming");place(plan.sp[0],plan.sp[1]);return;}setPhase("rushing");const ft=Math.min(t-INTRO,plan.flightMs),idx=ft/1000*60,i=Math.min(plan.n-1,Math.floor(idx)),f=idx-i,a=plan.pts[i],b=plan.pts[i+1],x=a[0]+(b[0]-a[0])*f,y=a[1]+(b[1]-a[1])*f;place(x,y);applyCamZoom(ft,plan.flightMs,x,y);if(ft>=plan.flightMs&&!finished){finished=true;applyResult();}}
   function frameRedo(t){const p1=plan.phase1,p2=plan.phase2,T1=INTRO,T2=T1+p1.flightMs,T3=T2+STILL_HOLD,T4=T3+INTRO;if(finished)return;if(t<0){puck.style.visibility="hidden";place(p1.sp[0],p1.sp[1]);fx(0,p1.sa,p1.ea);return;}puck.style.visibility="visible";if(t<T1){fx(t,p1.sa,p1.ea);setPhase(t<SPIN?"choosing":"aiming");place(p1.sp[0],p1.sp[1]);return;}if(t<T2){setPhase("rushing");const ft=t-T1,idx=ft/1000*60,i=Math.min(p1.n-1,Math.floor(idx)),f=idx-i,a=p1.pts[i],b=p1.pts[i+1],x=a[0]+(b[0]-a[0])*f,y=a[1]+(b[1]-a[1])*f;place(x,y);arrow.style.opacity=0;ripple.style.opacity=0;applyCamZoom(ft,p1.flightMs,x,y);return;}if(t<T3){if(cam){cam=null;arena.style.transition="";arena.style.transform="scale(1)";}setPhase("");place(plan.stop[0],plan.stop[1]);arrow.style.opacity=0;ripple.style.opacity=0;return;}if(t<T4){const lt=t-T3;setPhase(lt<SPIN?"choosing":"aiming");puckImg.style.opacity="1";puckImg.style.transform="scale(1)";const ang2=p2.sa+(p2.ea-p2.sa)*easeOut(clamp01(lt/SPIN)),pop2=1+.25*Math.sin(Math.PI*clamp01((lt-SPIN)/350));arrow.style.opacity=(clamp01(lt/150)*(1-clamp01((lt-INTRO)/250))).toFixed(3);arrow.style.transform=`rotate(${ang2.toFixed(2)}deg) scale(${pop2.toFixed(3)})`;ripple.style.opacity="0";place(p2.sp[0],p2.sp[1]);return;}setPhase("rushing");const ft=Math.min(t-T4,p2.flightMs),idx=ft/1000*60,i=Math.min(p2.n-1,Math.floor(idx)),f=idx-i,a=p2.pts[i],b=p2.pts[i+1],x=a[0]+(b[0]-a[0])*f,y=a[1]+(b[1]-a[1])*f;place(x,y);arrow.style.opacity=0;ripple.style.opacity=0;applyCamZoom(ft,p2.flightMs,x,y);if(ft>=p2.flightMs&&!finished){finished=true;applyResult();}}
-  function loop(){requestAnimationFrame(loop);if((st.status!=="running"&&st.status!=="result")||!st.startAt||!L.length||!plan)return;if(planFor!==st.id){plan=buildPlan();planFor=st.id;finished=false;cam=null;}frame(Date.now()+skew-st.startAt);}
+  function loop(){requestAnimationFrame(loop);if((st.status!=="running"&&st.status!=="result")||!st.startAt||!L.length)return;if(planFor!==st.id||!plan){plan=buildPlan();planFor=st.id;finished=false;cam=null;}frame(Date.now()+skew-st.startAt);}
   requestAnimationFrame(loop);
-  function resetVisual(){plan=null;planFor=null;finished=false;cam=null;phase="";arena.style.transition="none";arena.style.transform="none";puck.classList.remove("choosing","aiming","rushing");winnerEl.classList.remove("show");winnerEl.innerHTML="";W=arena.clientWidth||W;place(50,50);puck.style.visibility="hidden";}
+  function resetVisual(){plan=null;planFor=null;finished=false;cam=null;phase="";arena.style.transition="";arena.style.transform="scale(1)";puck.classList.remove("choosing","aiming","rushing");winnerEl.classList.remove("show");winnerEl.innerHTML="";W=arena.clientWidth||W;place(50,50);puck.style.visibility="hidden";}
 
   const ANOMALY_NAMES={race:"Гонка",mirage:"Hide",redo:"Вторая жизнь!"}, ANOMALY_ICON={race:"ic-race",mirage:"ic-mirage",redo:"ic-redo"}, ANOMALY_CYCLE=["ic-race","ic-mirage","ic-redo"];
   let shownAnomalyFor=null,anomalySpin=null,anomalyRollT=null;
@@ -131,48 +130,18 @@
   }
 
   function shortHex(s){s=String(s||"");return s.length>10?s.slice(0,4)+"…"+s.slice(-4):s;}
-  const ANOMALY_ICON_URL={race:"/icons/icon-race.jpg",mirage:"/icons/icon-mirage.jpg",redo:"/icons/icon-redo.jpg"};
-  let hData={list:[],top:null,last:null},curGame=null;
-  const GEM='<span class="gem">⭐</span>';
-  function gp(g){return {name:g.name||"?",photo:g.photo,color:g.color||"#ffc61a"};}
-  function fillCard(el,g){
-    if(!el)return;
-    if(!g){el.innerHTML='<span class="hd-empty">Пока нет игр</span>';return;}
-    el.innerHTML=''; const av=iceAvatar(gp(g),"lg-av",22); el.append(av);
-    const tag=g.anomaly&&ANOMALY_ICON_URL[g.anomaly]?` <img class="hd-anomaly" src="${ANOMALY_ICON_URL[g.anomaly]}" alt="">`:"";
-    el.insertAdjacentHTML('beforeend',`<span class="hd-name">${esc(g.name)}${tag}</span><b class="hd-win">+${fmt(g.payout||g.bank||0)}${GEM}</b>`);
-  }
+  let hData={list:[]},curGame=null;
   function renderHistory(h){
-    hData=h||{list:[],top:null,last:null};
-    if(!hData.last) hData.last=hData.list?.[0]||null;
-    if(!hData.top && hData.list?.length) hData.top=[...hData.list].sort((a,b)=>Number(b.payout||b.bank||0)-Number(a.payout||a.bank||0))[0];
-    fillCard(q("topGame"),hData.top||null); fillCard(q("lastGame"),hData.last||null);
-    const list=q("iceHistoryList"); if(!list)return; list.innerHTML="";
-    if(!hData.list?.length){list.innerHTML='<p class="ice-hint">Игр пока не было</p>';return;}
-    hData.list.forEach(g=>{
-      const row=document.createElement("div"); row.className="hist-row";
-      const p=(g.players||[]).find(x=>String(x.id)===String(g.winnerId))||(g.players||[])[0]||{};
-      row.append(iceAvatar(p,"lg-av",30));
-      const when=new Date(g.createdAt).toLocaleString("ru-RU",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});
-      const tag=g.anomaly&&ANOMALY_ICON_URL[g.anomaly]?` <img class="hd-anomaly" src="${ANOMALY_ICON_URL[g.anomaly]}" alt="">`:"";
-      row.insertAdjacentHTML("beforeend",`<span style="flex:1;min-width:0"><span class="hd-name">${esc(p.name||"Игрок")}${tag}</span><small>${(g.players||[]).length} игроков · ${when}</small></span><b class="hd-win">+${fmt(g.payout||g.bank||0)}${GEM}</b>`);
-      row.addEventListener("click",()=>openGame(g)); list.append(row);
-    });
+    hData=h||{list:[]};const list=q("iceHistoryList");list.innerHTML="";if(!hData.list?.length){list.innerHTML='<div class="ice-hint">Игр пока не было</div>';return;}
+    hData.list.forEach(g=>{const row=document.createElement("button");row.type="button";row.className="ice-history-row";const p=(g.players||[]).find(x=>x.id===g.winnerId)||(g.players||[])[0]||{};const when=new Date(g.createdAt).toLocaleString("ru-RU",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});row.innerHTML=`<span class="ice-player-av" style="background:${p.color||"#ffc61a"}">${esc((p.name||"?")[0])}</span><span class="name">${esc(p.name||"Игрок")}<small>${when} · ${(g.players||[]).length} игроков</small></span><span class="amt">+${fmt(g.payout||g.bank||0)} ⭐</span>`;row.onclick=()=>openGame(g);list.append(row);});
   }
   function openGame(g){
-    curGame=g;q("iceGameId").textContent=g.id;q("iceGameDate").textContent=new Date(g.createdAt).toLocaleString("ru-RU")+(g.anomaly&&ANOMALY_NAMES[g.anomaly]?" · "+ANOMALY_NAMES[g.anomaly]:"");q("iceGameHash").textContent=shortHex(g.hash);q("iceGameSeed").textContent=shortHex(g.seed);
-    const pool=(g.players||[]).reduce((s,p)=>s+Number(p.stake||p.bet||0),0), list=q("iceGamePlayers"); list.innerHTML="";
-    [...(g.players||[])].sort((a,b)=>Number(b.stake||b.bet||0)-Number(a.stake||a.bet||0)).forEach(p=>{
-      const stake=Number(p.stake||p.bet||0), isWin=String(p.id)===String(g.winnerId), row=document.createElement("div"); row.className="gm-p"+(isWin?" win":"");
-      row.append(iceAvatar(p,"lg-av",32));
-      row.insertAdjacentHTML("beforeend",`<span class="gm-p-name"><b>${esc(p.name||"Игрок")}${isWin?'<span class="gm-win-badge">Победитель</span>':''}</b><small>${pool?(stake/pool*100).toFixed(2):"0.00"}%</small></span><b class="gm-p-amt">${isWin?"+":""}${fmt(isWin?(g.payout||g.bank||0):stake)} ⭐</b>`);
-      list.append(row);
-    });
-    q("iceLegitResult").textContent="";q("iceLegitResult").className="gm-verdict ice-legit-result";q("iceGameModal").classList.add("show");
+    curGame=g;q("iceGameId").textContent=g.id;q("iceGameDate").textContent=new Date(g.createdAt).toLocaleString("ru-RU")+(g.anomaly&&ANOMALY_NAMES[g.anomaly]?" · "+ANOMALY_NAMES[g.anomaly]:"");q("iceGameHash").textContent=shortHex(g.hash);q("iceGameSeed").textContent=shortHex(g.seed);const pool=g.players.reduce((s,p)=>s+Number(p.stake||p.bet||0),0);const list=q("iceGamePlayers");list.innerHTML="";
+    [...(g.players||[])].sort((a,b)=>Number(b.stake||b.bet||0)-Number(a.stake||a.bet||0)).forEach(p=>{const isWin=p.id===g.winnerId;const row=document.createElement("div");row.className="ice-game-player"+(isWin?" win":"");row.append(iceAvatar({...p,stake:Number(p.stake||p.bet||0)},"ice-zone-av",32));row.insertAdjacentHTML("beforeend",`<span class="gname"><b>${esc(p.name||"Игрок")}</b><small>${pool?((Number(p.stake||p.bet||0)/pool)*100).toFixed(2):"0.00"}%</small></span><span class="gamt">${isWin?"+":""}${fmt(isWin?g.payout:(p.stake||p.bet||0))} ⭐</span>`);list.append(row);});
+    q("iceLegitResult").textContent="";q("iceLegitResult").className="ice-legit-result";q("iceGameModal").classList.add("show");
   }
 
   q("iceArenaHistory").onclick=()=>{q("iceHistoryModal").classList.add("show");socketRef.emit("ice_request_history");};
-  q("topGame").onclick=()=>hData.top&&openGame(hData.top); q("lastGame").onclick=()=>hData.last&&openGame(hData.last);
   q("iceHistoryClose").onclick=()=>q("iceHistoryModal").classList.remove("show");
   q("iceGameClose").onclick=()=>q("iceGameModal").classList.remove("show");
   q("iceHistoryModal").addEventListener("click",e=>{if(e.target===q("iceHistoryModal"))q("iceHistoryModal").classList.remove("show")});
@@ -187,31 +156,22 @@
   let hintTaps=0,hintTapT=null;const hintEl=q("iceHint"),meowSound=new Audio("/meow.mp3");
   if(hintEl)hintEl.addEventListener("click",()=>{hintTaps++;clearTimeout(hintTapT);hintTapT=setTimeout(()=>hintTaps=0,900);if(hintTaps>=3){hintTaps=0;try{meowSound.currentTime=0;meowSound.play();}catch{}}});
 
-
-  let iceBodyLock=false;
-  function setIceBodyLock(on){
-    if(on===iceBodyLock)return; iceBodyLock=on;
-    document.documentElement.classList.toggle("ice-open",on); document.body.classList.toggle("ice-open",on);
-    if(on){ document.body.dataset.iceOverflow=document.body.style.overflow||""; document.body.style.overflow="hidden"; }
-    else { document.body.style.overflow=document.body.dataset.iceOverflow||""; delete document.body.dataset.iceOverflow; }
-  }
-
   function openIce(){
     if(!tgRef?.initData)return handleNotTelegram();
-    q("gamesList").classList.add("hidden");q("upgradeGame").classList.add("hidden");q("bounceGame").classList.add("hidden");root.classList.remove("hidden");setIceBodyLock(true);
-    W=arena.clientWidth||W;syncBalancePill();socketRef.emit("ice_request_state");socketRef.emit("ice_request_history");ui();
+    q("gamesList").classList.add("hidden");q("upgradeGame").classList.add("hidden");q("bounceGame").classList.add("hidden");root.classList.remove("hidden");
+    W=arena.clientWidth||W;socketRef.emit("ice_request_state");socketRef.emit("ice_request_history");ui();
   }
-  function closeIce(){q("iceHistoryModal").classList.remove("show");q("iceGameModal").classList.remove("show");root.classList.add("hidden");setIceBodyLock(false);q("gamesList").classList.remove("hidden");resetVisual();}
+  function closeIce(){q("iceHistoryModal").classList.remove("show");q("iceGameModal").classList.remove("show");root.classList.add("hidden");q("gamesList").classList.remove("hidden");resetVisual();}
   q("openIceArena").onclick=openIce;q("iceArenaBack").onclick=closeIce;
 
   socketRef.on("ice_state",m=>{
     if(!m)return;skew=Number(m.now||Date.now())-Date.now();st=m;me=me||String(tgRef?.initDataUnsafe?.user?.id||"");
     if(st.status==="waiting"||st.status==="countdown"){resetVisual();}
-    updateAnomalyUI();layout();render();syncBalancePill();
+    updateAnomalyUI();layout();render();
   });
   socketRef.on("ice_history",h=>renderHistory(h));
   socketRef.on("ice_error",msg=>{toastLocal(msg||"Ошибка Ice Arena");ui();});
   socketRef.on("joined",data=>{if(data?.playerId)me=String(data.playerId);});
-  socketRef.on("balance_updated",()=>{syncBalancePill();ui();});
+  socketRef.on("balance_updated",()=>ui());
   socketRef.on("disconnect",()=>{if(!root.classList.contains("hidden"))ui();});
 })();

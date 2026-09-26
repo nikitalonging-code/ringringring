@@ -1670,42 +1670,58 @@ function bounceSetBet(v){
   [...document.querySelectorAll("#bounceQuick button[data-v]")].forEach(b=>b.classList.toggle("on",Number(b.dataset.v)===v));
   return v;
 }
-function bounceMk(a,v,g0,targetBounces,bounceWinTarget){return{t:0,g0,target:Math.max(1,Math.min(15,Number(targetBounces)||1)),winTarget:!!bounceWinTarget,x:BCX,y:BCY-30,px:BCX,py:BCY-30,vx:Math.cos(a)*v,vy:Math.sin(a)*v,b:0,ph:0,done:0,bad:0,hit:0,out:0,released:false}}
+function bounceMk(a,v,g0,targetBounces,bounceWinTarget){return{t:0,g0,target:Math.max(1,Math.min(15,Number(targetBounces)||1)),winTarget:!!bounceWinTarget,x:BCX,y:BCY-30,px:BCX,py:BCY-30,vx:Math.cos(a)*v,vy:Math.sin(a)*v,b:0,ph:0,done:0,bad:0,hit:0,out:0,released:false,releasePending:false,landX:BCX}}
 function bounceStep(q){
-  q.t+=BDT;q.vy+=BG*BDT;q.x+=q.vx*BDT;q.y+=q.vy*BDT;
-  const dx=q.x-BCX,dy=q.y-BCY,d=Math.hypot(dx,dy);
+  q.t+=BDT;
+  q.vy+=BG*BDT;
+  q.x+=q.vx*BDT;
+  q.y+=q.vy*BDT;
+  const dx=q.x-BCX,dy=q.y-BCY,d=Math.hypot(dx,dy)||1;
   if(q.ph===0){
     if(d>BRING-BBR){
-      let f=Math.atan2(dy,dx)-(q.g0+BOM*q.t);f=Math.atan2(Math.sin(f),Math.cos(f));
-      if(Math.abs(f)<BGEFF)q.ph=1;
-      else{
+      let f=Math.atan2(dy,dx)-(q.g0+BOM*q.t);
+      f=Math.atan2(Math.sin(f),Math.cos(f));
+      const inGap=Math.abs(f)<BGEFF;
+      if(inGap && q.releasePending){
+        // Target bounce is already complete. Release ONLY through the real gap.
+        q.ph=2;q.released=true;q.releasePending=false;
+      }else if(inGap){
+        q.ph=1;
+      }else{
         const nx=dx/d,ny=dy/d,vn=q.vx*nx+q.vy*ny;
-        if(vn>0){q.vx-=2*vn*nx;q.vy-=2*vn*ny;q.x=BCX+nx*(BRING-BBR);q.y=BCY+ny*(BRING-BBR);const sp=Math.hypot(q.vx,q.vy),k=Math.min(Math.max(sp,BVMIN),BVMAX)/sp;q.vx*=k;q.vy*=k;q.b++;q.hit=1;if(q.b>=q.target){
-            // Finish the exact target bounce without teleporting the ball.
-            // Keep its real collision position/velocity and smoothly steer it
-            // through the opening toward the selected landing half.
-            const liveZone=Math.max(40,Math.min(BW-40,bounceZoneW||BOUNCE_MODES_CLIENT[bounceMode].p*BW));
-            const sideW=q.winTarget?liveZone:(BW-liveZone);
-            const sideStart=q.winTarget?0:liveZone;
-            q.landX=sideStart+Math.max(20,sideW*.18)+Math.random()*Math.max(1,sideW*.64);
-            q.ph=2;q.released=true;
-          }}
+        if(vn>0){
+          q.vx-=2*vn*nx; q.vy-=2*vn*ny;
+          q.x=BCX+nx*(BRING-BBR); q.y=BCY+ny*(BRING-BBR);
+          const sp=Math.hypot(q.vx,q.vy)||1,k=Math.min(Math.max(sp,BVMIN),BVMAX)/sp;
+          q.vx*=k; q.vy*=k;
+          if(q.b<q.target){
+            q.b++; q.hit=1;
+            if(q.b>=q.target){
+              const liveZone=Math.max(40,Math.min(BW-40,bounceZoneW||BOUNCE_MODES_CLIENT[bounceMode].p*BW));
+              const sideW=q.winTarget?liveZone:(BW-liveZone);
+              const sideStart=q.winTarget?0:liveZone;
+              q.landX=sideStart+Math.max(20,sideW*.18)+Math.random()*Math.max(1,sideW*.64);
+              q.releasePending=true;
+            }
+          }
+        }
       }
     }
   }else if(q.ph===2){
-    // Final release: preserve the current position and velocity. We only
-    // steer the horizontal component smoothly toward the selected landing
-    // half, so there is no coordinate jump/teleport after the last bounce.
-    const landingX=Number.isFinite(q.landX)?q.landX:(q.winTarget?BW*.5:BW*.75);
-    const remainY=Math.max(1,BFLOOR-q.y);
-    const disc=Math.max(1,q.vy*q.vy+2*BG*remainY);
-    const tf=Math.max(.16,(-q.vy+Math.sqrt(disc))/BG);
-    const desiredVx=Math.max(-1100,Math.min(1100,(landingX-q.x)/tf));
-    const steer=Math.min(1,12*BDT);
-    q.vx+= (desiredVx-q.vx)*steer;
-    q.vy+=BG*BDT;
-    q.x+=q.vx*BDT;
-    q.y+=q.vy*BDT;
+    // The ball is inside the actual moving opening. Keep its physical velocity
+    // until it is completely outside the ring; only then steer toward the
+    // selected WIN/LOSS landing sector. This prevents cutting through the ring.
+    const ringClear=d>=BRING+BBR+4;
+    if(ringClear){
+      const landingX=Number.isFinite(q.landX)?q.landX:(q.winTarget?BW*.5:BW*.75);
+      const remainY=Math.max(1,BFLOOR-q.y);
+      const disc=Math.max(1,q.vy*q.vy+2*BG*remainY);
+      const tf=Math.max(.18,(-q.vy+Math.sqrt(disc))/BG);
+      const desiredVx=Math.max(-850,Math.min(850,(landingX-q.x)/tf));
+      q.vx+=(desiredVx-q.vx)*Math.min(1,7*BDT);
+    }
+    // Keep the fall readable instead of accelerating without a visual cap.
+    q.vy=Math.min(q.vy,900);
     if(q.x<BBR){q.x=BBR;q.vx=Math.abs(q.vx)*.35}
     if(q.x>BW-BBR){q.x=BW-BBR;q.vx=-Math.abs(q.vx)*.35}
     if(q.y>=BFLOOR)q.done=1;
@@ -1715,27 +1731,24 @@ function bounceStep(q){
     else if(q.out&&d<BRING+BBR){
       let f=Math.atan2(dy,dx)-(q.g0+BOM*q.t);f=Math.atan2(Math.sin(f),Math.cos(f));
       const nx=dx/d,ny=dy/d,vn=q.vx*nx+q.vy*ny;
-      if(Math.abs(f)>=BGEFF&&vn<0){q.vx-=1.75*vn*nx;q.vy-=1.75*vn*ny;q.x=BCX+nx*(BRING+BBR);q.y=BCY+ny*(BRING+BBR);q.b++;q.hit=1}
+      if(Math.abs(f)>=BGEFF&&vn<0){q.vx-=1.75*vn*nx;q.vy-=1.75*vn*ny;q.x=BCX+nx*(BRING+BBR);q.y=BCY+ny*(BRING+BBR);q.hit=1}
     }
     if(q.x<BBR||q.x>BW-BBR){q.vx=-q.vx;q.x=Math.min(Math.max(q.x,BBR),BW-BBR)}
     if(q.y>=BFLOOR)q.done=1;
   }
   if(q.t>bounceT+.6){q.bad=1;q.done=1}
 }
+
 function bouncePlan(g0,winTarget,targetBounces){
   const target=Math.max(1,Math.min(15,Number(targetBounces)||1));
-  // Find any natural path that can produce at least the requested number of
-  // wall hits before the fall. The live simulation will stop counting exactly
-  // on target and then release the ball, so the visible count and the server
-  // multiplier always agree.
   for(let i=0;i<6000;i++){
     const a=Math.random()*6.283,v=BVMIN+Math.random()*210,q=bounceMk(a,v,g0,target,winTarget);
-    while(!q.done && q.t<bounceT-.6){bounceStep(q); if(q.b>=target)break;}
-    if(q.b>=target)return {a,v};
+    while(!q.done && q.t<bounceT-.15)bounceStep(q);
+    if(q.b>=target && (q.released||q.done))return {a,v};
   }
-  // Deterministic fallback; bounceStep still enforces the requested count.
-  return {a:winTarget?2.35:0.8,v:Math.max(BVMIN+20,520)};
+  return {a:winTarget?2.35:0.8,v:BVMIN+40};
 }
+
 function bounceSetControls(disabled){
   const ids=["bouncePlay","bounceBet","bounceDec","bounceInc"];
   ids.forEach(id=>{const el=bounceUi(id);if(el)el.disabled=disabled});
