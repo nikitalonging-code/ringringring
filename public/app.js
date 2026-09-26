@@ -1677,6 +1677,7 @@ function bounceMk(result){
   return {
     g0:Number(phys.g0||0), flightMs:Number(phys.flightMs||0), points:pts,
     bounceTimes:Array.isArray(phys.bounceTimes)?phys.bounceTimes.map(Number).filter(Number.isFinite):[],
+    collisionTimes:Array.isArray(phys.collisionEvents) ? phys.collisionEvents.map(e=>Number(e?.t)).filter(Number.isFinite) : [],
     ringStartAt:Number(result?.ringStartAt||Date.now()+BSPAWN*1000),
     startAngle:null, targetAngle:Number(phys.g0||0),
     physicsStarted:false, done:false
@@ -1686,7 +1687,9 @@ function bounceLerpAngle(a,b,t){
   const tau=Math.PI*2; let d=((b-a+Math.PI)%tau+tau)%tau-Math.PI; return a+d*t;
 }
 function bounceGlobalRingAt(ms){
-  const tau=Math.PI*2, a=BRING0+BOM*(Number(ms)/1000); return ((a%tau)+tau)%tau;
+  // Keep the angle unwrapped. Normalising to [0,2π) made the arc jump from 2π to 0
+  // and visually look like it reversed direction when the ring crossed the seam.
+  return BRING0+BOM*(Number(ms)/1000);
 }
 function bouncePointAt(s,seconds){
   const pts=s?.points||[]; if(!pts.length)return {x:BCX,y:BCY-30};
@@ -1734,7 +1737,7 @@ function bounceRenderStage(now){
 
       // Show the multiplier as soon as each authoritative collision happens.
       // bounceTimes is produced by the server from the same physics simulation.
-      const times=Array.isArray(bounceS.bounceTimes)?bounceS.bounceTimes:[];
+      const times=(Array.isArray(bounceS.collisionTimes)&&bounceS.collisionTimes.length)?bounceS.collisionTimes:bounceS.bounceTimes;
       let count=0; while(count<times.length && Number(times[count])<=ft+0.0005) count++;
       if(count>bounceDisplayedBounces){
         const step=Number(bounceSpinResult?.step||BOUNCE_MODES_CLIENT[bounceMode]?.s||0.1);
@@ -1794,8 +1797,7 @@ function bounceRenderStage(now){
 function openBounce(){
   if(!initData)return handleNotTelegram();
   lockBounceViewport();
-  try{tg?.expand?.();tg?.disableVerticalSwipes?.();}catch{}
-  window.scrollTo(0,0);
+  try{tg?.expand?.();}catch{}
   installBounceZoomLock();
   const bounceRoot=bounceUi("bounceGame");
   if(bounceRoot){bounceRoot.style.zoom="1";bounceRoot.style.transform="none";}
@@ -1812,7 +1814,6 @@ function closeBounce(){
   bounceUi("bounceGame").classList.add("hidden");bounceUi("gamesList").classList.remove("hidden");
   bounceUi("bounceGame")?.classList.remove("is-playing");
   unlockBounceViewport();
-  window.scrollTo(0,0);
 }
 // ОТСКОК: временно фиксируем viewport только пока открыт ОТСКОК.
 // Это не меняет масштабирование остальных вкладок приложения.
@@ -1921,6 +1922,19 @@ document.querySelectorAll('.game-card[data-view]').forEach(btn => {
 
 setTopupCurrency("STAR");
 setWithdrawCurrency("STAR");
+window.addEventListener("ice_winner_result", (ev) => {
+  const d = ev.detail || {};
+  const overlay = $("winnerOverlay");
+  if (!overlay) return;
+  $("winnerAvatar").innerHTML = d.avatar
+    ? `<img src="${escapeHtml(d.avatar)}" alt="" loading="lazy">`
+    : `<div class="winner-fallback">${escapeHtml(String(d.name || "И").trim().charAt(0).toUpperCase() || "И")}</div>`;
+  $("winnerName").textContent = d.name || "Игрок";
+  $("winnerPayout").textContent = `${Number(d.payout || 0).toFixed(2)} ⭐`;
+  $("winnerBetDetail").textContent = `Ставка: ${Number(d.bet || 0).toFixed(2)} ⭐`;
+  overlay.dataset.iceRound = String(d.roundId || "");
+  openModal(overlay);
+});
 window.addEventListener("load", () => initTonConnect());
 
 // ---------- PVP round history ----------

@@ -163,6 +163,7 @@
 
   const ANOMALY_NAMES={race:"Гонка",mirage:"Hide",redo:"Вторая жизнь!"}, ANOMALY_ICON={race:"ic-race",mirage:"ic-mirage",redo:"ic-redo"}, ANOMALY_CYCLE=["ic-race","ic-mirage","ic-redo"];
   let shownAnomalyFor=null,anomalySpin=null,anomalyRollT=null;
+  let shownResultRoundId=null;
   function updateAnomalyUI(){
     if(st.status==="waiting"||st.status==="countdown"){shownAnomalyFor=null;clearInterval(anomalySpin);clearTimeout(anomalyRollT);anomalyBadge.classList.remove("show","rolling","settled");root.classList.remove("mirage-active");return;}
     root.classList.toggle("mirage-active",st.anomaly==="mirage"&&st.status==="running");
@@ -208,11 +209,19 @@
   socketRef.on("ice_state",m=>{
     if(!m)return;skew=Number(m.now||Date.now())-Date.now();st=m;me=me||String(tgRef?.initDataUnsafe?.user?.id||"");
     if(st.status==="running"||st.status==="result"){puck.style.display="block";}
-    if(st.status==="waiting"||st.status==="countdown"){resetVisual();}
+    if(st.status==="waiting"||st.status==="countdown"){
+      resetVisual();
+      if(st.status==="waiting" && shownResultRoundId){ const ov=document.getElementById("winnerOverlay"); if(ov) ov.classList.add("hidden"); }
+      if(st.status==="waiting") shownResultRoundId=null;
+    }
     updateAnomalyUI();layout();render();
   });
   socketRef.on("ice_history",h=>renderHistory(h));
-  socketRef.on("ice_error",msg=>{toastLocal(msg||"Ошибка Ice Arena");ui();});
+  socketRef.on("ice_error",msg=>{
+    const text=String(msg||"");
+    if(!/истори/i.test(text)) toastLocal(text||"Ошибка Ice Arena");
+    ui();
+  });
   socketRef.on("joined",data=>{if(data?.playerId)me=String(data.playerId);});
   socketRef.on("balance_updated",()=>ui());
   socketRef.on("disconnect",()=>{if(!root.classList.contains("hidden"))ui();});

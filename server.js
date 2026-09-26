@@ -1137,6 +1137,7 @@ function bounceStepServer(q) {
           const speed = Math.hypot(q.vx, q.vy) || 1;
           const k = Math.min(Math.max(speed, B.VMIN), B.VMAX) / speed;
           q.vx *= k; q.vy *= k; q.bounces += 1;
+          q.collisionEvents.push({ t: Number(q.t.toFixed(4)), kind: "ring", x: Number(q.x.toFixed(3)), y: Number(q.y.toFixed(3)) });
         }
       }
     }
@@ -1146,11 +1147,11 @@ function bounceStepServer(q) {
     q.vx *= 0.9995;
     if (q.x < B.BR) {
       q.x = B.BR;
-      if (q.vx < 0) { q.vx = Math.abs(q.vx) * 0.35; q.bounces += 1; }
+      if (q.vx < 0) { q.vx = Math.abs(q.vx) * 0.35; q.bounces += 1; q.collisionEvents.push({ t: Number(q.t.toFixed(4)), kind: "wall", x: Number(q.x.toFixed(3)), y: Number(q.y.toFixed(3)) }); }
     }
     if (q.x > B.W - B.BR) {
       q.x = B.W - B.BR;
-      if (q.vx > 0) { q.vx = -Math.abs(q.vx) * 0.35; q.bounces += 1; }
+      if (q.vx > 0) { q.vx = -Math.abs(q.vx) * 0.35; q.bounces += 1; q.collisionEvents.push({ t: Number(q.t.toFixed(4)), kind: "wall", x: Number(q.x.toFixed(3)), y: Number(q.y.toFixed(3)) }); }
     }
     if (q.y >= B.FLOOR) q.done = true;
   }
@@ -1159,7 +1160,7 @@ function bounceStepServer(q) {
 function makeBouncePhysics(a, v, g0) {
   const B = BOUNCE_PHYS;
   const q = { t: 0, g0, x: B.CX, y: B.CY - 30, vx: Math.cos(a) * v, vy: Math.sin(a) * v,
-    bounces: 0, bounceTimes: [], ph: 0, done: false, bad: false };
+    bounces: 0, bounceTimes: [], collisionEvents: [], ph: 0, done: false, bad: false, wallCooldownX: 0 };
   const points = [{ t: 0, x: q.x, y: q.y }];
   let nextSample = 1;
   while (!q.done && q.t < B.MAX_FLIGHT_S + 0.8) {
@@ -1168,9 +1169,10 @@ function makeBouncePhysics(a, v, g0) {
     if (q.bounces > before) {
       for (let n = before; n < q.bounces; n++) q.bounceTimes.push(Number(q.t.toFixed(4)));
     }
-    // Sample the authoritative trajectory at ~120 FPS. The browser only interpolates
+    // Sample the authoritative trajectory at the simulation rate so the browser never
+    // visually skips over a thin ring collision between playback points. The browser only interpolates
     // these points; it no longer runs a second, slightly different physics engine.
-    while (q.t + 1e-9 >= nextSample / 120) {
+    while (q.t + 1e-9 >= nextSample / 240) {
       points.push({ t: q.t, x: q.x, y: q.y });
       nextSample++;
     }
@@ -1197,7 +1199,7 @@ function planBouncePhysics(winTarget, mode, fixedG0) {
     const wanted = winTarget ? q.x < zoneW - 24 : q.x > zoneW + 24;
     if (!wanted) continue;
     return { a, v, g0, flightMs: Math.round(q.t * 1000), bounces: q.bounces, endX: q.x,
-      points: q.points.map(pt => [Number(pt.t.toFixed(4)), Number(pt.x.toFixed(3)), Number(pt.y.toFixed(3))]) };
+      points: q.points.map(pt => [Number(pt.t.toFixed(4)), Number(pt.x.toFixed(3)), Number(pt.y.toFixed(3))]), events: q.collisionEvents };
   }
   for (let i = 0; i < 50000; i++) {
     const a = secureUnit() * Math.PI * 2;
@@ -1206,7 +1208,7 @@ function planBouncePhysics(winTarget, mode, fixedG0) {
     if (!q.bad && q.bounces >= 1 && q.t >= 2 && q.t <= 6.7) {
       const wanted = winTarget ? q.x < zoneW : q.x >= zoneW;
       if (wanted) return { a, v, g0, flightMs: Math.round(q.t * 1000), bounces: q.bounces, endX: q.x,
-        points: q.points.map(pt => [Number(pt.t.toFixed(4)), Number(pt.x.toFixed(3)), Number(pt.y.toFixed(3))]) };
+        points: q.points.map(pt => [Number(pt.t.toFixed(4)), Number(pt.x.toFixed(3)), Number(pt.y.toFixed(3))]), events: q.collisionEvents };
     }
   }
   throw new Error("Не удалось построить траекторию ОТСКОКА.");
@@ -1256,7 +1258,7 @@ async function playBounce(playerId, bet, modeIndex) {
       step: mode.step, bet: normalizedBet, bounces: trajectory.bounces, multiplier, payout,
       balance: balanceAfter, durationMs: Math.round(1200 + trajectory.flightMs + 250),
       physics: { a: trajectory.a, v: trajectory.v, g0: trajectory.g0, flightMs: trajectory.flightMs,
-        points: trajectory.points, bounceTimes: trajectory.bounceTimes, ringStartAt },
+        points: trajectory.points, bounceTimes: trajectory.bounceTimes, collisionEvents: trajectory.events || [], ringStartAt },
       serverNow, ringStartAt
     };
   } finally {
@@ -1287,6 +1289,7 @@ const iceState = {
 };
 iceState.hash = crypto.createHash("sha256").update(iceState.seed).digest("hex");
 let iceTimer = null;
+let iceRecentHistory = [];
 
 function iceSeededFloat(seed, salt = "") {
   const h = crypto.createHash("sha256").update(`${seed}:${salt}`).digest();
@@ -1333,15 +1336,24 @@ function icePublicState() {
 }
 function iceBroadcast() { io.emit("ice_state", icePublicState()); }
 async function iceHistoryMessage() {
-  requireDatabase();
-  const r = await pool.query(`SELECT id, created_at, bank::float AS bank, winner_id, winner_bet::float AS winner_bet, payout::float AS payout,
-                                     anomaly, players, server_seed, server_seed_hash
-                              FROM ice_rounds ORDER BY created_at DESC LIMIT 30`);
-  const list = r.rows.map(row => ({
-    id: row.id, createdAt: row.created_at, bank: Number(row.bank || 0), winnerId: row.winner_id,
-    winnerBet: Number(row.winner_bet || 0), payout: Number(row.payout || 0), anomaly: row.anomaly || null,
-    players: Array.isArray(row.players) ? row.players : [], seed: row.server_seed, hash: row.server_seed_hash
-  }));
+  let list = [];
+  try {
+    requireDatabase();
+    const r = await pool.query(`SELECT id, created_at, bank::float AS bank, winner_id, winner_bet::float AS winner_bet, payout::float AS payout,
+                                       anomaly, players, server_seed, server_seed_hash
+                                FROM ice_rounds ORDER BY created_at DESC LIMIT 30`);
+    list = r.rows.map(row => ({
+      id: row.id, createdAt: row.created_at, bank: Number(row.bank || 0), winnerId: row.winner_id,
+      winnerBet: Number(row.winner_bet || 0), payout: Number(row.payout || 0), anomaly: row.anomaly || null,
+      players: Array.isArray(row.players) ? row.players : [], seed: row.server_seed, hash: row.server_seed_hash
+    }));
+    if (list.length) iceRecentHistory = list.slice(0, 30);
+  } catch (e) {
+    // History must never block the game UI. Return the last in-memory rounds
+    // when the database history query is temporarily unavailable.
+    console.error('Ice history read fallback:', e.message);
+    list = iceRecentHistory.slice(0, 30);
+  }
   return { t: "history", list };
 }
 async function iceResetRound() {
@@ -1380,9 +1392,13 @@ async function iceFinishRound() {
   if (!winner || bank <= 0) return iceResetRound();
 
   let winnerBalanceAfter = null;
-  try {
-    const client = await pool.connect();
+
+  // Settle the actual money first. Logging/history is deliberately best-effort
+  // so a broken history row can never leave the live round stuck in "running".
+  for (let attempt = 1; attempt <= 3 && winnerBalanceAfter == null; attempt++) {
+    let client = null;
     try {
+      client = await pool.connect();
       await client.query("BEGIN");
       const r = await client.query(
         `UPDATE users SET balance=balance+$2, updated_at=NOW()
@@ -1396,39 +1412,68 @@ async function iceFinishRound() {
          VALUES ($1,'ice_win',$2,$3,$4)`,
         [String(winner.id), bank, winnerBalanceAfter, `Победа Ice Arena, раунд ${iceState.id}`]
       );
-      for (const p of players) {
-        await client.query(
-          `UPDATE users SET games_played=games_played+1, games_won=games_won+$2,
-             total_wagered=total_wagered+$3, updated_at=NOW() WHERE telegram_id=$1`,
-          [String(p.id), p.id === winner.id ? 1 : 0, Number(p.stake)]
-        );
-      }
-      await client.query(
-        `INSERT INTO ice_rounds (id,bank,winner_id,winner_bet,payout,anomaly,players,server_seed,server_seed_hash)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO NOTHING`,
-        [iceState.id, bank, String(winner.id), Number(winner.stake), bank, iceState.anomaly || null,
-          JSON.stringify(players.map(p => ({ id: p.id, name: p.name, photo: p.photo, color: p.color, stake: Number(p.stake), sx: p.sx, sy: p.sy }))), iceState.seed, iceState.hash]
-      );
       await client.query("COMMIT");
-      invalidateUserCache(winner.id);
-      cacheUser(await getUser(winner.id, { fresh: true }));
     } catch (e) {
-      try { await client.query("ROLLBACK"); } catch {}
-      console.error("Ice Arena settlement error:", e.message);
-      return;
-    } finally { client.release(); }
-  } catch (e) {
-    console.error("Ice Arena DB error:", e.message);
-    return;
+      if (client) { try { await client.query("ROLLBACK"); } catch {} }
+      if (attempt === 3) {
+        console.error("Ice Arena settlement failed after 3 attempts:", e.message);
+        // Keep the state recoverable instead of freezing forever.
+        clearTimeout(iceTimer);
+        iceTimer = setTimeout(iceFinishRound, 1200);
+        return;
+      }
+      await new Promise(r => setTimeout(r, 250 * attempt));
+    } finally {
+      client?.release();
+    }
   }
+
+  invalidateUserCache(winner.id);
+  try { cacheUser(await getUser(winner.id, { fresh: true })); } catch (e) { console.error("Ice winner cache refresh:", e.message); }
+
+  // Stats and round history cannot prevent the visible result from being shown.
+  try {
+    for (const p of players) {
+      await pool.query(
+        `UPDATE users SET games_played=games_played+1, games_won=games_won+$2,
+         total_wagered=total_wagered+$3, updated_at=NOW() WHERE telegram_id=$1`,
+        [String(p.id), p.id === winner.id ? 1 : 0, Number(p.stake)]
+      );
+    }
+  } catch (e) { console.error("Ice stats update error:", e.message); }
+
+  const rowForHistory = {
+    id: iceState.id,
+    createdAt: new Date().toISOString(),
+    bank,
+    winnerId: String(winner.id),
+    winnerBet: Number(winner.stake),
+    payout: bank,
+    anomaly: iceState.anomaly || null,
+    players: players.map(p => ({ id: p.id, name: p.name, photo: p.photo, color: p.color, stake: Number(p.stake), sx: p.sx, sy: p.sy })),
+    seed: iceState.seed,
+    hash: iceState.hash
+  };
+  iceRecentHistory.unshift(rowForHistory);
+  iceRecentHistory = iceRecentHistory.slice(0, 30);
+
+  try {
+    await pool.query(
+      `INSERT INTO ice_rounds (id,bank,winner_id,winner_bet,payout,anomaly,players,server_seed,server_seed_hash)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO NOTHING`,
+      [iceState.id, bank, String(winner.id), Number(winner.stake), bank, iceState.anomaly || null,
+        JSON.stringify(rowForHistory.players), iceState.seed, iceState.hash]
+    );
+  } catch (e) { console.error("Ice history save error:", e.message); }
 
   for (const p of players) p.status = p.id === winner.id ? "winner" : "lost";
   iceState.status = "result";
   iceBroadcast();
-  if (winnerBalanceAfter != null) io.to(`user:${winner.id}`).emit("balance_updated", { balance: winnerBalanceAfter });
+  io.to(`user:${winner.id}`).emit("balance_updated", { balance: winnerBalanceAfter });
   clearTimeout(iceTimer);
   iceTimer = setTimeout(iceResetRound, ICE_RESULT_MS);
 }
+
 async function icePlaceBet(playerId, amount) {
   amount = Number(amount);
   if (!Number.isInteger(amount) || amount < 1) throw new Error("Ставка — целое число от 1 ⭐ (1, 2, 3…)");

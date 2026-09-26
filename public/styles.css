@@ -995,12 +995,12 @@ html,body{height:100%;overflow:hidden}
 @media(max-width:600px){.ice-card-name{font-size:22px!important}.ice-arena-header{grid-template-columns:66px 1fr 66px}.ice-arena-back,.ice-arena-history-btn{font-size:10px}.ice-arena-shell{border-radius:24px}.ice-arena-board{border-radius:22px}.ice-arena-controls{padding:12px}.ice-arena-stakes button{font-size:9px}.ice-legend{grid-template-columns:1fr 1fr}}
 
 /* Otkosk: keep this view on a fixed browser scale; in particular prevent mobile numeric-input auto zoom. */
-.bounce-game{touch-action:pan-y;overscroll-behavior-y:contain;-webkit-text-size-adjust:100%;-webkit-user-select:none;user-select:none}
+.bounce-game{touch-action:pan-y;overscroll-behavior-y:auto;-webkit-text-size-adjust:100%;-webkit-user-select:none;user-select:none}
 .bounce-game input{font-size:16px!important;touch-action:manipulation;-webkit-text-size-adjust:100%}
 .bounce-input input{font-size:16px!important;min-height:44px}
 .bounce-layout,.bounce-stage,.bounce-controls{touch-action:pan-y}
 /* Otkosk mobile: while the round is active, disable browser gesture zoom only in this game. */
-.bounce-game.is-playing{touch-action:pan-y;overscroll-behavior-y:contain;overflow:visible;}
+.bounce-game.is-playing{touch-action:pan-y;overscroll-behavior-y:auto;overflow:visible;}
 .bounce-game.is-playing .bounce-stage,
 .bounce-game.is-playing .bounce-controls{touch-action:pan-y;}
 .bounce-game input{-webkit-appearance:none;-moz-appearance:textfield;}
