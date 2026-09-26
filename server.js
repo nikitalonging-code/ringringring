@@ -1144,8 +1144,14 @@ function bounceStepServer(q) {
     // Outside the ring: controlled fall, no runaway acceleration.
     q.vy = Math.min(q.vy, 900);
     q.vx *= 0.9995;
-    if (q.x < B.BR) { q.x = B.BR; q.vx = Math.abs(q.vx) * 0.35; }
-    if (q.x > B.W - B.BR) { q.x = B.W - B.BR; q.vx = -Math.abs(q.vx) * 0.35; }
+    if (q.x < B.BR) {
+      q.x = B.BR;
+      if (q.vx < 0) { q.vx = Math.abs(q.vx) * 0.35; q.bounces += 1; }
+    }
+    if (q.x > B.W - B.BR) {
+      q.x = B.W - B.BR;
+      if (q.vx > 0) { q.vx = -Math.abs(q.vx) * 0.35; q.bounces += 1; }
+    }
     if (q.y >= B.FLOOR) q.done = true;
   }
   if (q.t > B.MAX_FLIGHT_S + 0.8) { q.done = true; q.bad = true; }
@@ -1153,11 +1159,15 @@ function bounceStepServer(q) {
 function makeBouncePhysics(a, v, g0) {
   const B = BOUNCE_PHYS;
   const q = { t: 0, g0, x: B.CX, y: B.CY - 30, vx: Math.cos(a) * v, vy: Math.sin(a) * v,
-    bounces: 0, ph: 0, done: false, bad: false };
+    bounces: 0, bounceTimes: [], ph: 0, done: false, bad: false };
   const points = [{ t: 0, x: q.x, y: q.y }];
   let nextSample = 1;
   while (!q.done && q.t < B.MAX_FLIGHT_S + 0.8) {
+    const before = q.bounces;
     bounceStepServer(q);
+    if (q.bounces > before) {
+      for (let n = before; n < q.bounces; n++) q.bounceTimes.push(Number(q.t.toFixed(4)));
+    }
     // Sample the authoritative trajectory at ~120 FPS. The browser only interpolates
     // these points; it no longer runs a second, slightly different physics engine.
     while (q.t + 1e-9 >= nextSample / 120) {
@@ -1246,7 +1256,7 @@ async function playBounce(playerId, bet, modeIndex) {
       step: mode.step, bet: normalizedBet, bounces: trajectory.bounces, multiplier, payout,
       balance: balanceAfter, durationMs: Math.round(1200 + trajectory.flightMs + 250),
       physics: { a: trajectory.a, v: trajectory.v, g0: trajectory.g0, flightMs: trajectory.flightMs,
-        points: trajectory.points, ringStartAt },
+        points: trajectory.points, bounceTimes: trajectory.bounceTimes, ringStartAt },
       serverNow, ringStartAt
     };
   } finally {

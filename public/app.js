@@ -1581,7 +1581,7 @@ const bounceDpr=Math.min(window.devicePixelRatio||1,2);
 if (bounceCv) { bounceCv.width=BW*bounceDpr; bounceCv.height=BH*bounceDpr; }
 const bounceStars=Array.from({length:70},()=>[Math.random()*BW,Math.random()*(BH-BBAR),.2+Math.random()*.6]);
 let bounceMode=0,bounceBetValue=1,bouncePhase="idle",bounceSpinResult=null,bounceS=null,bounceWin=false,bounceMult=0,bounceClk=0,bounceZoneW=BW*BOUNCE_MODES_CLIENT[0].p,bounceGlow=0,bounceFlash=0,bounceMsg=null,bounceTrail=[],bounceAcc=0,bounceLast=0,bounceSp=0,bouncePop=0,bounceT=4,bounceSpawn=0,bounceRenderStarted=false;
-let bounceServerSkew=0,bouncePhysicsStartPerf=0,bounceFinalAngle=null;
+let bounceServerSkew=0,bouncePhysicsStartPerf=0,bounceFinalAngle=null,bounceDisplayedBounces=0;
 const bounceUi = id => $("#"+id);
 
 const BounceAudioContext = window.AudioContext || window.webkitAudioContext;
@@ -1676,6 +1676,7 @@ function bounceMk(result){
   const pts=Array.isArray(phys.points)?phys.points.map(p=>({t:Number(p?.[0]||0),x:Number(p?.[1]||0),y:Number(p?.[2]||0)})).filter(p=>Number.isFinite(p.t)&&Number.isFinite(p.x)&&Number.isFinite(p.y)):[];
   return {
     g0:Number(phys.g0||0), flightMs:Number(phys.flightMs||0), points:pts,
+    bounceTimes:Array.isArray(phys.bounceTimes)?phys.bounceTimes.map(Number).filter(Number.isFinite):[],
     ringStartAt:Number(result?.ringStartAt||Date.now()+BSPAWN*1000),
     startAngle:null, targetAngle:Number(phys.g0||0),
     physicsStarted:false, done:false
@@ -1716,20 +1717,37 @@ function bounceRenderStage(now){
   const rd=Math.min((now-bounceLast)/1000||0,.05);bounceLast=now;
   bounceClk+=rd;
   const nowServer=Date.now()+bounceServerSkew;
+  // The ring always rotates in one direction. During the whole active round its angle
+  // comes directly from the same server clock used to plan the trajectory; we never
+  // interpolate backwards from the current angle to g0.
   let ga=bouncePhase==='result'&&bounceFinalAngle!=null ? bounceFinalAngle : bounceGlobalRingAt(nowServer);
   if(bouncePhase==='play'&&bounceS){
     const sinceStart=performance.now()-(bouncePhysicsStartPerf-BSPAWN*1000);
+    const ringNow=bounceGlobalRingAt(nowServer);
     if(sinceStart<BSPAWN*1000){
-      const u=Math.max(0,Math.min(1,sinceStart/(BSPAWN*1000))),e=u*u*(3-2*u);
-      ga=bounceLerpAngle(bounceS.startAngle,bounceS.g0,e);
+      ga=ringNow;
     } else {
       const ft=Math.max(0,Math.min(bounceS.flightMs,performance.now()-bouncePhysicsStartPerf))/1000;
-      ga=bounceS.g0+BOM*ft;
+      // Keep the visual ring locked to the server-clock rotation. This is exactly
+      // g0 + OM*ft at the physics start, so the hole and collisions stay aligned.
+      ga=ringNow;
+
+      // Show the multiplier as soon as each authoritative collision happens.
+      // bounceTimes is produced by the server from the same physics simulation.
+      const times=Array.isArray(bounceS.bounceTimes)?bounceS.bounceTimes:[];
+      let count=0; while(count<times.length && Number(times[count])<=ft+0.0005) count++;
+      if(count>bounceDisplayedBounces){
+        const step=Number(bounceSpinResult?.step||BOUNCE_MODES_CLIENT[bounceMode]?.s||0.1);
+        for(let n=bounceDisplayedBounces+1;n<=count;n++) bouncePlayBounceSound(n);
+        bounceDisplayedBounces=count;
+        bounceMult=Number((count*step).toFixed(2));
+        bounceGlow=1; bouncePop=1;
+      }
       if(ft>=bounceS.flightMs&&!bounceS.done){
         bounceS.done=true;
         bounceFinalAngle=bounceS.g0+BOM*(bounceS.flightMs/1000);
         bouncePhase='result';
-        bounceMult=Number((bounceS?.points?.length&&bounceSpinResult?.multiplier||bounceSpinResult?.multiplier||0).toFixed(2));
+        bounceMult=Number((bounceSpinResult?.multiplier||0).toFixed(2));
         bounceMsg={win:bounceWin,t:bounceWin?'+'+Number(bounceSpinResult?.payout||0).toFixed(2)+' ⭐':'Проигрыш'};
         bounceFlash=1;
         const history=bounceUi("bounceHistory");
@@ -1782,7 +1800,7 @@ function openBounce(){
   const bounceRoot=bounceUi("bounceGame");
   if(bounceRoot){bounceRoot.style.zoom="1";bounceRoot.style.transform="none";}
   if(bounceRenderStarted===false){bounceRenderStarted=true;bounceLast=performance.now();requestAnimationFrame(bounceRenderStage)}
-  bouncePhase='idle';bounceMsg=null;bounceS=null;bounceSpinResult=null;bounceTrail=[];bounceMult=0;bounceServerSkew=0;bounceFinalAngle=null;
+  bouncePhase='idle';bounceMsg=null;bounceS=null;bounceSpinResult=null;bounceTrail=[];bounceMult=0;bounceDisplayedBounces=0;bounceServerSkew=0;bounceFinalAngle=null;
   renderBounceTabs();
   bounceRenderTag();
   bounceUi("gamesList").classList.add("hidden");bounceUi("upgradeGame").classList.add("hidden");bounceUi("bounceGame").classList.remove("hidden");
@@ -1826,9 +1844,6 @@ function installBounceZoomLock(){
   root.addEventListener("wheel",e=>{
     if(e.ctrlKey) e.preventDefault();
   },{passive:false});
-  root.addEventListener("focusout",()=>{
-    setTimeout(()=>window.scrollTo(0,0),30);
-  });
   let lastBounceTouch=0;
   root.addEventListener("touchend",e=>{
     const now=Date.now();
@@ -1847,7 +1862,6 @@ function bounceStart(){
   const bounceRoot=bounceUi("bounceGame");
   if(document.activeElement && bounceRoot?.contains(document.activeElement))document.activeElement.blur();
   bounceRoot?.classList.add("is-playing");
-  window.scrollTo(0,0);
   bouncePhase='waiting';bounceMsg=null;bounceS=null;bounceTrail=[];bounceMult=0;bounceUi("bounceErr").textContent="";bounceSetControls(true);bounceUi("bouncePlay").textContent="Отправляем…";
   socket.emit("bounce_spin",{bet,modeIndex:bounceMode});
 }
@@ -1857,6 +1871,7 @@ function bouncePrepare(result){
   bounceS=bounceMk(result); bounceAcc=0;bounceSp=0;bouncePhase='play';bounceMult=0;
   bounceServerSkew=Number(result?.serverNow||Date.now())-Date.now();
   bounceFinalAngle=null;
+  bounceDisplayedBounces=0;
   bouncePlaySpawn();bounceMsg=null;bounceTrail=[];bounceFlash=0;bounceSetControls(true);bounceUi("bouncePlay").textContent="Идёт раунд…";
   bouncePhysicsStartPerf=performance.now()+BSPAWN*1000;
   const currentAngle=bounceGlobalRingAt(Date.now()+bounceServerSkew);
