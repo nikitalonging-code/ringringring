@@ -592,8 +592,15 @@ function renderPlayers(players) {
     root.appendChild(el);
   }
 }
-function renderWinnerCard(s) {
+function renderWinnerCard(s, force = false) {
   const overlay = $("#winnerOverlay");
+  // While Ice Arena is open, the regular PVP renderer must not resurrect an
+  // old Roll result from currentState. Ice Arena explicitly calls this
+  // function with force=true when its own result is ready.
+  if (iceModeActive && !force) {
+    closeModal(overlay);
+    return;
+  }
   if (s.status === "RESULT" && s.winner) {
     const w = s.winner;
     $("#winnerAvatar").innerHTML = w.avatar
@@ -1454,8 +1461,14 @@ function closeUpgrade() {
   $("#gamesList").classList.remove("hidden");
 }
 
+let iceModeActive = false;
+
 function openIce() {
   if (!initData) return handleNotTelegram();
+  iceModeActive = true;
+  // A PVP result can remain in currentState while the user switches to Ice Arena.
+  // Never let that stale Roll result popup render over Ice Arena.
+  closeModal($("#winnerOverlay"));
   $("#gamesList").classList.add("hidden");
   $("#bounceGame").classList.add("hidden");
   $("#upgradeGame").classList.add("hidden");
@@ -1464,6 +1477,8 @@ function openIce() {
 }
 
 function closeIce() {
+  iceModeActive = false;
+  closeModal($("#winnerOverlay"));
   $("#iceGame").classList.add("hidden");
   $("#gamesList").classList.remove("hidden");
 }
@@ -2080,7 +2095,23 @@ if (historySearchInput) {
       const el = document.createElement('div'); el.className = 'zone-item' + (user && p.id === user.id ? ' mine' : '');
       el.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none"><polygon points="${poly.map(v => v[0].toFixed(2) + ',' + v[1].toFixed(2)).join(' ')}" fill="${p.color}"/></svg>`;
       const d = Math.min(46, r * W / 100 * 1.4);
-      if (d >= 14) { const a = avatar(p, 'zone-av', Math.round(d)); a.style.left = inf.cx + '%'; a.style.top = inf.cy + '%'; el.append(a); }
+      if (d >= 14) {
+        const a = avatar(p, 'zone-av', Math.round(d));
+        a.style.left = inf.cx + '%';
+        a.style.top = inf.cy + '%';
+        el.append(a);
+
+        // Show who has already placed a bet before the round starts.
+        // This remains visible in WAITING/COUNTDOWN and disappears only when
+        // the next round has no players.
+        const label = document.createElement('div');
+        label.className = 'zone-label' + (d < 25 ? ' small' : '');
+        label.style.left = inf.cx + '%';
+        label.style.top = Math.min(86, Number(inf.cy) + Math.max(10, d * 0.42)) + '%';
+        const safeName = esc(p.name || 'Игрок');
+        label.innerHTML = `<b>${safeName}</b><br><em>${fmt(p.stake)} ⭐</em>`;
+        el.append(label);
+      }
       frag.append(el); zones.push({ p, el });
     });
     return { frag, zones };
@@ -2132,7 +2163,7 @@ if (historySearchInput) {
         bet: Number(w.stake || 0),
         payout
       }
-    });
+    }, true);
   }
   function ui() {
     const now = Date.now() + skew; let txt = '', can = false;
