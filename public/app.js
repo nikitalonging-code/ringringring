@@ -1589,7 +1589,7 @@ const BOUNCE_MODES_CLIENT = [
   { n: "Средний", s: 0.15, p: 0.50 },
   { n: "Сложный", s: 0.20, p: 0.35 }
 ];
-const BW=560,BH=600,BCX=BW/2,BCY=255,BRING=185,BBR=18/1.3/1.5*1.3,BBAR=44,BFLOOR=BH-BBAR-BBR,BG=2190,BGAP=.72/1.3*1.3,BGEFF=BGAP/2-Math.asin((BBR+4/1.3)/BRING),BOM=2.97*1.3,BRING0=2.2,BSPAWN=1.2,BVMIN=593,BVMAX=1061,BDT=1/240;
+const BW=560,BH=600,BCX=BW/2,BCY=255,BRING=185,BBR=(18/1.3/1.5*1.3)*1.3,BBAR=44,BFLOOR=BH-BBAR-BBR,BG=2190,BGAP=.72/1.3*1.3,BGEFF=BGAP/2-Math.asin((BBR+4/1.3)/BRING),BOM=2.97*1.3,BRING0=2.2,BSPAWN=1.2,BVMIN=593,BVMAX=1061,BDT=1/240;
 const bounceRingAt=t=>BRING0+BOM*t;
 const bounceCv=$("#bounceCanvas");
 const bounceC=bounceCv?.getContext("2d");
@@ -1854,7 +1854,7 @@ function bounceStart(){
   socket.emit("bounce_spin",{bet,modeIndex:bounceMode});
 }
 function bouncePrepare(result){
-  bounceSpinResult=result||{};bounceWin=!!result?.win;bounceT=Math.max(3,Number(result?.durationMs||6350)/1000-BSPAWN);const g0=bounceRingAt(bounceClk+BSPAWN);const p=bouncePlan(g0,bounceWin,Number(result?.bounces)||1);bounceS=bounceMk(p.a,p.v,g0);bounceAcc=0;bounceSp=0;bouncePhase='play';bounceMult=0;bouncePlaySpawnSound();bounceMsg=null;bounceTrail=[];bounceFlash=0;bounceSetControls(true);bounceUi("bouncePlay").textContent="Идёт раунд…";
+  bounceSpinResult=result||{};bounceWin=!!result?.win;bounceT=Math.max(3,Number(result?.durationMs||6350)/1000-BSPAWN);const g0=bounceRingAt(bounceClk+BSPAWN);const p=bouncePlan(g0,bounceWin,Number(result?.bounces)||1);bounceS=bounceMk(p.a,p.v,g0);bounceAcc=0;bounceSp=0;bouncePhase='play';bounceMult=0;bouncePlaySpawn();bounceMsg=null;bounceTrail=[];bounceFlash=0;bounceSetControls(true);bounceUi("bouncePlay").textContent="Идёт раунд…";
 }
 ["openBounce"].forEach(id=>{const b=bounceUi(id);if(b)b.onclick=openBounce});
 if(bounceUi("bounceBack"))bounceUi("bounceBack").onclick=closeBounce;
@@ -2331,43 +2331,46 @@ if (historySearchInput) {
   const ANOMALY_CYCLE = ['ic-race', 'ic-mirage', 'ic-redo'];
   let shownAnomalyFor = null, anomalySpin = null, anomalyRollT = null;
   function updateAnomalyUI() {
-    const badge = $('anomalyBadge'), icon = badge.querySelector('.ab-icon');
-    if (st.status === 'waiting' || st.status === 'countdown') {
-      shownAnomalyFor = null; clearInterval(anomalySpin); clearTimeout(anomalyRollT);
-      badge.classList.remove('show', 'rolling', 'settled');
-      $('iceGame').classList.remove('mirage-active');
-      return;
-    }
-    $('iceGame').classList.toggle('mirage-active', st.anomaly === 'mirage' && st.status === 'running');
-    if (shownAnomalyFor !== st.id) {
-      shownAnomalyFor = st.id;
-      clearInterval(anomalySpin); clearTimeout(anomalyRollT);
-      badge.classList.remove('settled');
-      if (st.anomaly && ANOMALY_ICON[st.anomaly]) {
-        badge.classList.add('show', 'rolling');
-        // Плавная "прокрутка" иконок: каждая иконка сначала мягко уходит (flip-out),
-        // затем подменяется и плавно проявляется — вместо жёсткой мгновенной смены кадра.
-        let i = 0; icon.classList.remove(...ANOMALY_CYCLE, 'flip-out'); icon.classList.add(ANOMALY_CYCLE[0]);
-        anomalySpin = setInterval(() => {
-          icon.classList.add('flip-out');
-          setTimeout(() => {
-            icon.classList.remove(...ANOMALY_CYCLE); icon.classList.add(ANOMALY_CYCLE[++i % ANOMALY_CYCLE.length]);
-            icon.classList.remove('flip-out');
-          }, 90);
-        }, 170);
-        anomalyRollT = setTimeout(() => {
-          clearInterval(anomalySpin);
-          icon.classList.remove(...ANOMALY_CYCLE, 'flip-out'); icon.classList.add(ANOMALY_ICON[st.anomaly]);
-          badge.classList.remove('rolling'); badge.classList.add('settled');
-          toast('Аномалия! ' + ANOMALY_NAMES[st.anomaly]);
-        }, 850);
-      } else {
-        badge.classList.remove('show', 'rolling');
-      }
-    }
-  }
+  const badge = $('anomalyBadge'), icon = badge.querySelector('.ab-icon');
+  const active = st.status === 'running' || st.status === 'result';
+  const kind = active && Object.prototype.hasOwnProperty.call(ANOMALY_ICON, st.anomaly) ? st.anomaly : null;
+  $('iceGame').classList.toggle('mirage-active', kind === 'mirage' && st.status === 'running');
+  const key = kind ? String(st.id) + ':' + kind : null;
+  if (key === shownAnomalyFor && (key === null || badge.classList.contains('show'))) return;
+  shownAnomalyFor = key;
+  clearInterval(anomalySpin); clearTimeout(anomalyRollT);
+  anomalySpin = null; anomalyRollT = null;
+  badge.classList.remove('show', 'rolling', 'settled');
+  icon.classList.remove(...ANOMALY_CYCLE, 'flip-out');
+  icon.style.backgroundImage = '';
+  badge.removeAttribute('title');
+  if (!kind) return;
+  const paint = value => {
+    icon.classList.remove(...ANOMALY_CYCLE, 'flip-out');
+    icon.classList.add(ANOMALY_ICON[value]);
+    icon.style.backgroundImage = 'url("/icons/icon-' + value + '.jpg")';
+  };
+  badge.title = ANOMALY_NAMES[kind];
+  badge.classList.add('show');
+  if (st.status === 'result') { paint(kind); badge.classList.add('settled'); return; }
+  badge.classList.add('rolling');
+  const cycle = ['race', 'mirage', 'redo']; let i = 0;
+  paint(cycle[0]);
+  // No nested timeout: nothing can overwrite the final icon after settling.
+  anomalySpin = setInterval(() => {
+    if (shownAnomalyFor !== key) return;
+    paint(cycle[++i % cycle.length]);
+  }, 170);
+  anomalyRollT = setTimeout(() => {
+    clearInterval(anomalySpin); anomalySpin = null;
+    if (shownAnomalyFor !== key) return;
+    paint(kind);
+    badge.classList.remove('rolling'); badge.classList.add('settled');
+    toast('Аномалия! ' + ANOMALY_NAMES[kind]);
+  }, 850);
+}
 
-  // ---------- ставки ----------
+// ---------- ставки ----------
   $('iceJoinBtn').addEventListener('click', () => socket.emit('ice_bet', { amount: Math.round(Number($('betAmt').value)) }));
   document.querySelectorAll('.ice-stakes button').forEach(b => b.addEventListener('click', () => {
     const cur = Math.round(Number($('betAmt').value)) || 1;
