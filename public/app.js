@@ -2117,21 +2117,22 @@ if (historySearchInput) {
     const w = st.players.find(p => p.id === st.winnerId); if (!w) return;
     const pool = st.players.reduce((s, p) => s + p.stake, 0);
     const payout = Number(st.payout || Math.max(Number(w.stake || 0), Number((pool * 0.92).toFixed(2))));
-    const commission = Number(st.commission || Math.max(0, Number((pool - payout).toFixed(2))));
-    const avatarHtml = w.photo
-      ? `<img src="${esc(w.photo)}" alt="" loading="lazy">`
-      : `<div class="winner-fallback">${esc(String(w.name || "И").trim().charAt(0).toUpperCase() || "И")}</div>`;
-    winnerEl.innerHTML = `
-      <div class="winner-card ice-winner-card">
-        <div class="winner-crown">👑</div>
-        <div class="winner-title">Поздравляем!</div>
-        <div class="winner-avatar">${avatarHtml}</div>
-        <div class="winner-name">${esc(w.name || "Игрок")}</div>
-        <div class="winner-win-label">ВЫИГРЫШ:</div>
-        <div class="winner-payout">+${fmt(payout)} ⭐</div>
-        <div class="winner-detail">Ставка: ${fmt(w.stake || 0)} ⭐ · Комиссия: ${fmt(commission)} ⭐</div>
-      </div>`;
-    winnerEl.classList.add('show');
+
+    // Ice Arena uses the exact same global winner popup as the regular PVP Roll.
+    // The old in-arena result card is intentionally left empty/hidden.
+    winnerEl.classList.remove('show');
+    winnerEl.innerHTML = '';
+
+    renderWinnerCard({
+      status: 'RESULT',
+      winner: {
+        id: w.id,
+        name: w.name || 'Игрок',
+        avatar: w.photo || '',
+        bet: Number(w.stake || 0),
+        payout
+      }
+    });
   }
   function ui() {
     const now = Date.now() + skew; let txt = '', can = false;
@@ -2317,10 +2318,13 @@ if (historySearchInput) {
   }
   requestAnimationFrame(loop);
   function resetVisual() {
+    // A new Ice Arena round must also close the shared global winner popup.
+    closeModal($('#winnerOverlay'));
+    winnerEl.classList.remove('show'); winnerEl.innerHTML = '';
     if (!plan && !finished) return;
     plan = null; planFor = null; finished = false; cam = null; phase = '';
     arena.style.transition = ''; arena.style.transform = 'scale(1)';
-    puck.classList.remove('choosing', 'aiming', 'rushing'); winnerEl.classList.remove('show'); winnerEl.innerHTML = '';
+    puck.classList.remove('choosing', 'aiming', 'rushing');
     W = arena.clientWidth || W; place(50, 50); puck.style.visibility = 'hidden';
   }
 
