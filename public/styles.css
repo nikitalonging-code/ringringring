@@ -944,3 +944,22 @@ html,body{height:100%;overflow:hidden}
   #bounceCanvas{border-radius:26px;}
   .bounce-layout{gap:10px!important;}
 }
+
+/* RING layout fixes 2026-09-27: constrain intrinsic grid width. */
+#gamesView, #bounceGame { min-width:0; max-width:100%; }
+#bounceGame .bounce-layout { grid-template-columns:minmax(0,1fr)!important; min-width:0; width:100%; }
+#bounceGame .bounce-layout > * { min-width:0; max-width:100%; }
+#bounceGame .bounce-stage { width:100%; max-width:430px; margin:0 auto; }
+#bounceCanvas { width:100%!important; max-width:100%; height:auto!important; aspect-ratio:560 / 600; }
+#bounceGame .bounce-controls, #bounceHistory { min-width:0; width:100%; max-width:100%; }
+#bounceHistory { overflow-x:auto; }
+#bounceTabs { grid-template-columns:repeat(3,minmax(0,1fr)); min-width:0; }
+#bounceQuick { grid-template-columns:repeat(4,minmax(0,1fr)) 1px repeat(4,minmax(0,1fr)); min-width:0; }
+/* Only the host balance remains visible; keep #bal for existing syncBal(). */
+#iceGame .ice-balance-row { display:none!important; }
+/* Use the host #gamesView as the single scrolling surface. */
+#iceGame { min-width:0; height:auto; overflow:visible; }
+#iceGame .ice-body { flex:none; min-height:0; height:auto; overflow:visible; overscroll-behavior:auto; touch-action:pan-y; }
+#iceGame .ice-bet-modal { position:fixed; }
+#iceGame .ice-bet-sheet { max-height:90vh; overflow-y:auto; overscroll-behavior:contain; }
+#iceGame input { font-size:16px; }
