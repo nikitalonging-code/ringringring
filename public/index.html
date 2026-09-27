@@ -129,6 +129,15 @@ html,body{background:#0a0a0a;font-family:var(--ff-b)}
 .gm-p.win .gm-p-amt{color:#5fe0a0}
 .gm-check{width:100%;border:0;border-radius:12px;padding:12px;background:rgba(255,255,255,.08);color:#fff;font:800 13px var(--ff-b);cursor:pointer}
 .gm-check:disabled{opacity:.5;cursor:default}
+.gm-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin:0 0 12px}
+.gm-summary>div{padding:9px 7px;border-radius:12px;background:rgba(255,255,255,.05);text-align:center}
+.gm-summary span{display:block;color:var(--sub);font-size:9px;font-weight:700;margin-bottom:3px}
+.gm-summary b{display:block;color:#fff;font-size:12px}
+.gm-summary>div:first-child b{color:#5fe0a0}
+.ice-winner-card{pointer-events:none;width:min(92%,340px);padding:24px 18px 21px}
+.ice-winner-card .winner-avatar{width:64px;height:64px;margin:14px auto 10px}
+.ice-winner-card .winner-title{font-size:20px}
+.ice-winner-card .winner-payout{font-size:24px}
 .gm-verdict{margin-top:10px;text-align:center;font-size:12px;font-weight:700;min-height:16px}
 .gm-verdict.ok{color:#5fe0a0}.gm-verdict.bad{color:#ff6b6b}
 .hd-card,.hist-row{cursor:pointer}
@@ -351,6 +360,7 @@ html,body{background:#0a0a0a;font-family:var(--ff-b)}
       <div class="gm-hash"><span>Хеш</span><b id="gmHash"></b><button class="gm-copy" data-t="hash" aria-label="Скопировать хеш">⧉</button></div>
       <div class="gm-hash"><span>Сид</span><b id="gmSeed"></b><button class="gm-copy" data-t="seed" aria-label="Скопировать сид">⧉</button></div>
     </div>
+    <div class="gm-summary" id="gmSummary"></div>
     <div class="gm-players" id="gmPlayers"></div>
     <button class="gm-check" id="gmCheckBtn">Legit check</button>
     <div class="gm-verdict" id="gmVerdict"></div></div></div>

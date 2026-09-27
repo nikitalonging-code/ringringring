@@ -264,3 +264,6 @@ The original active-state highlight from the initial task zip has been restored.
 - рассылка использует `copyMessage`, поэтому можно отправлять не только текст, но и фото/видео/другие сообщения, которые Telegram разрешает копировать.
 
 Администраторы исключаются из массовой рассылки. Пользователь должен присутствовать в таблице `users` (то есть хотя бы один раз открыть/использовать бота или Mini App).
+
+### Admin Telegram command
+`/stats` in a private chat with the configured admin bot shows settled game turnover, payouts and net result for PVP Roll, Upgrade, Отскок and Ice Arena.

@@ -1413,11 +1413,14 @@ $("#createPromo").onclick = async () => {
 let upgradeSpinning = false;
 let upgradeAccumDeg = 0;
 
+const SOLO_HOUSE_EDGE_CLIENT = 0.08;
 function upgradeChance() {
   const bet = Number($("#upgradeBet").value);
   const target = Number($("#upgradeTarget").value);
   const valid = Number.isFinite(bet) && Number.isFinite(target) && bet > 0 && target > bet;
-  return { bet, target, valid, chance: valid ? (bet / target) * 100 : 0 };
+  const fairChance = valid ? (bet / target) * 100 : 0;
+  const chance = fairChance * (1 - SOLO_HOUSE_EDGE_CLIENT);
+  return { bet, target, valid, fairChance, chance };
 }
 
 function renderUpgradeWheel() {
@@ -2113,7 +2116,21 @@ if (historySearchInput) {
     st.players.forEach(p => p.zone && p.zone.classList.add(p.id === st.winnerId ? 'winner-zone' : 'loser'));
     const w = st.players.find(p => p.id === st.winnerId); if (!w) return;
     const pool = st.players.reduce((s, p) => s + p.stake, 0);
-    winnerEl.innerHTML = `<div><b>${esc(w.name)}</b><small>Победитель · +${fmt(pool)} ⭐</small></div>`;
+    const payout = Number(st.payout || Math.max(Number(w.stake || 0), Number((pool * 0.92).toFixed(2))));
+    const commission = Number(st.commission || Math.max(0, Number((pool - payout).toFixed(2))));
+    const avatarHtml = w.photo
+      ? `<img src="${esc(w.photo)}" alt="" loading="lazy">`
+      : `<div class="winner-fallback">${esc(String(w.name || "И").trim().charAt(0).toUpperCase() || "И")}</div>`;
+    winnerEl.innerHTML = `
+      <div class="winner-card ice-winner-card">
+        <div class="winner-crown">👑</div>
+        <div class="winner-title">Поздравляем!</div>
+        <div class="winner-avatar">${avatarHtml}</div>
+        <div class="winner-name">${esc(w.name || "Игрок")}</div>
+        <div class="winner-win-label">ВЫИГРЫШ:</div>
+        <div class="winner-payout">+${fmt(payout)} ⭐</div>
+        <div class="winner-detail">Ставка: ${fmt(w.stake || 0)} ⭐ · Комиссия: ${fmt(commission)} ⭐</div>
+      </div>`;
     winnerEl.classList.add('show');
   }
   function ui() {
@@ -2390,7 +2407,7 @@ if (historySearchInput) {
     if (!g) { el.innerHTML = '<span class="hd-empty">Пока нет игр</span>'; return; }
     el.innerHTML = ''; el.append(avatar(gp(g), 'lg-av', 22));
     const tag = g.anomaly && ANOMALY_ICON_URL[g.anomaly] ? ` <img class="hd-anomaly" src="${ANOMALY_ICON_URL[g.anomaly]}" alt="">` : '';
-    el.insertAdjacentHTML('beforeend', `<span class="hd-name">${esc(g.name)}${tag}</span><b class="hd-win">+${fmt(g.pool)}${GEM}</b>`);
+    el.insertAdjacentHTML('beforeend', `<span class="hd-name">${esc(g.name)}${tag}</span><b class="hd-win">+${fmt(g.payout || g.pool)}${GEM}</b>`);
   }
   function renderHistory(h) {
     hData = h;
@@ -2401,7 +2418,7 @@ if (historySearchInput) {
       const row = document.createElement('div'); row.className = 'hist-row'; row.append(avatar(gp(g), 'lg-av', 30));
       const when = new Date(g.ts).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
       const tag = g.anomaly && ANOMALY_ICON_URL[g.anomaly] ? ` <img class="hd-anomaly" src="${ANOMALY_ICON_URL[g.anomaly]}" alt="">` : '';
-      row.insertAdjacentHTML('beforeend', `<span style="flex:1;min-width:0"><span class="hd-name">${esc(g.name)}${tag}</span><small>${g.players.length} игр. · ${when}</small></span><b class="hd-win">+${fmt(g.pool)}${GEM}</b>`);
+      row.insertAdjacentHTML('beforeend', `<span style="flex:1;min-width:0"><span class="hd-name">${esc(g.name)}${tag}</span><small>${g.players.length} игр. · ${when}</small></span><b class="hd-win">+${fmt(g.payout || g.pool)}${GEM}</b>`);
       row.addEventListener('click', () => openGame(g));
       list.append(row);
     });
@@ -2419,13 +2436,18 @@ if (historySearchInput) {
     $('gmHash').textContent = shortHex(g.hash);
     $('gmSeed').textContent = shortHex(String(g.seed));
     const pool = g.players.reduce((s, p) => s + p.stake, 0);
+    // Older Ice Arena history rows predate the commission fields, so their
+    // actual historical payout is the stored pool. New rows have payout set.
+    const payout = Number(g.payout || g.pool || 0);
+    const commission = Number(g.commission || Math.max(0, Number((pool - payout).toFixed(2))));
+    $('gmSummary').innerHTML = `<div><span>Выплата</span><b>+${fmt(payout)}${GEM}</b></div><div><span>Комиссия</span><b>${fmt(commission)}${GEM}</b></div><div><span>Банк</span><b>${fmt(pool)}${GEM}</b></div>`;
     const ordered = [...g.players].sort((a, b) => b.stake - a.stake);
     $('gmPlayers').innerHTML = '';
     ordered.forEach(p => {
       const isWin = p.id === g.winnerId;
       const row = document.createElement('div'); row.className = 'gm-p' + (isWin ? ' win' : '');
       row.append(avatar(p, 'lg-av', 32));
-      row.insertAdjacentHTML('beforeend', `<span class="gm-p-name"><b>${esc(p.name)}${isWin ? '<span class="gm-win-badge">Победитель</span>' : ''}</b><small>${(p.stake / pool * 100).toFixed(2)}%</small></span><b class="gm-p-amt">${isWin ? '+' : ''}${fmt(isWin ? pool : p.stake)}${GEM}</b>`);
+      row.insertAdjacentHTML('beforeend', `<span class="gm-p-name"><b>${esc(p.name)}${isWin ? '<span class="gm-win-badge">Победитель</span>' : ''}</b><small>${(p.stake / pool * 100).toFixed(2)}%</small></span><b class="gm-p-amt">${isWin ? '+' : ''}${fmt(isWin ? payout : p.stake)}${GEM}</b>`);
       $('gmPlayers').append(row);
     });
     $('gmVerdict').textContent = ''; $('gmVerdict').className = 'gm-verdict';

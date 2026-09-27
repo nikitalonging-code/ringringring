@@ -513,6 +513,8 @@ async function initDb() {
     )`,
 
     // Migrate an already-existing database without wiping users.
+    `ALTER TABLE ice_rounds ADD COLUMN IF NOT EXISTS payout NUMERIC(20,2) NOT NULL DEFAULT 0`,
+    `ALTER TABLE ice_rounds ADD COLUMN IF NOT EXISTS commission NUMERIC(20,2) NOT NULL DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT NOT NULL DEFAULT ''`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by TEXT`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS games_played INTEGER NOT NULL DEFAULT 0`,
@@ -1084,12 +1086,23 @@ async function placeBet(playerId, amount) {
   }
 }
 
+// ---------- SOLO GAME RISK RULES ----------
+// Solo outcomes stay random and are never selected by player identity/history.
+// Upgrade uses a disclosed 8% house edge: actual win chance is 92% of the
+// mathematically fair chance (stake / target). This gives the application a
+// positive expected margin without rigging a particular player's outcome.
+// The guarantee is mathematical expectation, not a promise that every finite
+// sequence of rounds is profitable.
+const SOLO_HOUSE_EDGE = (() => {
+  const raw = Number(String(process.env.SOLO_HOUSE_EDGE ?? "0.08").replace(",", "."));
+  return Number.isFinite(raw) ? Math.min(0.25, Math.max(0, raw)) : 0.08;
+})();
+const SOLO_RTP = 1 - SOLO_HOUSE_EDGE;
+
 // ---------- UPGRADE (solo game) ----------
-// Player picks a stake and a target amount (target > stake). The chance of
-// success is exactly stake/target — the same ratio that sizes the yellow
-// slice of the wheel. Win: balance receives `target`. Loss: the stake
-// (already debited) is simply gone. No extra commission is taken; the odds
-// themselves are the house edge.
+// Player picks a stake and a target amount (target > stake). The displayed
+// chance is the fair chance (stake/target) reduced by the configured house
+// edge. Win: balance receives `target`. Loss: the stake is already debited.
 
 // ---------- ОТСКОК (solo game) ----------
 // The client supplies only the stake and mode. The server debits the real
@@ -1193,7 +1206,8 @@ async function playUpgrade(playerId, bet, target) {
   if (!dbUser) throw new Error("Пользователь не найден в базе данных.");
   if (dbUser.banned) throw new Error("Ваш аккаунт заблокирован в приложении.");
 
-  const chance = (bet / target) * 100;
+  const fairChance = (bet / target) * 100;
+  const chance = fairChance * SOLO_RTP;
 
   let balance = await debitBalance(playerId, bet, {
     type: "upgrade_bet",
@@ -1240,7 +1254,9 @@ async function playUpgrade(playerId, bet, target) {
 
   return {
     win,
+    fairChance: Number(fairChance.toFixed(4)),
     chance: Number(chance.toFixed(4)),
+    houseEdge: Number((SOLO_HOUSE_EDGE * 100).toFixed(2)),
     bet,
     target,
     rollPercent,
@@ -1320,7 +1336,7 @@ function iceNewRound() {
   const seed = crypto.randomInt(0, 2 ** 31);
   const anomaly = icePendingAnomaly || iceRollAnomaly();
   icePendingAnomaly = null;
-  return { id: iceRoundSeq++, status: "waiting", players: [], endsAt: 0, startAt: 0, seed, hash: iceSha256(seed), winnerId: null, anomaly };
+  return { id: iceRoundSeq++, status: "waiting", players: [], endsAt: 0, startAt: 0, seed, hash: iceSha256(seed), winnerId: null, anomaly, payout: 0, commission: 0 };
 }
 let iceRound = iceNewRound();
 
@@ -1347,6 +1363,8 @@ function iceStateMsg() {
     now: Date.now(), id: iceRound.id, status: iceRound.status, endsAt: iceRound.endsAt, startAt: iceRound.startAt,
     hash: iceRound.hash, seed: revealed ? iceRound.seed : null, winnerId: iceRound.winnerId,
     anomaly: revealed ? (iceRound.anomaly || null) : null,
+    payout: iceRound.status === "result" ? Number(iceRound.payout || 0) : 0,
+    commission: iceRound.status === "result" ? Number(iceRound.commission || 0) : 0,
     players: iceRound.players.map(p => ({ id: p.id, name: p.name, photo: p.photo, stake: p.stake, color: p.color, sx: p.sx, sy: p.sy }))
   };
 }
@@ -1360,9 +1378,9 @@ async function icePersistRound(entry) {
   try {
     requireDatabase();
     await pool.query(
-      `INSERT INTO ice_rounds (id, pool, winner_id, seed, seed_hash, anomaly, players)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (id) DO NOTHING`,
-      [entry.id, entry.pool, entry.winnerId, String(entry.seed), entry.hash, entry.anomaly, JSON.stringify(entry.players)]
+      `INSERT INTO ice_rounds (id, pool, winner_id, seed, seed_hash, anomaly, payout, commission, players)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO NOTHING`,
+      [entry.id, entry.pool, entry.winnerId, String(entry.seed), entry.hash, entry.anomaly, Number(entry.payout || 0), Number(entry.commission || 0), JSON.stringify(entry.players)]
     );
   } catch (e) { console.error("ice_rounds persist error:", e.message); }
 }
@@ -1370,13 +1388,14 @@ async function icePersistRound(entry) {
 async function loadIceHistory() {
   try {
     requireDatabase();
-    const r = await pool.query(`SELECT id, created_at, pool, winner_id, seed, seed_hash, anomaly, players FROM ice_rounds ORDER BY id DESC LIMIT 200`);
+    const r = await pool.query(`SELECT id, created_at, pool, winner_id, seed, seed_hash, anomaly, payout, commission, players FROM ice_rounds ORDER BY id DESC LIMIT 200`);
     iceHistory = r.rows.map(row => {
       const players = row.players || [];
       const wp = players.find(p => p.id === row.winner_id) || {};
       return {
         id: Number(row.id), ts: new Date(row.created_at).getTime(), pool: Number(row.pool),
         winnerId: row.winner_id, name: wp.name || "", photo: wp.photo || "", color: wp.color || "#ffc61a",
+        payout: Number(row.payout || 0), commission: Number(row.commission || 0),
         seed: Number(row.seed), hash: row.seed_hash, anomaly: row.anomaly || null, players
       };
     });
@@ -1433,9 +1452,17 @@ function iceStartRun() {
 async function iceFinish() {
   const poolAmount = ice_r3(iceRound.players.reduce((s, p) => s + p.stake, 0));
   const winner = iceRound.players.find(p => p.id === iceRound.winnerId);
+  // Same settlement rule as the PVP roll: target 8% commission, while the
+  // winner is never paid less than the original stake.
+  const normalPayout = Number((poolAmount * 0.92).toFixed(2));
+  const payout = Math.max(Number(winner?.stake || 0), normalPayout);
+  const commission = Math.max(0, Number((poolAmount - payout).toFixed(2)));
+  iceRound.payout = payout;
+  iceRound.commission = commission;
   const entry = {
     id: iceRound.id, ts: Date.now(), pool: poolAmount, winnerId: iceRound.winnerId,
     name: winner?.name || "", photo: winner?.photo || "", color: winner?.color || "#ffc61a",
+    payout, commission,
     seed: iceRound.seed, hash: iceRound.hash, anomaly: iceRound.anomaly || null,
     players: iceRound.players.map(p => ({ id: p.id, name: p.name, photo: p.photo, color: p.color, stake: p.stake }))
   };
@@ -1449,7 +1476,7 @@ async function iceFinish() {
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
-        const balanceAfter = await creditBalance(winner.id, poolAmount, client, { type: "ice_win", description: `Победа Ice Arena, раунд #${entry.id}` });
+        const balanceAfter = await creditBalance(winner.id, payout, client, { type: "ice_win", description: `Победа Ice Arena, раунд #${entry.id} · ${payout.toFixed(2)} ⭐ · комиссия ${commission.toFixed(2)} ⭐` });
         for (const p of iceRound.players) {
           await client.query(
             `UPDATE users SET games_played = games_played + 1, games_won = games_won + $2, total_wagered = total_wagered + $3, updated_at = NOW() WHERE telegram_id = $1`,
@@ -1550,6 +1577,10 @@ io.on("connection", socket => {
 
   socket.on("ice_request_state", () => {
     socket.emit("ice_state", iceStateMsg());
+    socket.emit("ice_history", iceHistMsg());
+  });
+
+  socket.on("ice_request_history", () => {
     socket.emit("ice_history", iceHistMsg());
   });
 
@@ -3497,6 +3528,83 @@ app.post("/api/support/webhook", async (req, res) => {
   }
 });
 
+
+function appGameProfitStats() {
+  return pool.query(`
+    WITH sums AS (
+      SELECT
+        COALESCE(SUM(CASE WHEN type='pvp_bet' THEN -amount ELSE 0 END),0)::float AS pvp_bets,
+        COALESCE(SUM(CASE WHEN type='pvp_win' THEN amount ELSE 0 END),0)::float AS pvp_payouts,
+        COALESCE(SUM(CASE WHEN type='upgrade_bet' THEN -amount ELSE 0 END),0)::float AS upgrade_bets,
+        COALESCE(SUM(CASE WHEN type='upgrade_win' THEN amount ELSE 0 END),0)::float AS upgrade_payouts,
+        COALESCE(SUM(CASE WHEN type='bounce_bet' THEN -amount ELSE 0 END),0)::float AS bounce_bets,
+        COALESCE(SUM(CASE WHEN type='bounce_win' THEN amount ELSE 0 END),0)::float AS bounce_payouts,
+        COALESCE(SUM(CASE WHEN type='ice_bet' THEN -amount ELSE 0 END),0)::float AS ice_bets,
+        COALESCE(SUM(CASE WHEN type='ice_win' THEN amount ELSE 0 END),0)::float AS ice_payouts
+      FROM balance_transactions
+      WHERE type IN ('pvp_bet','pvp_win','upgrade_bet','upgrade_win','bounce_bet','bounce_win','ice_bet','ice_win')
+    )
+    SELECT *,
+      (pvp_bets - pvp_payouts)::float AS pvp_profit,
+      (upgrade_bets - upgrade_payouts)::float AS upgrade_profit,
+      (bounce_bets - bounce_payouts)::float AS bounce_profit,
+      (ice_bets - ice_payouts)::float AS ice_profit,
+      ((pvp_bets - pvp_payouts)
+       + (upgrade_bets - upgrade_payouts)
+       + (bounce_bets - bounce_payouts)
+       + (ice_bets - ice_payouts))::float AS total_profit
+    FROM sums
+  `);
+}
+
+async function handleTelegramStats(message) {
+  const chatId = message?.chat?.id;
+  const adminId = String(message?.from?.id || "");
+  if (!chatId) return;
+  if (!isAdmin(adminId)) {
+    await telegramApi("sendMessage", {
+      chat_id: chatId,
+      text: "⛔ Команда /stats доступна только администраторам."
+    }).catch(() => {});
+    return;
+  }
+
+  try {
+    requireDatabase();
+    const r = await appGameProfitStats();
+    const s = r.rows[0] || {};
+    const mode = (name, bets, payouts, profit) =>
+      `${name}\n  Ставки: <b>${formatAdminMoney(bets)} ⭐</b>\n  Выплаты: <b>${formatAdminMoney(payouts)} ⭐</b>\n  Результат: <b>${profit >= 0 ? "+" : ""}${formatAdminMoney(profit)} ⭐</b>`;
+
+    const currentPvp = totalBank();
+    const currentIce = ice_r3(iceRound.players.reduce((sum, p) => sum + Number(p.stake || 0), 0));
+
+    const text =
+      `📊 <b>ПРИБЫЛЬ ПРИЛОЖЕНИЯ</b>\n\n` +
+      mode("🎡 PVP ROLL", Number(s.pvp_bets), Number(s.pvp_payouts), Number(s.pvp_profit)) + `\n\n` +
+      mode("⬆️ UPGRADE", Number(s.upgrade_bets), Number(s.upgrade_payouts), Number(s.upgrade_profit)) + `\n\n` +
+      mode("↩️ ОТСКОК", Number(s.bounce_bets), Number(s.bounce_payouts), Number(s.bounce_profit)) + `\n\n` +
+      mode("❄️ ICE ARENA", Number(s.ice_bets), Number(s.ice_payouts), Number(s.ice_profit)) + `\n\n` +
+      `━━━━━━━━━━━━━━\n` +
+      `💰 <b>ОБЩИЙ РЕЗУЛЬТАТ: ${Number(s.total_profit) >= 0 ? "+" : ""}${formatAdminMoney(s.total_profit)} ⭐</b>\n\n` +
+      `⏳ Незавершённый PVP банк: <b>${formatAdminMoney(currentPvp)} ⭐</b>\n` +
+      `⏳ Незавершённый Ice Arena банк: <b>${formatAdminMoney(currentIce)} ⭐</b>\n\n` +
+      `<i>Результат считается по проведённым игровым ставкам и выплатам из PostgreSQL.</i>`;
+
+    await telegramApi("sendMessage", {
+      chat_id: chatId,
+      text,
+      parse_mode: "HTML"
+    });
+  } catch (e) {
+    await telegramApi("sendMessage", {
+      chat_id: chatId,
+      text: `❌ Не удалось получить статистику: ${escapeHtmlTelegram(e.message || "DB error")}`,
+      parse_mode: "HTML"
+    }).catch(() => {});
+  }
+}
+
 app.post("/api/telegram/webhook", async (req, res) => {
   const expectedSecret = activeWebhookSecret();
   if (expectedSecret && req.headers["x-telegram-bot-api-secret-token"] !== expectedSecret) {
@@ -3531,6 +3639,12 @@ app.post("/api/telegram/webhook", async (req, res) => {
 
     const incomingMessage = update.message;
     const incomingText = String(incomingMessage?.text || "").trim();
+
+    if (/^\/stats(?:@\w+)?$/i.test(incomingText)) {
+      res.json({ ok: true, handled: "stats" });
+      setImmediate(() => handleTelegramStats(incomingMessage).catch(e => console.error("Telegram /stats async error:", e.message)));
+      return;
+    }
 
     if (/^\/broadcast(?:@\w+)?$/i.test(incomingText)) {
       res.json({ ok: true, handled: "broadcast" });
