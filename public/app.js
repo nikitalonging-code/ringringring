@@ -498,7 +498,6 @@ socket.on("error_message", message => {
   }
   if (bouncePhase === "waiting" || bouncePhase === "play") {
     bouncePhase = "idle";
-    bounceUi("bounceGame")?.classList.remove("is-playing");
     bounceSetControls(false);
     bounceUi("bouncePlay").textContent = "Играть";
     bounceUi("bounceErr").textContent = message || "Ошибка раунда.";
@@ -1452,6 +1451,23 @@ function closeUpgrade() {
   $("#gamesList").classList.remove("hidden");
 }
 
+function openIce() {
+  if (!initData) return handleNotTelegram();
+  $("#gamesList").classList.add("hidden");
+  $("#bounceGame").classList.add("hidden");
+  $("#upgradeGame").classList.add("hidden");
+  $("#iceGame").classList.remove("hidden");
+  if (window.__iceOnOpen) window.__iceOnOpen();
+}
+
+function closeIce() {
+  $("#iceGame").classList.add("hidden");
+  $("#gamesList").classList.remove("hidden");
+}
+
+if ($("#openIceArena")) $("#openIceArena").onclick = openIce;
+if ($("#iceBack")) $("#iceBack").onclick = closeIce;
+
 $("#openUpgrade").onclick = openUpgrade;
 $("#upgradeBack").onclick = closeUpgrade;
 
@@ -1581,7 +1597,6 @@ const bounceDpr=Math.min(window.devicePixelRatio||1,2);
 if (bounceCv) { bounceCv.width=BW*bounceDpr; bounceCv.height=BH*bounceDpr; }
 const bounceStars=Array.from({length:70},()=>[Math.random()*BW,Math.random()*(BH-BBAR),.2+Math.random()*.6]);
 let bounceMode=0,bounceBetValue=1,bouncePhase="idle",bounceSpinResult=null,bounceS=null,bounceWin=false,bounceMult=0,bounceClk=0,bounceZoneW=BW*BOUNCE_MODES_CLIENT[0].p,bounceGlow=0,bounceFlash=0,bounceMsg=null,bounceTrail=[],bounceAcc=0,bounceLast=0,bounceSp=0,bouncePop=0,bounceT=4,bounceSpawn=0,bounceRenderStarted=false;
-let bounceServerSkew=0,bouncePhysicsStartPerf=0,bounceFinalAngle=null,bounceDisplayedBounces=0;
 const bounceUi = id => $("#"+id);
 
 const BounceAudioContext = window.AudioContext || window.webkitAudioContext;
@@ -1671,34 +1686,54 @@ function bounceSetBet(v){
   [...document.querySelectorAll("#bounceQuick button[data-v]")].forEach(b=>b.classList.toggle("on",Number(b.dataset.v)===v));
   return v;
 }
-function bounceMk(result){
-  const phys=result?.physics||{};
-  const pts=Array.isArray(phys.points)?phys.points.map(p=>({t:Number(p?.[0]||0),x:Number(p?.[1]||0),y:Number(p?.[2]||0)})).filter(p=>Number.isFinite(p.t)&&Number.isFinite(p.x)&&Number.isFinite(p.y)):[];
-  return {
-    g0:Number(phys.g0||0), flightMs:Number(phys.flightMs||0), points:pts,
-    bounceTimes:Array.isArray(phys.bounceTimes)?phys.bounceTimes.map(Number).filter(Number.isFinite):[],
-    collisionTimes:Array.isArray(phys.collisionEvents) ? phys.collisionEvents.map(e=>Number(e?.t)).filter(Number.isFinite) : [],
-    ringStartAt:Number(result?.ringStartAt||Date.now()+BSPAWN*1000),
-    startAngle:null, targetAngle:Number(phys.g0||0),
-    physicsStarted:false, done:false
-  };
+function bounceMk(a,v,g0){return{t:0,g0,x:BCX,y:BCY-30,px:BCX,py:BCY-30,vx:Math.cos(a)*v,vy:Math.sin(a)*v,b:0,ph:0,done:0,bad:0,hit:0,out:0}}
+function bounceStep(q){
+  q.t+=BDT;q.vy+=BG*BDT;q.x+=q.vx*BDT;q.y+=q.vy*BDT;
+  const dx=q.x-BCX,dy=q.y-BCY,d=Math.hypot(dx,dy);
+  if(q.ph===0){
+    if(d>BRING-BBR){
+      let f=Math.atan2(dy,dx)-(q.g0+BOM*q.t);f=Math.atan2(Math.sin(f),Math.cos(f));
+      if(Math.abs(f)<BGEFF)q.ph=1;
+      else{
+        const nx=dx/d,ny=dy/d,vn=q.vx*nx+q.vy*ny;
+        if(vn>0){q.vx-=2*vn*nx;q.vy-=2*vn*ny;q.x=BCX+nx*(BRING-BBR);q.y=BCY+ny*(BRING-BBR);const sp=Math.hypot(q.vx,q.vy),k=Math.min(Math.max(sp,BVMIN),BVMAX)/sp;q.vx*=k;q.vy*=k;q.b++;q.hit=1}
+      }
+    }
+  }else{
+    if(d>BRING+BBR)q.out=1;
+    if(d<BRING-BBR-3){q.ph=0;q.out=0}
+    else if(q.out&&d<BRING+BBR){
+      let f=Math.atan2(dy,dx)-(q.g0+BOM*q.t);f=Math.atan2(Math.sin(f),Math.cos(f));
+      const nx=dx/d,ny=dy/d,vn=q.vx*nx+q.vy*ny;
+      if(Math.abs(f)>=BGEFF&&vn<0){q.vx-=1.75*vn*nx;q.vy-=1.75*vn*ny;q.x=BCX+nx*(BRING+BBR);q.y=BCY+ny*(BRING+BBR);q.b++;q.hit=1}
+    }
+    if(q.x<BBR||q.x>BW-BBR){q.vx=-q.vx;q.x=Math.min(Math.max(q.x,BBR),BW-BBR)}
+    if(q.y>=BFLOOR)q.done=1;
+  }
+  if(q.t>bounceT+.6){q.bad=1;q.done=1}
 }
-function bounceLerpAngle(a,b,t){
-  const tau=Math.PI*2; let d=((b-a+Math.PI)%tau+tau)%tau-Math.PI; return a+d*t;
-}
-function bounceGlobalRingAt(ms){
-  // Keep the angle unwrapped. Normalising to [0,2π) made the arc jump from 2π to 0
-  // and visually look like it reversed direction when the ring crossed the seam.
-  return BRING0+BOM*(Number(ms)/1000);
-}
-function bouncePointAt(s,seconds){
-  const pts=s?.points||[]; if(!pts.length)return {x:BCX,y:BCY-30};
-  if(seconds<=pts[0].t)return {x:pts[0].x,y:pts[0].y};
-  const last=pts[pts.length-1]; if(seconds>=last.t)return {x:last.x,y:last.y};
-  let lo=0,hi=pts.length-1;
-  while(lo+1<hi){const mid=(lo+hi)>>1;if(pts[mid].t<=seconds)lo=mid;else hi=mid;}
-  const a=pts[lo],b=pts[hi],f=(seconds-a.t)/Math.max(1e-6,b.t-a.t);
-  return {x:a.x+(b.x-a.x)*f,y:a.y+(b.y-a.y)*f};
+function bouncePlan(g0,winTarget,targetBounces){
+  const px=BOUNCE_MODES_CLIENT[bounceMode].p*BW;
+  const target=Math.max(1,Math.min(25,Number(targetBounces)||1));
+  // The server is authoritative about the bounce count. Pick a client-side
+  // trajectory with exactly the same number of physical wall hits so the
+  // visible multiplier can never disagree with the final payout.
+  for(let i=0;i<12000;i++){
+    const a=Math.random()*6.283,v=BVMIN+Math.random()*210,q=bounceMk(a,v,g0);
+    while(!q.done)bounceStep(q);
+    if(q.bad||q.b!==target||Math.abs(q.x-px)<24||Math.abs(q.t-bounceT)>.35)continue;
+    if((q.x<px)===winTarget)return {a,v};
+  }
+  // Wider fallback: exact bounce count and win/loss side are still preserved,
+  // while the landing-time tolerance is relaxed.
+  for(let i=0;i<12000;i++){
+    const a=Math.random()*6.283,v=BVMIN+Math.random()*210,q=bounceMk(a,v,g0);
+    while(!q.done)bounceStep(q);
+    if(q.bad||q.b!==target)continue;
+    if((q.x<px)===winTarget)return {a,v};
+  }
+  // Last-resort visual fallback: the multiplier remains tied to targetBounces.
+  return {a:winTarget?Math.PI:0.2,v:520};
 }
 function bounceSetControls(disabled){
   const ids=["bouncePlay","bounceBet","bounceDec","bounceInc"];
@@ -1719,90 +1754,66 @@ function bounceRenderStage(now){
   if(!bounceC)return;
   const rd=Math.min((now-bounceLast)/1000||0,.05);bounceLast=now;
   bounceClk+=rd;
-  const nowServer=Date.now()+bounceServerSkew;
-  // The ring always rotates in one direction. During the whole active round its angle
-  // comes directly from the same server clock used to plan the trajectory; we never
-  // interpolate backwards from the current angle to g0.
-  let ga=bouncePhase==='result'&&bounceFinalAngle!=null ? bounceFinalAngle : bounceGlobalRingAt(nowServer);
-  if(bouncePhase==='play'&&bounceS){
-    const sinceStart=performance.now()-(bouncePhysicsStartPerf-BSPAWN*1000);
-    const ringNow=bounceGlobalRingAt(nowServer);
-    if(sinceStart<BSPAWN*1000){
-      ga=ringNow;
-    } else {
-      const ft=Math.max(0,Math.min(bounceS.flightMs,performance.now()-bouncePhysicsStartPerf))/1000;
-      // Keep the visual ring locked to the server-clock rotation. This is exactly
-      // g0 + OM*ft at the physics start, so the hole and collisions stay aligned.
-      ga=ringNow;
-
-      // Show the multiplier as soon as each authoritative collision happens.
-      // bounceTimes is produced by the server from the same physics simulation.
-      const times=(Array.isArray(bounceS.collisionTimes)&&bounceS.collisionTimes.length)?bounceS.collisionTimes:bounceS.bounceTimes;
-      let count=0; while(count<times.length && Number(times[count])<=ft+0.0005) count++;
-      if(count>bounceDisplayedBounces){
-        const step=Number(bounceSpinResult?.step||BOUNCE_MODES_CLIENT[bounceMode]?.s||0.1);
-        for(let n=bounceDisplayedBounces+1;n<=count;n++) bouncePlayBounceSound(n);
-        bounceDisplayedBounces=count;
-        bounceMult=Number((count*step).toFixed(2));
-        bounceGlow=1; bouncePop=1;
-      }
-      if(ft>=bounceS.flightMs&&!bounceS.done){
-        bounceS.done=true;
-        bounceFinalAngle=bounceS.g0+BOM*(bounceS.flightMs/1000);
+  const dt=rd;
+  const ga=bounceRingAt(bounceClk-BDT);
+  if(bouncePhase==='play'){
+    let go=bounceSp>=BSPAWN;
+    if(!go){const n=bounceSp+dt;if(n>=BSPAWN){bounceAcc=n-BSPAWN;bounceSp=BSPAWN;go=true}else bounceSp=n}
+    else bounceAcc+=dt;
+    if(go&&bounceS){
+      while(bounceAcc>=BDT&&!bounceS.done){bounceS.px=bounceS.x;bounceS.py=bounceS.y;bounceStep(bounceS);bounceAcc-=BDT;if(bounceS.hit){bounceS.hit=0;bounceGlow=1;bouncePop=1;bounceMult=Number((bounceS.b*BOUNCE_MODES_CLIENT[bounceMode].s).toFixed(2));bouncePlayBounceSound(bounceS.b);}}
+      if(bounceS.done){
         bouncePhase='result';
-        bounceMult=Number((bounceSpinResult?.multiplier||0).toFixed(2));
+        bounceMult=Number((bounceS.b*BOUNCE_MODES_CLIENT[bounceMode].s).toFixed(2));
         bounceMsg={win:bounceWin,t:bounceWin?'+'+Number(bounceSpinResult?.payout||0).toFixed(2)+' ⭐':'Проигрыш'};
         bounceFlash=1;
         const history=bounceUi("bounceHistory");
         if(history){
-          const chip=document.createElement("span");chip.className=`chip ${bounceWin ? "w" : "l"}`;chip.textContent=`${Number(bounceSpinResult?.multiplier||0).toFixed(2)}×`;history.prepend(chip);while(history.children.length>30)history.lastElementChild.remove();
+          const chip=document.createElement("span");
+          chip.className=`chip ${bounceWin ? "w" : "l"}`;
+          chip.textContent=`${Number(bounceSpinResult?.multiplier||0).toFixed(2)}×`;
+          history.prepend(chip);
+          while(history.children.length>30)history.lastElementChild.remove();
         }
-        bounceSetControls(false);bounceUi("bounceGame")?.classList.remove("is-playing");bounceUi("bouncePlay").textContent="Играть";setBalance(bounceSpinResult?.balance);
+        bounceSetControls(false);
+        bounceUi("bouncePlay").textContent="Играть";
+        setBalance(bounceSpinResult?.balance);
         if(bounceWin){bouncePlayWinSound(bounceMult);toast(`ОТСКОК: +${Number(bounceSpinResult?.payout||0).toFixed(2)} ⭐`);}else{bouncePlayLoseSound();toast("ОТСКОК: проигрыш");}
       }
     }
   }
-  bounceGlow=Math.max(0,bounceGlow-rd*3);bouncePop=Math.max(0,bouncePop-rd*5);bounceFlash=Math.max(0,bounceFlash-rd*.8);
-  bounceZoneW+=(BOUNCE_MODES_CLIENT[bounceMode].p*BW-bounceZoneW)*Math.min(1,rd*8);
+  if(bouncePhase==='result'&&bounceS){/* keep the final ball frozen */}
+  bounceGlow=Math.max(0,bounceGlow-dt*3);bouncePop=Math.max(0,bouncePop-dt*5);bounceFlash=Math.max(0,bounceFlash-dt*.8);
+  bounceZoneW+=(BOUNCE_MODES_CLIENT[bounceMode].p*BW-bounceZoneW)*Math.min(1,dt*8);
   bounceC.setTransform(bounceDpr,0,0,bounceDpr,0,0);
   const bg=bounceC.createRadialGradient(BCX,BCY,20,BCX,BCY,420);bg.addColorStop(0,'#2a1809');bg.addColorStop(1,'#080604');bounceC.fillStyle=bg;bounceC.fillRect(0,0,BW,BH);
   bounceC.strokeStyle='rgba(255,138,31,.05)';bounceC.lineWidth=1;bounceC.beginPath();for(let i=40;i<BW;i+=40){bounceC.moveTo(i,0);bounceC.lineTo(i,BH)}for(let j=40;j<BH;j+=40){bounceC.moveTo(0,j);bounceC.lineTo(BW,j)}bounceC.stroke();
   bounceC.fillStyle='#ffc98a';bounceStars.forEach(q=>{bounceC.globalAlpha=q[2];bounceC.fillRect(q[0],q[1],1.6,1.6)});bounceC.globalAlpha=1;
   bounceC.textAlign='center';bounceC.textBaseline='middle';bounceC.font='800 '+(64+bouncePop*12)+'px "Segoe UI",system-ui,sans-serif';bounceC.fillStyle='rgba(255,138,31,'+(.18+bouncePop*.22)+')';bounceC.fillText(bounceMult.toFixed(2)+'×',BCX,BCY);
-  const a0=ga+BGAP/2,a1=ga+6.2832-BGAP/2;
-  bounceC.lineCap='round';bounceC.strokeStyle='rgba(255,138,31,.14)';bounceC.lineWidth=18;bounceC.beginPath();bounceC.arc(BCX,BCY,BRING,a0,a1);bounceC.stroke();
-  bounceC.shadowColor='#ff8a1f';bounceC.shadowBlur=14+bounceGlow*24;bounceC.strokeStyle='#ff9a2e';bounceC.lineWidth=6;bounceC.beginPath();bounceC.arc(BCX,BCY,BRING,a0,a1);bounceC.stroke();bounceC.shadowBlur=0;
-  bounceC.fillStyle='#fff3e2';[a0,a1].forEach(a=>{bounceC.beginPath();bounceC.arc(BCX+BRING*Math.cos(a),BCY+BRING*Math.sin(a),5,0,6.2832);bounceC.fill()});
+  const a0=ga+BGAP/2,a1=ga+6.2832-BGAP/2;bounceC.lineCap='round';bounceC.strokeStyle='rgba(255,138,31,.14)';bounceC.lineWidth=18;bounceC.beginPath();bounceC.arc(BCX,BCY,BRING,a0,a1);bounceC.stroke();bounceC.shadowColor='#ff8a1f';bounceC.shadowBlur=14+bounceGlow*24;bounceC.strokeStyle='#ff9a2e';bounceC.lineWidth=6;bounceC.beginPath();bounceC.arc(BCX,BCY,BRING,a0,a1);bounceC.stroke();bounceC.shadowBlur=0;bounceC.fillStyle='#fff3e2';[a0,a1].forEach(a=>{bounceC.beginPath();bounceC.arc(BCX+BRING*Math.cos(a),BCY+BRING*Math.sin(a),5,0,6.2832);bounceC.fill()});
   let ballX=null,ballY=null,alpha=1,scale=1;
   if(bounceS){
-    const sinceStart=performance.now()-(bouncePhysicsStartPerf-BSPAWN*1000);
-    if(bouncePhase==='play'&&sinceStart<BSPAWN*1000){
-      const u=Math.max(0,Math.min(1,sinceStart/(BSPAWN*1000))),e=Math.min(1,Math.max(0,(u-.2)/.7)),v=e-1;scale=.55+.45*(1+2.7*v*v*v+1.7*v*v);alpha=Math.min(1,Math.max(0,(u-.2)/.45));alpha=alpha*alpha*(3-2*alpha);ballX=BCX;ballY=BCY-30;
-    } else {
-      const ft=Math.max(0,Math.min(bounceS.flightMs,(performance.now()-bouncePhysicsStartPerf)))/1000;const p=bouncePointAt(bounceS,ft);ballX=p.x;ballY=p.y;
-    }
+    if(bouncePhase==='idle'){alpha=0}
+    const k=(bouncePhase==='play'&&bounceSp>=BSPAWN&&!bounceS.done)?bounceAcc/BDT:1;ballX=bounceS.px+(bounceS.x-bounceS.px)*k;ballY=bounceS.py+(bounceS.y-bounceS.py)*k;
+    if(bouncePhase==='play'&&bounceSp<BSPAWN){const u=bounceSp/BSPAWN,e=Math.min(1,Math.max(0,(u-.2)/.7)),v=e-1;scale=.55+.45*(1+2.7*v*v*v+1.7*v*v);alpha=Math.min(1,Math.max(0,(u-.2)/.45));alpha=alpha*alpha*(3-2*alpha)}
   }
   if(ballX!=null){
-    if(bouncePhase==='play'&&bounceS&&!bounceS.done){bounceTrail.push([ballX,ballY]);if(bounceTrail.length>24)bounceTrail.shift();}
-    for(let i=0;i<bounceTrail.length;i++){const u=(i+1)/bounceTrail.length,p=bounceTrail[i],tr=BBR*(.12+.8*u),gr=bounceC.createRadialGradient(p[0],p[1],0,p[0],p[1],tr);gr.addColorStop(0,'rgba(255,170,60,'+(u*u*.5)+')');gr.addColorStop(1,'rgba(255,120,20,0)');bounceC.fillStyle=gr;bounceC.beginPath();bounceC.arc(p[0],p[1],tr,0,6.2832);bounceC.fill();}
+    if(bouncePhase==='play'&&bounceSp>=BSPAWN){bounceTrail.push([ballX,ballY]);if(bounceTrail.length>24)bounceTrail.shift()}
+    for(let i=0;i<bounceTrail.length;i++){const u=(i+1)/bounceTrail.length,p=bounceTrail[i],tr=BBR*(.12+.8*u),gr=bounceC.createRadialGradient(p[0],p[1],0,p[0],p[1],tr);gr.addColorStop(0,'rgba(255,170,60,'+(u*u*.5)+')');gr.addColorStop(1,'rgba(255,120,20,0)');bounceC.fillStyle=gr;bounceC.beginPath();bounceC.arc(p[0],p[1],tr,0,6.2832);bounceC.fill()}
     const r=BBR*scale;bounceC.globalAlpha=alpha;const hg=bounceC.createRadialGradient(ballX,ballY,r*.6,ballX,ballY,r*2.1);hg.addColorStop(0,'rgba(255,150,40,.45)');hg.addColorStop(1,'rgba(255,150,40,0)');bounceC.fillStyle=hg;bounceC.beginPath();bounceC.arc(ballX,ballY,r*2.1,0,6.2832);bounceC.fill();const sg=bounceC.createRadialGradient(ballX-r*.35,ballY-r*.4,r*.1,ballX,ballY,r);sg.addColorStop(0,'#ffe2b0');sg.addColorStop(.35,'#ffab45');sg.addColorStop(.75,'#f07a14');sg.addColorStop(1,'#b8500a');bounceC.fillStyle=sg;bounceC.beginPath();bounceC.arc(ballX,ballY,r,0,6.2832);bounceC.fill();bounceC.strokeStyle='rgba(255,200,130,.35)';bounceC.lineWidth=1.2;bounceC.stroke();bounceC.fillStyle='rgba(255,255,255,.5)';bounceC.beginPath();bounceC.ellipse(ballX-r*.3,ballY-r*.38,r*.28,r*.18,-.6,0,6.2832);bounceC.fill();bounceC.globalAlpha=1;
-    if(bouncePhase==='play'){const tx=bounceMult.toFixed(2)+'×';bounceC.font='700 '+(14+bouncePop*4)+'px "Segoe UI",system-ui,sans-serif';const tw=bounceC.measureText(tx).width+16;bounceC.fillStyle='rgba(18,13,9,.8)';bounceC.beginPath();bounceC.roundRect(ballX-tw/2,ballY-BBR-28,tw,22,7);bounceC.fill();bounceC.fillStyle='#ffb347';bounceC.fillText(tx,ballX,ballY-BBR-16);}
+    if(bouncePhase==='play'){const tx=bounceMult.toFixed(2)+'×';bounceC.font='700 '+(14+bouncePop*4)+'px "Segoe UI",system-ui,sans-serif';const tw=bounceC.measureText(tx).width+16;bounceC.fillStyle='rgba(18,13,9,.8)';bounceC.beginPath();bounceC.roundRect(ballX-tw/2,ballY-BBR-28,tw,22,7);bounceC.fill();bounceC.fillStyle='#ffb347';bounceC.fillText(tx,ballX,ballY-BBR-16)}
   }
   const y=BH-BBAR;bounceC.fillStyle='rgba(59,212,124,.2)';bounceC.fillRect(0,y,bounceZoneW,BBAR);bounceC.fillStyle='#3bd47c';bounceC.fillRect(0,y,bounceZoneW,2);bounceC.fillStyle='rgba(239,75,75,.18)';bounceC.fillRect(bounceZoneW,y,BW-bounceZoneW,BBAR);bounceC.fillStyle='#ef4b4b';bounceC.fillRect(bounceZoneW,y,BW-bounceZoneW,2);bounceC.save();bounceC.beginPath();bounceC.rect(bounceZoneW,y,BW-bounceZoneW,BBAR);bounceC.clip();bounceC.strokeStyle='rgba(239,75,75,.22)';bounceC.lineWidth=2;bounceC.beginPath();for(let x=bounceZoneW-BBAR;x<BW;x+=9){bounceC.moveTo(x,y+BBAR);bounceC.lineTo(x+BBAR,y)}bounceC.stroke();bounceC.restore();
   if(bounceFlash>0&&bounceMsg){bounceC.fillStyle='rgba(255,255,255,'+bounceFlash*.28+')';bounceMsg.win?bounceC.fillRect(0,y,bounceZoneW,BBAR):bounceC.fillRect(bounceZoneW,y,BW-bounceZoneW,BBAR)}
   bounceC.font='800 15px "Segoe UI",system-ui,sans-serif';bounceC.fillStyle='#3bd47c';bounceC.fillText('★ WIN',bounceZoneW/2,y+BBAR/2+2);bounceC.fillStyle='#ef4b4b';bounceC.fillText('0×',bounceZoneW+(BW-bounceZoneW)/2,y+BBAR/2+2);
-  if(bounceMsg){bounceC.font='800 34px "Segoe UI",system-ui,sans-serif';bounceC.shadowColor='#000';bounceC.shadowBlur=12;bounceC.fillStyle=bounceMsg.win?'#3bd47c':'#ef4b4b';bounceC.fillText(bounceMsg.t,BCX,BCY+70);bounceC.shadowBlur=0;}
+  if(bounceMsg){bounceC.font='800 34px "Segoe UI",system-ui,sans-serif';bounceC.shadowColor='#000';bounceC.shadowBlur=12;bounceC.fillStyle=bounceMsg.win?'#3bd47c':'#ef4b4b';bounceC.fillText(bounceMsg.t,BCX,BCY+70);bounceC.shadowBlur=0}
   requestAnimationFrame(bounceRenderStage);
 }
 function openBounce(){
   if(!initData)return handleNotTelegram();
-  lockBounceViewport();
-  try{tg?.expand?.();}catch{}
   installBounceZoomLock();
-  const bounceRoot=bounceUi("bounceGame");
-  if(bounceRoot){bounceRoot.style.zoom="1";bounceRoot.style.transform="none";}
   if(bounceRenderStarted===false){bounceRenderStarted=true;bounceLast=performance.now();requestAnimationFrame(bounceRenderStage)}
-  bouncePhase='idle';bounceMsg=null;bounceS=null;bounceSpinResult=null;bounceTrail=[];bounceMult=0;bounceDisplayedBounces=0;bounceServerSkew=0;bounceFinalAngle=null;
+  bouncePhase='idle';bounceMsg=null;bounceS=null;bounceSpinResult=null;bounceTrail=[];bounceMult=0;
   renderBounceTabs();
   bounceRenderTag();
   bounceUi("gamesList").classList.add("hidden");bounceUi("upgradeGame").classList.add("hidden");bounceUi("bounceGame").classList.remove("hidden");
@@ -1812,21 +1823,7 @@ function openBounce(){
 function closeBounce(){
   if(bouncePhase==='play')return toast("Дождитесь окончания прокрутки.");
   bounceUi("bounceGame").classList.add("hidden");bounceUi("gamesList").classList.remove("hidden");
-  bounceUi("bounceGame")?.classList.remove("is-playing");
-  unlockBounceViewport();
 }
-// ОТСКОК: временно фиксируем viewport только пока открыт ОТСКОК.
-// Это не меняет масштабирование остальных вкладок приложения.
-const bounceViewportMeta=document.querySelector('meta[name="viewport"]');
-const bounceViewportOriginal=bounceViewportMeta?.content||'';
-function lockBounceViewport(){
-  if(!bounceViewportMeta)return;
-  bounceViewportMeta.content='width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover';
-}
-function unlockBounceViewport(){
-  if(bounceViewportMeta&&bounceViewportOriginal)bounceViewportMeta.content=bounceViewportOriginal;
-}
-
 // ОТСКОК: предотвращаем системный pinch/gesture zoom внутри игрового экрана.
 // Не меняет поведение остальных разделов приложения.
 function installBounceZoomLock(){
@@ -1845,12 +1842,6 @@ function installBounceZoomLock(){
   root.addEventListener("wheel",e=>{
     if(e.ctrlKey) e.preventDefault();
   },{passive:false});
-  let lastBounceTouch=0;
-  root.addEventListener("touchend",e=>{
-    const now=Date.now();
-    if(now-lastBounceTouch<280){e.preventDefault();}
-    lastBounceTouch=now;
-  },{passive:false});
 }
 
 function bounceStart(){
@@ -1859,24 +1850,11 @@ function bounceStart(){
   const bet=bounceReadBet();
   if(!Number.isFinite(bet)||bet<.1||bet>50000)return toast("Ставка должна быть от 0.1 до 50 000 Stars.");
   if(bet>currentBalance)return toast("Недостаточно Stars на балансе.");
-  bounceActxGet();
-  const bounceRoot=bounceUi("bounceGame");
-  if(document.activeElement && bounceRoot?.contains(document.activeElement))document.activeElement.blur();
-  bounceRoot?.classList.add("is-playing");
-  bouncePhase='waiting';bounceMsg=null;bounceS=null;bounceTrail=[];bounceMult=0;bounceUi("bounceErr").textContent="";bounceSetControls(true);bounceUi("bouncePlay").textContent="Отправляем…";
+  bounceActxGet();bouncePhase='waiting';bounceMsg=null;bounceS=null;bounceTrail=[];bounceMult=0;bounceUi("bounceErr").textContent="";bounceSetControls(true);bounceUi("bouncePlay").textContent="Отправляем…";
   socket.emit("bounce_spin",{bet,modeIndex:bounceMode});
 }
 function bouncePrepare(result){
-  bounceSpinResult=result||{};bounceWin=!!result?.win;
-  bounceT=Number(result?.physics?.flightMs||0)/1000;
-  bounceS=bounceMk(result); bounceAcc=0;bounceSp=0;bouncePhase='play';bounceMult=0;
-  bounceServerSkew=Number(result?.serverNow||Date.now())-Date.now();
-  bounceFinalAngle=null;
-  bounceDisplayedBounces=0;
-  bouncePlaySpawn();bounceMsg=null;bounceTrail=[];bounceFlash=0;bounceSetControls(true);bounceUi("bouncePlay").textContent="Идёт раунд…";
-  bouncePhysicsStartPerf=performance.now()+BSPAWN*1000;
-  const currentAngle=bounceGlobalRingAt(Date.now()+bounceServerSkew);
-  bounceS.startAngle=currentAngle;
+  bounceSpinResult=result||{};bounceWin=!!result?.win;bounceT=Math.max(3,Number(result?.durationMs||6350)/1000-BSPAWN);const g0=bounceRingAt(bounceClk+BSPAWN);const p=bouncePlan(g0,bounceWin,Number(result?.bounces)||1);bounceS=bounceMk(p.a,p.v,g0);bounceAcc=0;bounceSp=0;bouncePhase='play';bounceMult=0;bouncePlaySpawnSound();bounceMsg=null;bounceTrail=[];bounceFlash=0;bounceSetControls(true);bounceUi("bouncePlay").textContent="Идёт раунд…";
 }
 ["openBounce"].forEach(id=>{const b=bounceUi(id);if(b)b.onclick=openBounce});
 if(bounceUi("bounceBack"))bounceUi("bounceBack").onclick=closeBounce;
@@ -1922,19 +1900,6 @@ document.querySelectorAll('.game-card[data-view]').forEach(btn => {
 
 setTopupCurrency("STAR");
 setWithdrawCurrency("STAR");
-window.addEventListener("ice_winner_result", (ev) => {
-  const d = ev.detail || {};
-  const overlay = $("winnerOverlay");
-  if (!overlay) return;
-  $("winnerAvatar").innerHTML = d.avatar
-    ? `<img src="${escapeHtml(d.avatar)}" alt="" loading="lazy">`
-    : `<div class="winner-fallback">${escapeHtml(String(d.name || "И").trim().charAt(0).toUpperCase() || "И")}</div>`;
-  $("winnerName").textContent = d.name || "Игрок";
-  $("winnerPayout").textContent = `${Number(d.payout || 0).toFixed(2)} ⭐`;
-  $("winnerBetDetail").textContent = `Ставка: ${Number(d.bet || 0).toFixed(2)} ⭐`;
-  overlay.dataset.iceRound = String(d.roundId || "");
-  openModal(overlay);
-});
 window.addEventListener("load", () => initTonConnect());
 
 // ---------- PVP round history ----------
@@ -2047,3 +2012,478 @@ if (historySearchInput) {
     navigator.clipboard.writeText(value).then(() => toast("Скопировано"));
   };
 });
+
+
+// ===================== ICE ARENA (ported from RING123) =====================
+(function () {
+  // Ice Arena tab: reuses the host app's shared `socket` (socket.io client), `user`,
+  // `currentBalance`, `isAdmin`, `toast`, `initData` and `handleNotTelegram` — all
+  // already declared earlier in this same file. Nothing Telegram-specific is redone here.
+  const $ = id => document.getElementById(id);
+  const arena = $('iceArena'), puck = $('icePuck'), puckImg = puck.querySelector('.puck-img'), arrow = puck.querySelector('.ice-arrow'), ripple = puck.querySelector('.puck-ripple'), zoneMap = $('iceZoneMap'), legend = $('iceLegend'), winnerEl = $('iceWinner');
+  const APPEAR = 2000, SPIN = 3400, HOLD = 700, INTRO = SPIN + HOLD, BASE_FLIGHT = 7000, CLOSE = 1000, PUCK = 24, S = 100, STILL_HOLD = 400;
+  let W = arena.clientWidth || 358, skew = 0;
+  let st = { status: 'waiting', players: [], online: 0 }, L = [];
+  let plan = null, planFor = null, finished = false, phase = '', cam = null;
+  // Аномалия "race": конвейер зон и шайба должны двигаться в одной системе координат —
+  // раньше конвейер крутился по CSS-анимации сам по себе, а шайба ставилась по "статическим"
+  // физическим координатам, из-за чего в момент остановки видимая под шайбой зона и реальный
+  // победитель расходились (казалось, что результат "скачком" меняется). Теперь сдвиг конвейера
+  // считается в JS от того же таймера, что и полёт шайбы, и шайба смещается на ту же величину —
+  // они гарантированно совпадают на каждом кадре и одновременно замирают.
+  const RACE_MS = 3600;
+  let raceTrackEl = null, raceOffset = 0;
+
+  const fmt = v => String(+Number(v).toFixed(3));
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  function place(x, y) { puck.style.transform = `translate3d(${(x * W / 100 - PUCK / 2).toFixed(2)}px,${(y * W / 100 - PUCK / 2).toFixed(2)}px,0)`; }
+  window.addEventListener('resize', () => { W = arena.clientWidth || W; });
+  place(50, 50); puck.style.visibility = 'hidden';
+
+  // ---------- аватарка ----------
+  function avatar(p, cls, size) {
+    const el = document.createElement(p.photo ? 'img' : 'div');
+    el.className = cls; el.style.width = el.style.height = size + 'px';
+    const initial = () => { const d = document.createElement('div'); d.className = cls; d.style.cssText = `width:${size}px;height:${size}px;background:${p.color};font-size:${size * .45}px`; d.textContent = (p.name || '?')[0].toUpperCase(); return d; };
+    if (p.photo) { el.src = p.photo; el.referrerPolicy = 'no-referrer'; el.onerror = () => el.replaceWith(initial()); return el; }
+    return initial();
+  }
+
+  // ---------- геометрия зон ----------
+  function clip(poly, a, b, c) { const out = []; for (let i = 0; i < poly.length; i++) { const p = poly[i], q = poly[(i + 1) % poly.length], dp = a * p[0] + b * p[1] - c, dq = a * q[0] + b * q[1] - c; if (dp <= 0) out.push(p); if (dp * dq < 0) { const t = dp / (dp - dq); out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]); } } return out; }
+  function cells() { return L.map(p => { let poly = [[0, 0], [S, 0], [S, S], [0, S]]; for (const o of L) { if (o === p || !poly.length) continue; poly = clip(poly, 2 * (o.sx - p.sx), 2 * (o.sy - p.sy), o.sx * o.sx + o.sy * o.sy - p.sx * p.sx - p.sy * p.sy + p.w - o.w); } return poly; }); }
+  function info(poly) { let A = 0, cx = 0, cy = 0; for (let i = 0; i < poly.length; i++) { const p = poly[i], q = poly[(i + 1) % poly.length], f = p[0] * q[1] - q[0] * p[1]; A += f; cx += (p[0] + q[0]) * f; cy += (p[1] + q[1]) * f; } A /= 2; return A > 1e-9 ? { A, cx: cx / (6 * A), cy: cy / (6 * A) } : { A: 0, cx: 50, cy: 50 }; }
+  function inr(poly, cx, cy) { let m = 1e9; for (let i = 0; i < poly.length; i++) { const p = poly[i], q = poly[(i + 1) % poly.length], dx = q[0] - p[0], dy = q[1] - p[1], l = Math.hypot(dx, dy); if (l > 1e-6) m = Math.min(m, Math.abs(dx * (cy - p[1]) - dy * (cx - p[0])) / l); } return m; }
+  function solve() {
+    const sum = L.reduce((s, p) => s + p.stake, 0);
+    for (let it = 0; it < 400; it++) {
+      const inf = cells().map(info);
+      L.forEach((p, i) => { const e = p.stake / sum * S * S - inf[i].A, d = Math.sign(e); p.step = Math.min(3000, Math.max(.02, p.step * (d === p.dir ? 1.25 : .5))); p.dir = d; p.w += d * Math.min(p.step, Math.abs(e) * 3); if (it < 25 && inf[i].A > 0) { p.sx += (inf[i].cx - p.sx) * .3; p.sy += (inf[i].cy - p.sy) * .3; } });
+      const m = L.reduce((s, p) => s + p.w, 0) / L.length; L.forEach(p => p.w -= m);
+    }
+  }
+  function layout() { L = st.players.map(p => ({ id: p.id, stake: p.stake, sx: p.sx, sy: p.sy, w: 0, step: 200, dir: 0 })); if (L.length) solve(); }
+  function getWinner(x, y) { let best = L[0], bv = Infinity; for (const p of L) { const v = (x - p.sx) ** 2 + (y - p.sy) ** 2 - p.w; if (v < bv) { bv = v; best = p; } } return best; }
+
+  // ---------- отрисовка ----------
+  // Строит мозаику зон один раз; для аномалии "race" вставляем её ДВУМЯ одинаковыми копиями
+  // друг под другом и бесконечно сдвигаем весь блок ровно на одну свою высоту — при таком
+  // сдвиге кадр в конце цикла пиксель-в-пиксель совпадает с начальным, поэтому шов незаметен
+  // (раньше двигалась только заливка внутри одной копии — на границе цикла было видно скачок).
+  function buildMosaic() {
+    const frag = document.createDocumentFragment(), cs = L.length ? cells() : [], zones = [];
+    st.players.map((p, i) => i).sort((a, b) => (st.players[a].id === (user && user.id) ? 1 : 0) - (st.players[b].id === (user && user.id) ? 1 : 0)).forEach(i => {
+      const p = st.players[i], poly = cs[i], inf = info(poly), r = inr(poly, inf.cx, inf.cy);
+      const el = document.createElement('div'); el.className = 'zone-item' + (user && p.id === user.id ? ' mine' : '');
+      el.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none"><polygon points="${poly.map(v => v[0].toFixed(2) + ',' + v[1].toFixed(2)).join(' ')}" fill="${p.color}"/></svg>`;
+      const d = Math.min(46, r * W / 100 * 1.4);
+      if (d >= 14) { const a = avatar(p, 'zone-av', Math.round(d)); a.style.left = inf.cx + '%'; a.style.top = inf.cy + '%'; el.append(a); }
+      frag.append(el); zones.push({ p, el });
+    });
+    return { frag, zones };
+  }
+  function render() {
+    zoneMap.innerHTML = ''; legend.innerHTML = '';
+    const sum = L.reduce((s, p) => s + p.stake, 0);
+    // 'result' держим в том же "конвейерном" режиме, что и 'running' — иначе в момент, когда
+    // сервер шлёт финальный статус, эта проверка резко становится false, зона-мозаика пересобирается
+    // уже БЕЗ сдвига raceOffset (который к этому моменту заморожен на правильном значении в
+    // updateRaceScroll) — и весь фон под шайбой визуально "прыгает" на нулевой сдвиг конвейера.
+    const racing = st.anomaly === 'race' && (st.status === 'running' || st.status === 'result');
+    const { frag, zones } = buildMosaic();
+    zones.forEach(({ p, el }) => { p.zone = el; });
+    if (racing) {
+      const track = document.createElement('div'); track.className = 'race-track';
+      const f1 = document.createElement('div'); f1.className = 'race-frame'; f1.append(frag);
+      const f2 = document.createElement('div'); f2.className = 'race-frame'; f2.innerHTML = f1.innerHTML;
+      track.append(f1, f2); zoneMap.append(track);
+      raceTrackEl = track; track.style.transform = `translateY(${(-raceOffset / 100 * W).toFixed(2)}px)`; // если DOM зон пересобрался посреди гонки (напр. state-рассылка от захода/выхода игрока), не сбрасываем сдвиг конвейера в 0 — берём текущий, следующий кадр его тут же уточнит по таймеру
+    } else { zoneMap.append(frag); raceTrackEl = null; }
+    st.players.forEach(p => {
+      const it = document.createElement('div'); it.className = 'ice-player';
+      it.append(avatar(p, 'lg-av', 20));
+      it.insertAdjacentHTML('beforeend', `<span>${esc(p.name)}</span><b>${fmt(p.stake)} · ${(p.stake / sum * 100).toFixed(1)}%</b>`);
+      legend.append(it);
+    });
+    $('icePool').textContent = fmt(sum);
+    if (finished) applyResult();
+    ui();
+  }
+  function applyResult() {
+    st.players.forEach(p => p.zone && p.zone.classList.add(p.id === st.winnerId ? 'winner-zone' : 'loser'));
+    const w = st.players.find(p => p.id === st.winnerId); if (!w) return;
+    const pool = st.players.reduce((s, p) => s + p.stake, 0);
+    winnerEl.innerHTML = `<div><b>${esc(w.name)}</b><small>Победитель · +${fmt(pool)} ⭐</small></div>`;
+    winnerEl.classList.add('show');
+  }
+  function ui() {
+    const now = Date.now() + skew; let txt = '', can = false;
+    if (st.status === 'waiting') { txt = st.players.length ? 'Ждём 2-го игрока' : 'Набор игроков'; can = true; }
+    else if (st.status === 'countdown') { const left = st.endsAt - now; if (left > CLOSE) { txt = 'Начало через 00:' + String(Math.ceil(left / 1000)).padStart(2, '0'); can = true; } else txt = 'Ставки закрыты'; }
+    else if (st.status === 'running') txt = phase === 'rushing' ? 'Шайба на льду' : 'Раунд начинается';
+    else txt = 'Раунд завершён';
+    $('iceStatus').textContent = txt;
+    $('iceJoinBtn').disabled = !can || !user;
+    const mine = user && st.players.find(p => p.id === user.id);
+    $('stakeInfo').textContent = mine ? 'Ваша: ' + fmt(mine.stake) : '';
+  }
+  setInterval(ui, 200);
+
+  // ---------- детерминированная физика шайбы ----------
+  function rng(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function sim(x, y, ang, spd, flightMs, n) {
+    let vx = Math.cos(ang) * spd, vy = Math.sin(ang) * spd; const dt = 1 / 60, decay = 4.5 / (flightMs / 1000), pts = [[x, y]];
+    for (let i = 1; i <= n; i++) {
+      const boost = 1 + 3 * Math.exp(-((i - 1) * dt) / .4); x += vx * dt * boost; y += vy * dt * boost;
+      let bx = false, by = false;
+      if (x < 0) { x = 0; if (vx < 0) { vx = Math.abs(vx) * .78; bx = true; } } else if (x > 100) { x = 100; if (vx > 0) { vx = -Math.abs(vx) * .78; bx = true; } }
+      if (y < 0) { y = 0; if (vy < 0) { vy = Math.abs(vy) * .78; by = true; } } else if (y > 100) { y = 100; if (vy > 0) { vy = -Math.abs(vy) * .78; by = true; } }
+      if (bx || by) {
+        const s = Math.hypot(vx, vy) || 1, m = .37 * s, ax = bx ? (x < 50 ? 1 : -1) : 0, ay = by ? (y < 50 ? 1 : -1) : 0; let nx = vx, ny = vy;
+        if (ax && ax * nx < m) { nx = ax * m; ny = (Math.sign(ny) || 1) * Math.sqrt(Math.max(0, s * s - nx * nx)); }
+        if (ay && ay * ny < m) { ny = ay * m; nx = (Math.sign(nx) || 1) * Math.sqrt(Math.max(0, s * s - ny * ny)); }
+        vx = nx; vy = ny;
+      }
+      if ((x < 12 || x > 88) && (y < 12 || y > 88)) { const s0 = Math.hypot(vx, vy); vx += (50 - x) * .02 * s0 * dt; vy += (50 - y) * .02 * s0 * dt; const s1 = Math.hypot(vx, vy) || 1; vx *= s0 / s1; vy *= s0 / s1; }
+      const f = Math.exp(-decay * dt); vx *= f; vy *= f; pts.push([x, y]);
+    }
+    return pts;
+  }
+  // Победитель определён сервером; подбираем траекторию (по общему seed), которая приводит шайбу в его зону.
+  function buildPlan() {
+    if (st.anomaly === 'redo') return buildRedoPlan();
+    const flightMs = BASE_FLIGHT, n = Math.round(flightMs / 1000 * 60);
+    let best = null;
+    for (let k = 0; k < 4000; k++) {
+      const r = rng((st.seed + k * 7919) >>> 0);
+      const sx = 12 + r() * 76, sy = 14 + r() * 72, q = Math.floor(r() * 4), ang = (q * 90 + 24 + r() * 42) * Math.PI / 180, spd = 750 + r() * 160, sa = r() * 360;
+      const pts = sim(sx, sy, ang, spd, flightMs, n); best = { sp: [sx, sy], pts, ang, sa, flightMs, n };
+      const e = pts[n]; if (getWinner(e[0], e[1]).id === st.winnerId) break;
+    }
+    const fa = best.ang * 180 / Math.PI + 90;
+    best.fa = fa; best.ea = best.sa + 720 + ((((fa - best.sa) % 360) + 360) % 360); // 2 оборота и остановка ровно по направлению полёта
+    return best;
+  }
+  // Аномалия "redo": первый пролёт выглядит ровно как обычный (та же длительность 7с) и заканчивается
+  // в случайной точке — шайба тормозит, но победитель ещё не объявляется. С этого же места разыгрывается
+  // второй пролёт (со своим повторным прицеливанием), который уже по-настоящему приводит шайбу в зону победителя.
+  function buildRedoPlan() {
+    const r1 = rng((st.seed ^ 0x1a2b3c4d) >>> 0);
+    const flight1Ms = BASE_FLIGHT, n1 = Math.round(flight1Ms / 1000 * 60);
+    const sx1 = 12 + r1() * 76, sy1 = 14 + r1() * 72, q1 = Math.floor(r1() * 4), ang1 = (q1 * 90 + 24 + r1() * 42) * Math.PI / 180, spd1 = 750 + r1() * 160, sa1 = r1() * 360;
+    const pts1 = sim(sx1, sy1, ang1, spd1, flight1Ms, n1);
+    const fa1 = ang1 * 180 / Math.PI + 90, ea1 = sa1 + 720 + ((((fa1 - sa1) % 360) + 360) % 360);
+    const stop = pts1[n1];
+    const flight2Ms = BASE_FLIGHT, n2 = Math.round(flight2Ms / 1000 * 60);
+    let best2 = null;
+    for (let k = 0; k < 4000; k++) {
+      const r = rng((st.seed + 1 + k * 7919) >>> 0);
+      const ang = r() * Math.PI * 2, spd = 750 + r() * 160, sa = r() * 360;
+      const pts = sim(stop[0], stop[1], ang, spd, flight2Ms, n2);
+      best2 = { sp: stop, pts, ang, sa, flightMs: flight2Ms, n: n2 };
+      const e = pts[n2]; if (getWinner(e[0], e[1]).id === st.winnerId) break;
+    }
+    const fa2 = best2.ang * 180 / Math.PI + 90;
+    best2.ea = best2.sa + 720 + ((((fa2 - best2.sa) % 360) + 360) % 360);
+    return { mode: 'redo', phase1: { sp: [sx1, sy1], pts: pts1, sa: sa1, ea: ea1, flightMs: flight1Ms, n: n1 }, stop, phase2: best2 };
+  }
+  function setPhase(p) {
+    if (p === phase) return; phase = p;
+    puck.classList.toggle('choosing', p === 'choosing'); puck.classList.toggle('aiming', p === 'aiming'); puck.classList.toggle('rushing', p === 'rushing');
+  }
+  const clamp01 = x => Math.max(0, Math.min(1, x));
+  const easeOut = x => 1 - Math.pow(1 - x, 3);
+  // появление шайбы: плавный рост без затемнения, расходящееся кольцо, стрелка крутится вокруг шайбы и замирает по направлению броска
+  function fx(t, sa, ea) {
+    const e = easeOut(clamp01(t / APPEAR)), s = .45 + .55 * e;
+    puckImg.style.opacity = e.toFixed(3);
+    puckImg.style.transform = `scale(${s.toFixed(3)})`;
+    const r = clamp01(t / 800);
+    ripple.style.opacity = (.7 * (1 - r) * (1 - r)).toFixed(3);
+    ripple.style.transform = `translate(-50%,-50%) scale(${(.7 + 1.6 * easeOut(r)).toFixed(3)})`;
+    const ang = sa + (ea - sa) * easeOut(clamp01(t / SPIN));
+    const pop = 1 + .25 * Math.sin(Math.PI * clamp01((t - SPIN) / 350));
+    arrow.style.opacity = (clamp01(t / 150) * (1 - clamp01((t - INTRO) / 250))).toFixed(3);
+    arrow.style.transform = `rotate(${ang.toFixed(2)}deg) scale(${(s * pop).toFixed(3)})`;
+  }
+  // Общий для обычного полёта и второй фазы "redo": в последние 3с плавно наезжаем камерой на шайбу.
+  function applyCamZoom(ft, flightMs, x, y) {
+    const zt = Math.max(0, Math.min(1, (ft - (flightMs - 3000)) / 3000));
+    if (zt > 0) {
+      if (!cam) { cam = { x, y }; arena.style.transition = 'none'; }
+      cam.x += (x - cam.x) * .12; cam.y += (y - cam.y) * .12;
+      const e = zt * zt * (3 - 2 * zt), sc = 1 + .32 * e, lim = (sc - 1) * 50;
+      const tx = Math.max(-lim, Math.min(lim, (50 - cam.x) * sc)), ty = Math.max(-lim, Math.min(lim, (50 - cam.y) * sc));
+      arena.style.transform = `translate(${tx}%,${ty}%) scale(${sc})`;
+    }
+  }
+  // Сдвигает конвейер зон (0-100, % высоты арены). Пока раунд не завершён — считаем от общего
+  // таймера полёта; как только победитель определён (finished), просто перестаём его обновлять.
+  // Шайба на конвейер никак не завязана — она всегда едет по своей обычной физической траектории,
+  // конвейер под ней — чисто фоновая декорация.
+  function updateRaceScroll(t) {
+    if (!raceTrackEl || finished) return;
+    raceOffset = ((Math.max(0, t) % RACE_MS) / RACE_MS) * 100;
+    raceTrackEl.style.transform = `translateY(${(-raceOffset / 100 * W).toFixed(2)}px)`;
+  }
+  function frame(t) {
+    if (plan.mode === 'redo') { frameRedo(t); return; }
+    updateRaceScroll(t);
+    // Шайба уже долетела и замерла — дальше НИЧЕГО не трогаем. Без этой защиты каждое новое
+    // 'state' от сервера (чужая ставка, чей-то коннект/дисконнект и т.п.) пересчитывает
+    // skew = m.now - Date.now(), а t = Date.now()+skew-startAt считается заново каждый кадр —
+    // при обычном сетевом джиттере skew может на миг "качнуться" назад, t тоже уменьшится,
+    // ft перестаёт быть прижатым к plan.flightMs, и шайба на мгновение отматывается на более
+    // раннюю точку своего полёта — это и был видимый скачок в конце раунда.
+    if (finished) return;
+    if (t < 0) { puck.style.visibility = 'hidden'; place(plan.sp[0], plan.sp[1]); fx(0, plan.sa, plan.ea); return; }
+    puck.style.visibility = 'visible';
+    fx(t, plan.sa, plan.ea);
+    if (t < INTRO) { setPhase(t < SPIN ? 'choosing' : 'aiming'); place(plan.sp[0], plan.sp[1]); return; }
+    setPhase('rushing');
+    const ft = Math.min(t - INTRO, plan.flightMs), idx = ft / 1000 * 60, i = Math.min(plan.n - 1, Math.floor(idx)), f = idx - i;
+    const a = plan.pts[i], b = plan.pts[i + 1], x = a[0] + (b[0] - a[0]) * f, y = a[1] + (b[1] - a[1]) * f;
+    place(x, y);
+    applyCamZoom(ft, plan.flightMs, x, y);
+    if (ft >= plan.flightMs && !finished) { finished = true; applyResult(); }
+  }
+  // Аномалия "redo": интро1 → пролёт1 → короткая замершая пауза (без победителя) → интро2 → пролёт2 → победитель.
+  function frameRedo(t) {
+    const p1 = plan.phase1, p2 = plan.phase2;
+    const T1 = INTRO, T2 = T1 + p1.flightMs, T3 = T2 + STILL_HOLD, T4 = T3 + INTRO;
+    if (finished) return; // та же защита от "перемотки" из-за дрожания skew, что и в frame()
+    if (t < 0) { puck.style.visibility = 'hidden'; place(p1.sp[0], p1.sp[1]); fx(0, p1.sa, p1.ea); return; }
+    puck.style.visibility = 'visible';
+    if (t < T1) { fx(t, p1.sa, p1.ea); setPhase(t < SPIN ? 'choosing' : 'aiming'); place(p1.sp[0], p1.sp[1]); return; }
+    if (t < T2) {
+      setPhase('rushing');
+      const ft = t - T1, idx = ft / 1000 * 60, i = Math.min(p1.n - 1, Math.floor(idx)), f = idx - i;
+      const a = p1.pts[i], b = p1.pts[i + 1], x = a[0] + (b[0] - a[0]) * f, y = a[1] + (b[1] - a[1]) * f;
+      place(x, y);
+      arrow.style.opacity = 0; ripple.style.opacity = 0;
+      applyCamZoom(ft, p1.flightMs, x, y);
+      return;
+    }
+    if (t < T3) { // шайба замерла, победитель ещё не выбран
+      if (cam) { cam = null; arena.style.transition = ''; arena.style.transform = 'scale(1)'; }
+      setPhase(''); place(plan.stop[0], plan.stop[1]); arrow.style.opacity = 0; ripple.style.opacity = 0;
+      return;
+    }
+    if (t < T4) {
+      // Второй пролёт "дубля": шайба уже видна (только что остановилась), поэтому без
+      // повторной анимации появления (без роста/прозрачности/кольца) — просто тихо
+      // "прицеливается" (со стрелкой, крутящейся к направлению второго броска) и сразу летит дальше.
+      const lt = t - T3;
+      setPhase(lt < SPIN ? 'choosing' : 'aiming');
+      puckImg.style.opacity = '1'; puckImg.style.transform = 'scale(1)';
+      const ang2 = p2.sa + (p2.ea - p2.sa) * easeOut(clamp01(lt / SPIN));
+      const pop2 = 1 + .25 * Math.sin(Math.PI * clamp01((lt - SPIN) / 350));
+      arrow.style.opacity = (clamp01(lt / 150) * (1 - clamp01((lt - INTRO) / 250))).toFixed(3);
+      arrow.style.transform = `rotate(${ang2.toFixed(2)}deg) scale(${pop2.toFixed(3)})`;
+      ripple.style.opacity = '0';
+      place(p2.sp[0], p2.sp[1]);
+      return;
+    }
+    setPhase('rushing');
+    const ft = Math.min(t - T4, p2.flightMs), idx = ft / 1000 * 60, i = Math.min(p2.n - 1, Math.floor(idx)), f = idx - i;
+    const a = p2.pts[i], b = p2.pts[i + 1], x = a[0] + (b[0] - a[0]) * f, y = a[1] + (b[1] - a[1]) * f;
+    place(x, y);
+    arrow.style.opacity = 0; ripple.style.opacity = 0;
+    applyCamZoom(ft, p2.flightMs, x, y);
+    if (ft >= p2.flightMs && !finished) finished = true, applyResult();
+  }
+  function loop() {
+    requestAnimationFrame(loop);
+    if ((st.status !== 'running' && st.status !== 'result') || !st.startAt || !L.length) return;
+    if (planFor !== st.id) { plan = buildPlan(); planFor = st.id; finished = false; cam = null; }
+    frame(Date.now() + skew - st.startAt);
+  }
+  requestAnimationFrame(loop);
+  function resetVisual() {
+    if (!plan && !finished) return;
+    plan = null; planFor = null; finished = false; cam = null; phase = '';
+    arena.style.transition = ''; arena.style.transform = 'scale(1)';
+    puck.classList.remove('choosing', 'aiming', 'rushing'); winnerEl.classList.remove('show'); winnerEl.innerHTML = '';
+    W = arena.clientWidth || W; place(50, 50); puck.style.visibility = 'hidden';
+  }
+
+  // ---------- сеть (общий socket.io хоста, события с префиксом ice_) ----------
+  function syncBal() { $('bal').textContent = fmt(currentBalance); }
+  syncBal();
+  socket.on('ice_state', m => {
+    skew = m.now - Date.now(); st = m;
+    if (st.status === 'waiting' || st.status === 'countdown') resetVisual();
+    updateAnomalyUI();
+    layout(); render();
+  });
+  socket.on('ice_history', renderHistory);
+  socket.on('ice_admin_ok', d => toast(d.msg));
+  socket.on('balance_updated', () => syncBal());
+  socket.on('joined', () => { syncBal(); updateAdminAnomalyVisibility(); });
+
+  // ---------- аномалии ----------
+  // Сервер отдаёт st.anomaly = null, пока раунд не перешёл в running (ставки уже закрыты),
+  // так что до этого момента бейдж вообще не появляется и не спойлерит исход.
+  // Как только раунд стартует, бейдж выскакивает в углу арены и "крутит" иконки между
+  // вариантами анoмалий примерно 0.7с, затем останавливается на реальной аномалии этого раунда.
+  const ANOMALY_NAMES = { race: 'Гонка', mirage: 'H̷̢̨̹̞͚̫̖͓̳͇̰̹͕̝̘̘͂͛͒̈́͌̈́̈́̕̕͝͝͝͝i̸̟̮͙͕͎͇̱̯̪̤̺̯̩̗̘̐̅̿͌͛̈́̾̓́̓̿̿̕͘͝d̶͉̤̤͕̬̱̻̥͎͙͎̹̰̲̩̈́͐͌̿̓͆̈́̄̈́̄̾͐̚͘͝e̸̬̥̫͙̜̫͕̙̩̳͙̰͚͖̠̍̾̾͛̇͋͊̇̕͝͝͝͝͝', redo: 'Вторая жизнь!' };
+  const ANOMALY_ICON = { race: 'ic-race', mirage: 'ic-mirage', redo: 'ic-redo' };
+  const ANOMALY_CYCLE = ['ic-race', 'ic-mirage', 'ic-redo'];
+  let shownAnomalyFor = null, anomalySpin = null, anomalyRollT = null;
+  function updateAnomalyUI() {
+    const badge = $('anomalyBadge'), icon = badge.querySelector('.ab-icon');
+    if (st.status === 'waiting' || st.status === 'countdown') {
+      shownAnomalyFor = null; clearInterval(anomalySpin); clearTimeout(anomalyRollT);
+      badge.classList.remove('show', 'rolling', 'settled');
+      $('iceGame').classList.remove('mirage-active');
+      return;
+    }
+    $('iceGame').classList.toggle('mirage-active', st.anomaly === 'mirage' && st.status === 'running');
+    if (shownAnomalyFor !== st.id) {
+      shownAnomalyFor = st.id;
+      clearInterval(anomalySpin); clearTimeout(anomalyRollT);
+      badge.classList.remove('settled');
+      if (st.anomaly && ANOMALY_ICON[st.anomaly]) {
+        badge.classList.add('show', 'rolling');
+        // Плавная "прокрутка" иконок: каждая иконка сначала мягко уходит (flip-out),
+        // затем подменяется и плавно проявляется — вместо жёсткой мгновенной смены кадра.
+        let i = 0; icon.classList.remove(...ANOMALY_CYCLE, 'flip-out'); icon.classList.add(ANOMALY_CYCLE[0]);
+        anomalySpin = setInterval(() => {
+          icon.classList.add('flip-out');
+          setTimeout(() => {
+            icon.classList.remove(...ANOMALY_CYCLE); icon.classList.add(ANOMALY_CYCLE[++i % ANOMALY_CYCLE.length]);
+            icon.classList.remove('flip-out');
+          }, 90);
+        }, 170);
+        anomalyRollT = setTimeout(() => {
+          clearInterval(anomalySpin);
+          icon.classList.remove(...ANOMALY_CYCLE, 'flip-out'); icon.classList.add(ANOMALY_ICON[st.anomaly]);
+          badge.classList.remove('rolling'); badge.classList.add('settled');
+          toast('Аномалия! ' + ANOMALY_NAMES[st.anomaly]);
+        }, 850);
+      } else {
+        badge.classList.remove('show', 'rolling');
+      }
+    }
+  }
+
+  // ---------- ставки ----------
+  $('iceJoinBtn').addEventListener('click', () => socket.emit('ice_bet', { amount: Math.round(Number($('betAmt').value)) }));
+  document.querySelectorAll('.ice-stakes button').forEach(b => b.addEventListener('click', () => {
+    const cur = Math.round(Number($('betAmt').value)) || 1;
+    const max = user ? Math.max(1, Math.floor(currentBalance)) : cur;
+    const act = b.dataset.a;
+    let v = act === 'min' ? 1 : act === 'max' ? max : cur + Number(act);
+    $('betAmt').value = Math.max(1, Math.min(max, v));
+  }));
+  $('betAmt').addEventListener('input', () => { $('betAmt').value = $('betAmt').value.replace(/[^0-9]/g, ''); });
+
+  // ---------- история игр ----------
+  const ANOMALY_ICON_URL = { race: '/icons/icon-race.jpg', mirage: '/icons/icon-mirage.jpg', redo: '/icons/icon-redo.jpg' };
+  let hData = { top: null, last: null, list: [] }, curGame = null;
+  const GEM = '<span class="gem">⭐</span>';
+  const gp = g => ({ name: g.name || '?', photo: g.photo, color: g.color || '#ffc61a' });
+  function fillCard(el, g) {
+    if (!g) { el.innerHTML = '<span class="hd-empty">Пока нет игр</span>'; return; }
+    el.innerHTML = ''; el.append(avatar(gp(g), 'lg-av', 22));
+    const tag = g.anomaly && ANOMALY_ICON_URL[g.anomaly] ? ` <img class="hd-anomaly" src="${ANOMALY_ICON_URL[g.anomaly]}" alt="">` : '';
+    el.insertAdjacentHTML('beforeend', `<span class="hd-name">${esc(g.name)}${tag}</span><b class="hd-win">+${fmt(g.pool)}${GEM}</b>`);
+  }
+  function renderHistory(h) {
+    hData = h;
+    fillCard($('topGame'), h.top); fillCard($('lastGame'), h.last);
+    const list = $('histList'); list.innerHTML = '';
+    if (!h.list.length) { list.innerHTML = '<p class="ice-hint">Игр пока не было</p>'; return; }
+    h.list.forEach(g => {
+      const row = document.createElement('div'); row.className = 'hist-row'; row.append(avatar(gp(g), 'lg-av', 30));
+      const when = new Date(g.ts).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+      const tag = g.anomaly && ANOMALY_ICON_URL[g.anomaly] ? ` <img class="hd-anomaly" src="${ANOMALY_ICON_URL[g.anomaly]}" alt="">` : '';
+      row.insertAdjacentHTML('beforeend', `<span style="flex:1;min-width:0"><span class="hd-name">${esc(g.name)}${tag}</span><small>${g.players.length} игр. · ${when}</small></span><b class="hd-win">+${fmt(g.pool)}${GEM}</b>`);
+      row.addEventListener('click', () => openGame(g));
+      list.append(row);
+    });
+  }
+  $('topGame').addEventListener('click', () => hData.top && openGame(hData.top));
+  $('lastGame').addEventListener('click', () => hData.last && openGame(hData.last));
+
+  // ---------- детали игры + legit check ----------
+  const shortHex = s => s.length > 10 ? s.slice(0, 4) + '…' + s.slice(-4) : s;
+  function openGame(g) {
+    curGame = g;
+    $('gmId').textContent = g.id;
+    const d = new Date(g.ts);
+    $('gmDate').textContent = d.toLocaleDateString('ru-RU') + ' · ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) + (g.anomaly && ANOMALY_NAMES[g.anomaly] ? ' · ' + ANOMALY_NAMES[g.anomaly] : '');
+    $('gmHash').textContent = shortHex(g.hash);
+    $('gmSeed').textContent = shortHex(String(g.seed));
+    const pool = g.players.reduce((s, p) => s + p.stake, 0);
+    const ordered = [...g.players].sort((a, b) => b.stake - a.stake);
+    $('gmPlayers').innerHTML = '';
+    ordered.forEach(p => {
+      const isWin = p.id === g.winnerId;
+      const row = document.createElement('div'); row.className = 'gm-p' + (isWin ? ' win' : '');
+      row.append(avatar(p, 'lg-av', 32));
+      row.insertAdjacentHTML('beforeend', `<span class="gm-p-name"><b>${esc(p.name)}${isWin ? '<span class="gm-win-badge">Победитель</span>' : ''}</b><small>${(p.stake / pool * 100).toFixed(2)}%</small></span><b class="gm-p-amt">${isWin ? '+' : ''}${fmt(isWin ? pool : p.stake)}${GEM}</b>`);
+      $('gmPlayers').append(row);
+    });
+    $('gmVerdict').textContent = ''; $('gmVerdict').className = 'gm-verdict';
+    $('gameModal').classList.add('show');
+  }
+  $('gmClose').addEventListener('click', () => $('gameModal').classList.remove('show'));
+  $('gameModal').addEventListener('click', e => { if (e.target === $('gameModal')) $('gameModal').classList.remove('show'); });
+  document.querySelectorAll('.gm-copy').forEach(b => b.addEventListener('click', () => {
+    if (!curGame) return;
+    const v = b.dataset.t === 'hash' ? curGame.hash : String(curGame.seed);
+    (navigator.clipboard ? navigator.clipboard.writeText(v) : Promise.reject()).then(() => toast('Скопировано')).catch(() => toast('Не удалось скопировать'));
+  }));
+  $('gmCheckBtn').addEventListener('click', async () => {
+    if (!curGame) return;
+    const v = $('gmVerdict');
+    v.textContent = 'Проверяем…'; v.className = 'gm-verdict';
+    try {
+      const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(curGame.seed)));
+      const hex = [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+      const hashOk = hex === curGame.hash;
+      const pool = curGame.players.reduce((s, p) => s + p.stake, 0);
+      let x = rng(curGame.seed)() * pool, w = curGame.players[0];
+      for (const p of curGame.players) { if (x < p.stake) { w = p; break; } x -= p.stake; }
+      const pickOk = w.id === curGame.winnerId;
+      if (hashOk && pickOk) { v.textContent = '✅ Проверено — сид совпадает с хешем, победитель посчитан честно'; v.className = 'gm-verdict ok'; }
+      else { v.textContent = '❌ Проверка не пройдена'; v.className = 'gm-verdict bad'; }
+    } catch (e) { v.textContent = 'Не удалось проверить в этом браузере'; v.className = 'gm-verdict bad'; }
+  });
+  $('histBtn').addEventListener('click', () => $('histModal').classList.add('show'));
+  $('histClose').addEventListener('click', () => $('histModal').classList.remove('show'));
+  $('histModal').addEventListener('click', e => { if (e.target === $('histModal')) $('histModal').classList.remove('show'); });
+
+  // ---------- админка ----------
+  // Баланс игроков выдаётся/списывается через админ-панель основного приложения (Профиль →
+  // Админка); тут остаётся только форс аномалии на следующий раунд, доступный лишь isAdmin.
+  function updateAdminAnomalyVisibility() {
+    $('iceAdminAnomaly').classList.toggle('hidden', !isAdmin);
+  }
+  document.querySelectorAll('#iceAdminAnomaly button').forEach(b => b.addEventListener('click', () => socket.emit('ice_admin_force_anomaly', { anomaly: b.dataset.an || null })));
+
+  // ---------- пасхалка: 3 тапа по подсказке "Бла-Бла-Бла" — звук мяуканья ----------
+  let hintTaps = 0, hintTapT = null;
+  const hintEl = $('iceHint');
+  const meowSound = new Audio('/meow.mp3');
+  if (hintEl) hintEl.addEventListener('click', () => {
+    hintTaps++; clearTimeout(hintTapT); hintTapT = setTimeout(() => hintTaps = 0, 900);
+    if (hintTaps >= 3) { hintTaps = 0; meowEasterEgg(); }
+  });
+  function meowEasterEgg() {
+    try { meowSound.currentTime = 0; meowSound.play(); } catch (e) {}
+  }
+
+  // ---------- открытие вкладки из games-view ----------
+  // Вызывается host-приложением (см. openIce() в основном коде) при каждом заходе на вкладку:
+  // на момент первой загрузки скрипта арена ещё display:none, поэтому её реальную ширину и
+  // актуальное состояние раунда подтягиваем именно в момент открытия.
+  window.__iceOnOpen = function () {
+    W = arena.clientWidth || W;
+    syncBal();
+    updateAdminAnomalyVisibility();
+    socket.emit('ice_request_state');
+  };
+})();
+
