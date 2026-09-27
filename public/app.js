@@ -592,15 +592,8 @@ function renderPlayers(players) {
     root.appendChild(el);
   }
 }
-function renderWinnerCard(s, force = false) {
+function renderWinnerCard(s) {
   const overlay = $("#winnerOverlay");
-  // While Ice Arena is open, the regular PVP renderer must not resurrect an
-  // old Roll result from currentState. Ice Arena explicitly calls this
-  // function with force=true when its own result is ready.
-  if (iceModeActive && !force) {
-    closeModal(overlay);
-    return;
-  }
   if (s.status === "RESULT" && s.winner) {
     const w = s.winner;
     $("#winnerAvatar").innerHTML = w.avatar
@@ -1461,14 +1454,8 @@ function closeUpgrade() {
   $("#gamesList").classList.remove("hidden");
 }
 
-let iceModeActive = false;
-
 function openIce() {
   if (!initData) return handleNotTelegram();
-  iceModeActive = true;
-  // A PVP result can remain in currentState while the user switches to Ice Arena.
-  // Never let that stale Roll result popup render over Ice Arena.
-  closeModal($("#winnerOverlay"));
   $("#gamesList").classList.add("hidden");
   $("#bounceGame").classList.add("hidden");
   $("#upgradeGame").classList.add("hidden");
@@ -1477,8 +1464,6 @@ function openIce() {
 }
 
 function closeIce() {
-  iceModeActive = false;
-  closeModal($("#winnerOverlay"));
   $("#iceGame").classList.add("hidden");
   $("#gamesList").classList.remove("hidden");
 }
@@ -2041,10 +2026,8 @@ if (historySearchInput) {
   const arena = $('iceArena'), puck = $('icePuck'), puckImg = puck.querySelector('.puck-img'), arrow = puck.querySelector('.ice-arrow'), ripple = puck.querySelector('.puck-ripple'), zoneMap = $('iceZoneMap'), legend = $('iceLegend'), winnerEl = $('iceWinner');
   const APPEAR = 2000, SPIN = 3400, HOLD = 700, INTRO = SPIN + HOLD, BASE_FLIGHT = 7000, CLOSE = 1000, PUCK = 24, S = 100, STILL_HOLD = 400;
   let W = arena.clientWidth || 358, skew = 0;
-  let st = { status: 'waiting', players: [], online: 0, id: '-', payout: 0, commission: 0 }, L = [];
+  let st = { status: 'waiting', players: [], online: 0 }, L = [];
   let plan = null, planFor = null, finished = false, phase = '', cam = null;
-  let shownResultFor = null;
-  let resultPopupTimer = null;
   // Аномалия "race": конвейер зон и шайба должны двигаться в одной системе координат —
   // раньше конвейер крутился по CSS-анимации сам по себе, а шайба ставилась по "статическим"
   // физическим координатам, из-за чего в момент остановки видимая под шайбой зона и реальный
@@ -2082,19 +2065,7 @@ if (historySearchInput) {
       const m = L.reduce((s, p) => s + p.w, 0) / L.length; L.forEach(p => p.w -= m);
     }
   }
-  function layout() {
-    const players = Array.isArray(st.players) ? st.players : [];
-    L = players
-      .map(p => ({
-        id: p.id,
-        stake: Math.max(0, Number(p.stake || 0)),
-        sx: Number.isFinite(Number(p.sx)) ? Number(p.sx) : 50,
-        sy: Number.isFinite(Number(p.sy)) ? Number(p.sy) : 50,
-        w: 0, step: 200, dir: 0
-      }))
-      .filter(p => p.stake > 0);
-    if (L.length && L.reduce((sum, p) => sum + p.stake, 0) > 0) solve();
-  }
+  function layout() { L = st.players.map(p => ({ id: p.id, stake: p.stake, sx: p.sx, sy: p.sy, w: 0, step: 200, dir: 0 })); if (L.length) solve(); }
   function getWinner(x, y) { let best = L[0], bv = Infinity; for (const p of L) { const v = (x - p.sx) ** 2 + (y - p.sy) ** 2 - p.w; if (v < bv) { bv = v; best = p; } } return best; }
 
   // ---------- отрисовка ----------
@@ -2105,137 +2076,62 @@ if (historySearchInput) {
   function buildMosaic() {
     const frag = document.createDocumentFragment(), cs = L.length ? cells() : [], zones = [];
     st.players.map((p, i) => i).sort((a, b) => (st.players[a].id === (user && user.id) ? 1 : 0) - (st.players[b].id === (user && user.id) ? 1 : 0)).forEach(i => {
-      const p = st.players[i], poly = cs[i];
-      if (!poly || poly.length < 3 || info(poly).A <= 0) throw new Error('Invalid Ice Arena zone geometry');
-      const inf = info(poly), r = inr(poly, inf.cx, inf.cy);
-      const el = document.createElement('div'); el.className = 'zone-item' + (user && String(p.id) === String(user.id) ? ' mine' : '');
+      const p = st.players[i], poly = cs[i], inf = info(poly), r = inr(poly, inf.cx, inf.cy);
+      const el = document.createElement('div'); el.className = 'zone-item' + (user && p.id === user.id ? ' mine' : '');
       el.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none"><polygon points="${poly.map(v => v[0].toFixed(2) + ',' + v[1].toFixed(2)).join(' ')}" fill="${p.color}"/></svg>`;
       const d = Math.min(46, r * W / 100 * 1.4);
-      if (d >= 14) {
-        const a = avatar(p, 'zone-av', Math.round(d));
-        a.style.left = inf.cx + '%';
-        a.style.top = inf.cy + '%';
-        el.append(a);
-
-        // Show who has already placed a bet before the round starts.
-        // This remains visible in WAITING/COUNTDOWN and disappears only when
-        // the next round has no players.
-        const label = document.createElement('div');
-        label.className = 'zone-label' + (d < 25 ? ' small' : '');
-        label.style.left = inf.cx + '%';
-        label.style.top = Math.min(86, Number(inf.cy) + Math.max(10, d * 0.42)) + '%';
-        const safeName = esc(p.name || 'Игрок');
-        label.innerHTML = `<b>${safeName}</b><br><em>${fmt(p.stake)} ⭐</em>`;
-        el.append(label);
-      }
+      if (d >= 14) { const a = avatar(p, 'zone-av', Math.round(d)); a.style.left = inf.cx + '%'; a.style.top = inf.cy + '%'; el.append(a); }
       frag.append(el); zones.push({ p, el });
     });
     return { frag, zones };
   }
-  function buildFallbackMosaic() {
-    const players = (Array.isArray(st.players) ? st.players : []).filter(p => Number(p.stake || 0) > 0);
-    const total = players.reduce((sum, p) => sum + Number(p.stake || 0), 0);
-    const frag = document.createDocumentFragment();
-    let left = 0;
-    players.forEach(p => {
-      const part = total ? Number(p.stake || 0) / total : 0;
-      const el = document.createElement('div');
-      el.className = 'zone-item' + (user && String(p.id) === String(user.id) ? ' mine' : '');
-      el.style.left = left.toFixed(4) + '%';
-      el.style.top = '0';
-      el.style.width = (part * 100).toFixed(4) + '%';
-      el.style.height = '100%';
-      el.style.background = p.color || '#ffc61a';
-      const av = avatar(p, 'zone-av', Math.max(24, Math.min(52, Math.round(Math.sqrt(Math.max(part, 0.08)) * 70))));
-      av.style.left = '50%'; av.style.top = '50%';
-      el.append(av);
-      const label = document.createElement('div');
-      label.className = 'zone-label'; label.style.left = '50%'; label.style.top = '64%';
-      label.innerHTML = `<b>${esc(p.name || 'Игрок')}</b><br><em>${fmt(Number(p.stake || 0))} ⭐</em>`;
-      el.append(label);
-      frag.append(el);
-      left += part * 100;
-    });
-    return frag;
-  }
-
   function render() {
     zoneMap.innerHTML = ''; legend.innerHTML = '';
-    const sum = L.reduce((s, p) => s + Number(p.stake || 0), 0);
-    $('icePool').textContent = fmt(sum);
-
-    let zones = [];
-    let frag = null;
-    try {
-      // 'result' держим в том же режиме, что и 'running', чтобы не было скачка
-      // мозаики в момент, когда сервер переключает состояние на RESULT.
-      const racing = st.anomaly === 'race' && (st.status === 'running' || st.status === 'result');
-      ({ frag, zones } = buildMosaic());
-      zones.forEach(({ p, el }) => { p.zone = el; });
-      if (racing) {
-        const track = document.createElement('div'); track.className = 'race-track';
-        const f1 = document.createElement('div'); f1.className = 'race-frame'; f1.append(frag);
-        const f2 = document.createElement('div'); f2.className = 'race-frame'; f2.innerHTML = f1.innerHTML;
-        track.append(f1, f2); zoneMap.append(track);
-        raceTrackEl = track;
-        track.style.transform = `translateY(${(-raceOffset / 100 * W).toFixed(2)}px)`;
-      } else {
-        zoneMap.append(frag); raceTrackEl = null;
-      }
-    } catch (e) {
-      console.warn('Ice Arena visual render fallback:', e);
-      raceTrackEl = null;
-      zoneMap.append(buildFallbackMosaic());
-    }
-
-    const playersForLegend = Array.isArray(st.players) ? st.players : [];
-    playersForLegend.forEach(p => {
-      const stake = Number(p.stake || 0);
-      const pct = sum > 0 ? (stake / sum * 100).toFixed(1) : '0.0';
+    const sum = L.reduce((s, p) => s + p.stake, 0);
+    // 'result' держим в том же "конвейерном" режиме, что и 'running' — иначе в момент, когда
+    // сервер шлёт финальный статус, эта проверка резко становится false, зона-мозаика пересобирается
+    // уже БЕЗ сдвига raceOffset (который к этому моменту заморожен на правильном значении в
+    // updateRaceScroll) — и весь фон под шайбой визуально "прыгает" на нулевой сдвиг конвейера.
+    const racing = st.anomaly === 'race' && (st.status === 'running' || st.status === 'result');
+    const { frag, zones } = buildMosaic();
+    zones.forEach(({ p, el }) => { p.zone = el; });
+    if (racing) {
+      const track = document.createElement('div'); track.className = 'race-track';
+      const f1 = document.createElement('div'); f1.className = 'race-frame'; f1.append(frag);
+      const f2 = document.createElement('div'); f2.className = 'race-frame'; f2.innerHTML = f1.innerHTML;
+      track.append(f1, f2); zoneMap.append(track);
+      raceTrackEl = track; track.style.transform = `translateY(${(-raceOffset / 100 * W).toFixed(2)}px)`; // если DOM зон пересобрался посреди гонки (напр. state-рассылка от захода/выхода игрока), не сбрасываем сдвиг конвейера в 0 — берём текущий, следующий кадр его тут же уточнит по таймеру
+    } else { zoneMap.append(frag); raceTrackEl = null; }
+    st.players.forEach(p => {
       const it = document.createElement('div'); it.className = 'ice-player';
       it.append(avatar(p, 'lg-av', 20));
-      it.insertAdjacentHTML('beforeend', `<span>${esc(p.name || 'Игрок')}</span><b>${fmt(stake)} · ${pct}%</b>`);
+      it.insertAdjacentHTML('beforeend', `<span>${esc(p.name)}</span><b>${fmt(p.stake)} · ${(p.stake / sum * 100).toFixed(1)}%</b>`);
       legend.append(it);
     });
-
+    $('icePool').textContent = fmt(sum);
     if (finished) applyResult();
     ui();
   }
-  function clearIceWinnerPopup() {
-    clearTimeout(resultPopupTimer);
-    resultPopupTimer = null;
-    shownResultFor = null;
-    closeModal($('#winnerOverlay'));
-    winnerEl.classList.remove('show');
-    winnerEl.innerHTML = '';
-  }
-
   function applyResult() {
     st.players.forEach(p => p.zone && p.zone.classList.add(p.id === st.winnerId ? 'winner-zone' : 'loser'));
-    const w = st.players.find(p => String(p.id) === String(st.winnerId)); if (!w) return;
-    if (shownResultFor === String(st.id)) return;
-    shownResultFor = String(st.id);
-
-    const pool = st.players.reduce((s, p) => s + Number(p.stake || 0), 0);
+    const w = st.players.find(p => p.id === st.winnerId); if (!w) return;
+    const pool = st.players.reduce((s, p) => s + p.stake, 0);
     const payout = Number(st.payout || Math.max(Number(w.stake || 0), Number((pool * 0.92).toFixed(2))));
-
-    winnerEl.classList.remove('show');
-    winnerEl.innerHTML = '';
-    renderWinnerCard({
-      status: 'RESULT',
-      winner: {
-        id: w.id,
-        name: w.name || 'Игрок',
-        avatar: w.photo || '',
-        bet: Number(w.stake || 0),
-        payout
-      }
-    }, true);
-
-    clearTimeout(resultPopupTimer);
-    resultPopupTimer = setTimeout(() => {
-      if (shownResultFor === String(st.id)) clearIceWinnerPopup();
-    }, 3800);
+    const commission = Number(st.commission || Math.max(0, Number((pool - payout).toFixed(2))));
+    const avatarHtml = w.photo
+      ? `<img src="${esc(w.photo)}" alt="" loading="lazy">`
+      : `<div class="winner-fallback">${esc(String(w.name || "И").trim().charAt(0).toUpperCase() || "И")}</div>`;
+    winnerEl.innerHTML = `
+      <div class="winner-card ice-winner-card">
+        <div class="winner-crown">👑</div>
+        <div class="winner-title">Поздравляем!</div>
+        <div class="winner-avatar">${avatarHtml}</div>
+        <div class="winner-name">${esc(w.name || "Игрок")}</div>
+        <div class="winner-win-label">ВЫИГРЫШ:</div>
+        <div class="winner-payout">+${fmt(payout)} ⭐</div>
+        <div class="winner-detail">Ставка: ${fmt(w.stake || 0)} ⭐ · Комиссия: ${fmt(commission)} ⭐</div>
+      </div>`;
+    winnerEl.classList.add('show');
   }
   function ui() {
     const now = Date.now() + skew; let txt = '', can = false;
@@ -2421,17 +2317,10 @@ if (historySearchInput) {
   }
   requestAnimationFrame(loop);
   function resetVisual() {
-    // A new Ice Arena round must also close the shared global winner popup.
-    clearIceWinnerPopup();
-    if (!plan && !finished) {
-      W = arena.clientWidth || W;
-      place(50, 50);
-      puck.style.visibility = 'hidden';
-      return;
-    }
+    if (!plan && !finished) return;
     plan = null; planFor = null; finished = false; cam = null; phase = '';
     arena.style.transition = ''; arena.style.transform = 'scale(1)';
-    puck.classList.remove('choosing', 'aiming', 'rushing');
+    puck.classList.remove('choosing', 'aiming', 'rushing'); winnerEl.classList.remove('show'); winnerEl.innerHTML = '';
     W = arena.clientWidth || W; place(50, 50); puck.style.visibility = 'hidden';
   }
 
@@ -2439,13 +2328,10 @@ if (historySearchInput) {
   function syncBal() { $('bal').textContent = fmt(currentBalance); }
   syncBal();
   socket.on('ice_state', m => {
-    const next = m || {};
-    skew = Number(next.now || Date.now()) - Date.now();
-    st = { ...st, ...next, players: Array.isArray(next.players) ? next.players : [], payout: Number(next.payout || 0), commission: Number(next.commission || 0) };
+    skew = m.now - Date.now(); st = m;
     if (st.status === 'waiting' || st.status === 'countdown') resetVisual();
     updateAnomalyUI();
-    layout();
-    render();
+    layout(); render();
   });
   socket.on('ice_history', renderHistory);
   socket.on('ice_admin_ok', d => toast(d.msg));

@@ -963,6 +963,3 @@ html,body{height:100%;overflow:hidden}
 #iceGame .ice-bet-modal { position:fixed; }
 #iceGame .ice-bet-sheet { max-height:90vh; overflow-y:auto; overscroll-behavior:contain; }
 #iceGame input { font-size:16px; }
-
-/* Ice Arena result uses the same global winner popup as regular PVP Roll. */
-.ice-winner { display: none !important; }
