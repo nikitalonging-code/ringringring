@@ -363,6 +363,18 @@ async function initDb() {
       commission NUMERIC(20,2),
       players JSONB NOT NULL
     )`,
+    `CREATE TABLE IF NOT EXISTS ice_rounds (
+      id BIGINT PRIMARY KEY,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      pool NUMERIC(20,2) NOT NULL,
+      winner_id TEXT,
+      seed TEXT NOT NULL,
+      seed_hash TEXT NOT NULL,
+      anomaly TEXT,
+      players JSONB NOT NULL,
+      payout NUMERIC(20,2) NOT NULL DEFAULT 0,
+      commission NUMERIC(20,2) NOT NULL DEFAULT 0
+    )`,
     `CREATE TABLE IF NOT EXISTS referral_earnings (
       id BIGSERIAL PRIMARY KEY,
       referrer_id TEXT NOT NULL,
@@ -1521,6 +1533,210 @@ async function requireAdminRequest(req) {
   return checked.user;
 }
 
+// ===================== ICE ARENA =====================
+// Separate multiplayer mode: territory-conquest round, shared with the rest
+// of the app's Postgres balance (debitBalance/creditBalance/getUser/isAdmin
+// above), its own socket.io events (all prefixed "ice_") and its own
+// in-memory round state so it never touches the PVP `state` object.
+const ICE_COUNTDOWN = 10000, ICE_CLOSE = 1000, ICE_RUN_MS = 13600, ICE_RUN_MS_REDO = 26000, ICE_RESULT_MS = 4500;
+const ICE_COLORS = ["#ffc61a", "#ff8a1f", "#f4c430", "#e8720c", "#ffe066", "#d4a017", "#ff7f11", "#ffb347"];
+const ice_r3 = x => Math.round(x * 1000) / 1000;
+
+const ICE_ANOMALY_WEIGHTS = { race: 0.08, mirage: 0.06, redo: 0.06 };
+const ICE_ANOMALY_KEYS = Object.keys(ICE_ANOMALY_WEIGHTS);
+function iceRollAnomaly() {
+  const r = Math.random();
+  let acc = 0;
+  for (const k of ICE_ANOMALY_KEYS) { acc += ICE_ANOMALY_WEIGHTS[k]; if (r < acc) return k; }
+  return null;
+}
+// Deterministic PRNG (mulberry32) seeded per round, so the winner pick can be
+// re-derived and checked client-side from the revealed seed alone.
+function iceRng(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const iceSha256 = s => crypto.createHash("sha256").update(String(s)).digest("hex");
+
+let iceHistory = []; // finished rounds, newest first, capped at 200 (mirrored to ice_rounds)
+let icePendingAnomaly = null;
+let iceRoundSeq = 1;
+let iceTimer = null;
+
+function iceNewRound() {
+  const seed = crypto.randomInt(0, 2 ** 31);
+  const anomaly = icePendingAnomaly || iceRollAnomaly();
+  icePendingAnomaly = null;
+  return { id: iceRoundSeq++, status: "waiting", players: [], endsAt: 0, startAt: 0, seed, hash: iceSha256(seed), winnerId: null, anomaly, payout: 0, commission: 0 };
+}
+let iceRound = iceNewRound();
+
+function iceSpot() {
+  let best = [50, 50], bd = -1;
+  for (let k = 0; k < 40; k++) {
+    const x = 10 + Math.random() * 80, y = 10 + Math.random() * 80;
+    const d = iceRound.players.reduce((m, o) => Math.min(m, (o.sx - x) ** 2 + (o.sy - y) ** 2), 1e9);
+    if (d > bd) { bd = d; best = [x, y]; }
+  }
+  return best;
+}
+
+function icePickWinner() {
+  const bank = ice_r3(iceRound.players.reduce((s, p) => s + p.stake, 0));
+  let x = iceRng(iceRound.seed)() * bank, w = iceRound.players[0];
+  for (const p of iceRound.players) { if (x < p.stake) { w = p; break; } x -= p.stake; }
+  return w;
+}
+
+function iceStateMsg() {
+  const revealed = iceRound.status === "running" || iceRound.status === "result";
+  return {
+    now: Date.now(), id: iceRound.id, status: iceRound.status, endsAt: iceRound.endsAt, startAt: iceRound.startAt,
+    hash: iceRound.hash, seed: revealed ? iceRound.seed : null, winnerId: iceRound.winnerId,
+    anomaly: revealed ? (iceRound.anomaly || null) : null,
+    payout: iceRound.status === "result" ? Number(iceRound.payout || 0) : 0,
+    commission: iceRound.status === "result" ? Number(iceRound.commission || 0) : 0,
+    players: iceRound.players.map(p => ({ id: p.id, name: p.name, photo: p.photo, stake: p.stake, color: p.color, sx: p.sx, sy: p.sy }))
+  };
+}
+function iceHistMsg() {
+  return { last: iceHistory[0] || null, top: iceHistory.reduce((b, g) => (!b || g.pool > b.pool ? g : b), null), list: iceHistory.slice(0, 30) };
+}
+function iceBroadcast() { io.emit("ice_state", iceStateMsg()); }
+function iceBroadcastHistory() { io.emit("ice_history", iceHistMsg()); }
+
+async function icePersistRound(entry) {
+  try {
+    requireDatabase();
+    await pool.query(
+      `INSERT INTO ice_rounds (id, pool, winner_id, seed, seed_hash, anomaly, payout, commission, players)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO NOTHING`,
+      [entry.id, entry.pool, entry.winnerId, String(entry.seed), entry.hash, entry.anomaly, Number(entry.payout || 0), Number(entry.commission || 0), JSON.stringify(entry.players)]
+    );
+  } catch (e) { console.error("ice_rounds persist error:", e.message); }
+}
+
+async function loadIceHistory() {
+  try {
+    requireDatabase();
+    const r = await pool.query(`SELECT id, created_at, pool, winner_id, seed, seed_hash, anomaly, payout, commission, players FROM ice_rounds ORDER BY id DESC LIMIT 200`);
+    iceHistory = r.rows.map(row => {
+      const players = row.players || [];
+      const wp = players.find(p => p.id === row.winner_id) || {};
+      return {
+        id: Number(row.id), ts: new Date(row.created_at).getTime(), pool: Number(row.pool),
+        winnerId: row.winner_id, name: wp.name || "", photo: wp.photo || "", color: wp.color || "#ffc61a",
+        payout: Number(row.payout || 0), commission: Number(row.commission || 0),
+        seed: Number(row.seed), hash: row.seed_hash, anomaly: row.anomaly || null, players
+      };
+    });
+    iceRoundSeq = (iceHistory[0]?.id || 0) + 1;
+    iceRound = iceNewRound();
+  } catch (e) { console.error("loadIceHistory failed:", e.message); }
+}
+
+async function icePlaceBet(playerId, amount, meta) {
+  if (!Number.isInteger(amount) || amount < 1) throw new Error("Ставка — целое число от 1 ⭐ (1, 2, 3…)");
+  if (iceRound.status === "running" || iceRound.status === "result") throw new Error("Раунд уже идёт, дождитесь следующего.");
+  if (iceRound.status === "countdown" && Date.now() > iceRound.endsAt - ICE_CLOSE) throw new Error("Приём ставок закрыт.");
+
+  let p = iceRound.players.find(x => x.id === playerId);
+  if (p && p.betLocked) throw new Error("Предыдущая ставка ещё обрабатывается.");
+  if (p) p.betLocked = true;
+
+  let balance;
+  try {
+    balance = await debitBalance(playerId, amount, { type: "ice_bet", description: `Ставка Ice Arena, раунд #${iceRound.id}` });
+  } catch (e) {
+    if (p) p.betLocked = false;
+    throw e;
+  }
+
+  if (!p) {
+    const [sx, sy] = iceSpot();
+    p = { id: playerId, name: meta.name, photo: meta.photo || "", stake: 0, color: ICE_COLORS[iceRound.players.length % ICE_COLORS.length], sx, sy, betLocked: false };
+    iceRound.players.push(p);
+  }
+  p.stake = ice_r3(p.stake + amount);
+  p.betLocked = false;
+
+  if (iceRound.status === "waiting" && iceRound.players.length >= 2) {
+    iceRound.status = "countdown";
+    iceRound.endsAt = Date.now() + ICE_COUNTDOWN;
+    clearTimeout(iceTimer);
+    iceTimer = setTimeout(iceStartRun, ICE_COUNTDOWN);
+  }
+  iceBroadcast();
+  return balance;
+}
+
+function iceStartRun() {
+  const w = icePickWinner();
+  iceRound.status = "running";
+  iceRound.winnerId = w ? w.id : null;
+  iceRound.startAt = Date.now() + 500;
+  iceBroadcast();
+  clearTimeout(iceTimer);
+  iceTimer = setTimeout(iceFinish, iceRound.anomaly === "redo" ? ICE_RUN_MS_REDO : ICE_RUN_MS);
+}
+
+async function iceFinish() {
+  const poolAmount = ice_r3(iceRound.players.reduce((s, p) => s + p.stake, 0));
+  const winner = iceRound.players.find(p => p.id === iceRound.winnerId);
+  // Same settlement rule as the PVP roll: target 8% commission, while the
+  // winner is never paid less than the original stake.
+  const normalPayout = Number((poolAmount * 0.92).toFixed(2));
+  const payout = Math.max(Number(winner?.stake || 0), normalPayout);
+  const commission = Math.max(0, Number((poolAmount - payout).toFixed(2)));
+  iceRound.payout = payout;
+  iceRound.commission = commission;
+  const entry = {
+    id: iceRound.id, ts: Date.now(), pool: poolAmount, winnerId: iceRound.winnerId,
+    name: winner?.name || "", photo: winner?.photo || "", color: winner?.color || "#ffc61a",
+    payout, commission,
+    seed: iceRound.seed, hash: iceRound.hash, anomaly: iceRound.anomaly || null,
+    players: iceRound.players.map(p => ({ id: p.id, name: p.name, photo: p.photo, color: p.color, stake: p.stake }))
+  };
+  iceHistory.unshift(entry);
+  if (iceHistory.length > 200) iceHistory.length = 200;
+  icePersistRound(entry);
+
+  if (winner) {
+    try {
+      requireDatabase();
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const balanceAfter = await creditBalance(winner.id, payout, client, { type: "ice_win", description: `Победа Ice Arena, раунд #${entry.id} · ${payout.toFixed(2)} ⭐ · комиссия ${commission.toFixed(2)} ⭐` });
+        for (const p of iceRound.players) {
+          await client.query(
+            `UPDATE users SET games_played = games_played + 1, games_won = games_won + $2, total_wagered = total_wagered + $3, updated_at = NOW() WHERE telegram_id = $1`,
+            [String(p.id), p.id === winner.id ? 1 : 0, Number(p.stake)]
+          );
+        }
+        await client.query("COMMIT");
+        io.to(`user:${winner.id}`).emit("balance_updated", { balance: balanceAfter });
+      } catch (e) {
+        try { await client.query("ROLLBACK"); } catch {}
+        console.error("Ice Arena settlement error:", e.message);
+      } finally {
+        client.release();
+      }
+    } catch (e) { console.error("Ice Arena settlement database error:", e.message); }
+  }
+
+  iceBroadcastHistory();
+  iceRound.status = "result";
+  iceBroadcast();
+  clearTimeout(iceTimer);
+  iceTimer = setTimeout(() => { iceRound = iceNewRound(); iceBroadcast(); }, ICE_RESULT_MS);
+}
+// =================== END ICE ARENA STATE ===================
+
 io.on("connection", socket => {
   socket.on("join_room", async data => {
     try {
@@ -1552,10 +1768,51 @@ io.on("connection", socket => {
         isAdmin: isAdmin(p.id)
       });
       socket.emit("room_state", publicState());
+      socket.emit("ice_state", iceStateMsg());
+      socket.emit("ice_history", iceHistMsg());
       broadcast();
     } catch (e) {
       socket.emit("error_message", e.message);
     }
+  });
+
+  // ---- Ice Arena ----
+  socket.on("ice_bet", async data => {
+    try {
+      const id = socket.data.playerId;
+      if (maintenanceMode && !isAdmin(id)) throw new Error(maintenanceMessage());
+      if (!id) throw new Error("Авторизация Telegram не выполнена.");
+      const dbUser = await getUser(id);
+      if (!dbUser || dbUser.banned) throw new Error("Ваш аккаунт заблокирован в приложении.");
+      const amount = Math.round(Number(data?.amount));
+      const name = dbUser.username ? "@" + dbUser.username : (dbUser.first_name || "Игрок");
+      const balance = await icePlaceBet(id, amount, { name, photo: dbUser.avatar_url || "" });
+      socket.emit("balance_updated", { balance });
+    } catch (e) {
+      socket.emit("error_message", e.message);
+    }
+  });
+
+  socket.on("ice_admin_force_anomaly", data => {
+    const id = socket.data.playerId;
+    if (!id || !isAdmin(id)) return;
+    const key = ICE_ANOMALY_KEYS.includes(data?.anomaly) ? data.anomaly : null;
+    if (iceRound.status === "waiting" || iceRound.status === "countdown") {
+      iceRound.anomaly = key;
+      iceBroadcast();
+    } else {
+      icePendingAnomaly = key;
+    }
+    socket.emit("ice_admin_ok", { msg: key ? "Аномалия применится к раунду." : "Форс аномалии снят." });
+  });
+
+  socket.on("ice_request_state", () => {
+    socket.emit("ice_state", iceStateMsg());
+    socket.emit("ice_history", iceHistMsg());
+  });
+
+  socket.on("ice_request_history", () => {
+    socket.emit("ice_history", iceHistMsg());
   });
 
   socket.on("new_round_ack", () => {
@@ -5075,6 +5332,7 @@ app.get("*", (req, res) => res.sendFile(path.join(__dirname, "public", "index.ht
 
 async function start() {
   await initDb();
+  await loadIceHistory();
   await loadMaintenanceMode();
   await settleExpiredRaffles();
   setInterval(settleExpiredRaffles, 5000).unref();

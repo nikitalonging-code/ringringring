@@ -87,6 +87,13 @@
             </div>
             <span class="game-card-name bounce-name">ОТСКОК</span>
           </button>
+          <button class="game-card ice-arena-card" id="openIceArena" type="button">
+            <div class="ice-arena-card-art" aria-hidden="true">
+              <span class="ice-arena-card-ring"></span>
+              <img class="ice-arena-card-puck" src="/puck.png" alt="">
+            </div>
+            <span class="game-card-name ice-arena-name">ICE ARENA</span>
+          </button>
         </div>
 
         <div class="games-mini">
@@ -161,6 +168,58 @@
           </section>
         </div>
       </div>
+
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><filter id="mirageFilter" x="-20%" y="-20%" width="140%" height="140%">
+<feTurbulence type="fractalNoise" baseFrequency="0.009 0.016" numOctaves="2" seed="7" result="n"><animate attributeName="baseFrequency" values="0.006 0.012;0.012 0.02;0.006 0.012" dur="7s" repeatCount="indefinite"/></feTurbulence>
+<feDisplacementMap in="SourceGraphic" in2="n" scale="16" xChannelSelector="R" yChannelSelector="G"/>
+</filter></defs></svg>
+<div class="ice-screen hidden" id="iceGame">
+  <div class="ice-topbar">
+    <div class="bounce-header ice-header">
+      <button class="bounce-back" id="iceBack" type="button">‹ Игры</button>
+      <div class="bounce-title">ICE ARENA</div>
+      <button class="hd-btn" id="histBtn" type="button" aria-label="История игр"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M7 2a1 1 0 0 1 1 1v1h8V3a1 1 0 1 1 2 0v1h1a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h1V3a1 1 0 0 1 1-1zm13 8H4v9a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-9z"/></svg></button>
+    </div>
+    <div class="ice-balance-row"><div class="playhub-balance" id="balancePill"><span class="star">⭐</span><span class="balance-val" id="bal">0</span></div></div>
+  </div>
+  <div class="ice-body">
+    <div class="hd-cards">
+      <div class="hd-card"><small>Топ игра</small><div class="hd-row" id="topGame"><span class="hd-empty">Пока нет игр</span></div></div>
+      <div class="hd-card"><small>Последняя игра</small><div class="hd-row" id="lastGame"><span class="hd-empty">Пока нет игр</span></div></div>
+    </div>
+    <div class="ice-game-card"><div class="ice-total"><span class="tot-l">Банк <b id="icePool">0</b><span class="star">⭐</span></span><span class="tot-r" id="iceStatus">Подключение…</span></div>
+    <div class="ice-arena-shell" id="iceArenaShell"><div class="ice-arena" id="iceArena"><div class="ice-zone-map" id="iceZoneMap"></div><div class="ice-puck" id="icePuck"><span class="puck-ripple"></span><img class="puck-img" alt="" draggable="false" src="/puck.png"><span class="ice-arrow"><svg viewBox="0 0 14 20" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 19V3M2.2 7.8 7 3l4.8 4.8"/></svg></span></div><div id="anomalyBadge" class="anomaly-badge"><span class="ab-ball"></span><span class="ab-icon"></span></div><div class="ice-winner" id="iceWinner"></div></div></div></div>
+    <div class="ice-controls">
+      <div class="ice-stake-label"><span>Ставка</span><strong id="stakeInfo"></strong></div>
+      <div class="bounce-amount ice-amount">
+        <button class="ice-step" data-a="-1" type="button" aria-label="Уменьшить">−</button>
+        <label class="bounce-input ice-bet-field"><span>⭐</span><input id="betAmt" type="number" min="1" step="1" value="1" inputmode="numeric" aria-label="Сумма ставки"></label>
+        <button class="ice-step" data-a="+1" type="button" aria-label="Увеличить">+</button>
+      </div>
+      <div class="ice-stakes"><button data-a="min" type="button">Мин</button><button data-a="-5" type="button">−5</button><button data-a="+5" type="button">+5</button><button data-a="max" type="button">Макс</button></div>
+      <button class="ice-join bounce-play" id="iceJoinBtn" type="button" disabled>Поставить</button></div>
+    <div class="ice-legend" id="iceLegend"></div>
+    <div class="adm-anomaly ice-admin-anomaly hidden" id="iceAdminAnomaly">
+      <button data-an="race" type="button"><img src="/icons/icon-race.jpg" alt="">Гонка</button>
+      <button data-an="mirage" type="button"><img src="/icons/icon-mirage.jpg" alt="">Hide</button>
+      <button data-an="redo" type="button"><img src="/icons/icon-redo.jpg" alt="">Вторая жизнь!</button>
+      <button data-an="" type="button">✖ Снять</button>
+    </div>
+    <p class="ice-hint" id="iceHint">Бла-Бла-Бла это все равно никто не читает..</p>
+  </div>
+  <div class="ice-bet-modal" id="histModal"><div class="ice-bet-sheet"><div class="ice-bet-head">История игр <button class="ice-bet-close" id="histClose">×</button></div><div class="hist-list" id="histList"></div></div></div>
+  <div class="ice-bet-modal" id="gameModal"><div class="ice-bet-sheet game-sheet"><div class="ice-bet-head"><span class="gm-title">Игра #<span id="gmId"></span></span><button class="ice-bet-close" id="gmClose">×</button></div>
+    <div class="gm-date" id="gmDate"></div>
+    <div class="gm-hashes">
+      <div class="gm-hash"><span>Хеш</span><b id="gmHash"></b><button class="gm-copy" data-t="hash" aria-label="Скопировать хеш">⧉</button></div>
+      <div class="gm-hash"><span>Сид</span><b id="gmSeed"></b><button class="gm-copy" data-t="seed" aria-label="Скопировать сид">⧉</button></div>
+    </div>
+    <div class="gm-summary" id="gmSummary"></div>
+    <div class="gm-players" id="gmPlayers"></div>
+    <button class="gm-check" id="gmCheckBtn">Legit check</button>
+    <div class="gm-verdict" id="gmVerdict"></div></div></div>
+</div>
     </div>
 
     <section id="profileView" class="view hidden">
@@ -414,6 +473,20 @@
       <div class="winner-payout" id="winnerPayout">0 ⭐</div>
       <div class="winner-detail" id="winnerBetDetail">Ставка: 0 ⭐</div>
     </div>
+  </div>
+
+
+  <div class="winner-overlay hidden" id="iceWinnerOverlay">
+    <div class="winner-card">
+      <div class="winner-crown">👑</div>
+      <div class="winner-title">Поздравляем!</div>
+      <div class="winner-avatar" id="iceWinnerAvatar"></div>
+      <div class="winner-name" id="iceWinnerName">Игрок</div>
+      <div class="winner-win-label">ВЫИГРЫШ:</div>
+      <div class="winner-payout" id="iceWinnerPayout">0 ⭐</div>
+      <div class="winner-detail" id="iceWinnerBetDetail">Ставка: 0 ⭐</div>
+    </div>
+    <div class="winner-tap-hint">Нажмите на экран, чтобы закрыть</div>
   </div>
 
   <div class="winner-overlay hidden" id="upgradeBanner">
