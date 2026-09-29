@@ -1,0 +1,48 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+
+        run: |
+          set -e
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+          printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+          ssh -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" '
+            set -e
+            cd /root/ringringring
+
+            git fetch origin main
+            git reset --hard origin/main
+
+            npm install --omit=dev
+
+            pm2 restart ringring --update-env
+            pm2 save
+          '
