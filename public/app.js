@@ -133,7 +133,7 @@ function setMaintenanceOverlay(enabled, message = "") {
   if (!overlay) return;
   overlay.classList.toggle("hidden", !clientMaintenance);
   if (message) $("#maintenanceOverlay .maintenance-text").textContent = message;
-  ["topupBtn", "betBtn", "withdrawBtn", "openCreateRaffle", "openUpgrade", "openBounce", "openIceArena", "openCreateTask"].forEach(id => {
+  ["topupBtn", "betBtn", "withdrawBtn", "openCreateRaffle", "openUpgrade", "openBounce", "openCreateTask"].forEach(id => {
     const el = $("#" + id);
     if (el) el.disabled = clientMaintenance;
   });
@@ -1413,14 +1413,11 @@ $("#createPromo").onclick = async () => {
 let upgradeSpinning = false;
 let upgradeAccumDeg = 0;
 
-const SOLO_HOUSE_EDGE_CLIENT = 0.08;
 function upgradeChance() {
   const bet = Number($("#upgradeBet").value);
   const target = Number($("#upgradeTarget").value);
   const valid = Number.isFinite(bet) && Number.isFinite(target) && bet > 0 && target > bet;
-  const fairChance = valid ? (bet / target) * 100 : 0;
-  const chance = fairChance * (1 - SOLO_HOUSE_EDGE_CLIENT);
-  return { bet, target, valid, fairChance, chance };
+  return { bet, target, valid, chance: valid ? (bet / target) * 100 : 0 };
 }
 
 function renderUpgradeWheel() {
@@ -1453,23 +1450,6 @@ function closeUpgrade() {
   $("#upgradeGame").classList.add("hidden");
   $("#gamesList").classList.remove("hidden");
 }
-
-function openIce() {
-  if (!initData) return handleNotTelegram();
-  $("#gamesList").classList.add("hidden");
-  $("#bounceGame").classList.add("hidden");
-  $("#upgradeGame").classList.add("hidden");
-  $("#iceGame").classList.remove("hidden");
-  if (window.__iceOnOpen) window.__iceOnOpen();
-}
-
-function closeIce() {
-  $("#iceGame").classList.add("hidden");
-  $("#gamesList").classList.remove("hidden");
-}
-
-if ($("#openIceArena")) $("#openIceArena").onclick = openIce;
-if ($("#iceBack")) $("#iceBack").onclick = closeIce;
 
 $("#openUpgrade").onclick = openUpgrade;
 $("#upgradeBack").onclick = closeUpgrade;
@@ -1592,7 +1572,7 @@ const BOUNCE_MODES_CLIENT = [
   { n: "Средний", s: 0.15, p: 0.50 },
   { n: "Сложный", s: 0.20, p: 0.35 }
 ];
-const BW=560,BH=600,BCX=BW/2,BCY=255,BRING=185,BBR=(18/1.3/1.5*1.3)*1.3,BBAR=44,BFLOOR=BH-BBAR-BBR,BG=2190,BGAP=.72/1.3*1.3,BGEFF=BGAP/2-Math.asin((BBR+4/1.3)/BRING),BOM=2.97*1.3,BRING0=2.2,BSPAWN=1.2,BVMIN=593,BVMAX=1061,BDT=1/240;
+const BW=560,BH=600,BCX=BW/2,BCY=255,BRING=185,BBR=18/1.3/1.5*1.3,BBAR=44,BFLOOR=BH-BBAR-BBR,BG=2190,BGAP=.72/1.3*1.3,BGEFF=BGAP/2-Math.asin((BBR+4/1.3)/BRING),BOM=2.97*1.3,BRING0=2.2,BSPAWN=1.2,BVMIN=593,BVMAX=1061,BDT=1/240;
 const bounceRingAt=t=>BRING0+BOM*t;
 const bounceCv=$("#bounceCanvas");
 const bounceC=bounceCv?.getContext("2d");
@@ -1857,7 +1837,7 @@ function bounceStart(){
   socket.emit("bounce_spin",{bet,modeIndex:bounceMode});
 }
 function bouncePrepare(result){
-  bounceSpinResult=result||{};bounceWin=!!result?.win;bounceT=Math.max(3,Number(result?.durationMs||6350)/1000-BSPAWN);const g0=bounceRingAt(bounceClk+BSPAWN);const p=bouncePlan(g0,bounceWin,Number(result?.bounces)||1);bounceS=bounceMk(p.a,p.v,g0);bounceAcc=0;bounceSp=0;bouncePhase='play';bounceMult=0;bouncePlaySpawn();bounceMsg=null;bounceTrail=[];bounceFlash=0;bounceSetControls(true);bounceUi("bouncePlay").textContent="Идёт раунд…";
+  bounceSpinResult=result||{};bounceWin=!!result?.win;bounceT=Math.max(3,Number(result?.durationMs||6350)/1000-BSPAWN);const g0=bounceRingAt(bounceClk+BSPAWN);const p=bouncePlan(g0,bounceWin,Number(result?.bounces)||1);bounceS=bounceMk(p.a,p.v,g0);bounceAcc=0;bounceSp=0;bouncePhase='play';bounceMult=0;bouncePlaySpawnSound();bounceMsg=null;bounceTrail=[];bounceFlash=0;bounceSetControls(true);bounceUi("bouncePlay").textContent="Идёт раунд…";
 }
 ["openBounce"].forEach(id=>{const b=bounceUi(id);if(b)b.onclick=openBounce});
 if(bounceUi("bounceBack"))bounceUi("bounceBack").onclick=closeBounce;
@@ -2017,498 +1997,821 @@ if (historySearchInput) {
 });
 
 
-// ===================== ICE ARENA (ported from RING123) =====================
+/* Extracted from public/modes.js. Shared solo engine + DROP only. */
+/* Новые режимы в стиле ОТСКОК / ICE ARENA: ДРОП (plinko) и ПЕНАЛЬТИ.
+   Загружается после app.js и использует его глобалы: socket, toast, setBalance,
+   currentBalance, initData, handleNotTelegram. Вся математика — на сервере
+   (plinko_spin / penalty_spin), клиент только рисует присланный результат. */
 (function () {
-  // Ice Arena tab: reuses the host app's shared `socket` (socket.io client), `user`,
-  // `currentBalance`, `isAdmin`, `toast`, `initData` and `handleNotTelegram` — all
-  // already declared earlier in this same file. Nothing Telegram-specific is redone here.
-  const $ = id => document.getElementById(id);
-  const arena = $('iceArena'), puck = $('icePuck'), puckImg = puck.querySelector('.puck-img'), arrow = puck.querySelector('.ice-arrow'), ripple = puck.querySelector('.puck-ripple'), zoneMap = $('iceZoneMap'), legend = $('iceLegend'), winnerEl = $('iceWinner');
-  const APPEAR = 2000, SPIN = 3400, HOLD = 700, INTRO = SPIN + HOLD, BASE_FLIGHT = 7000, CLOSE = 1000, PUCK = 24, S = 100, STILL_HOLD = 400;
-  let W = arena.clientWidth || 358, skew = 0;
-  let st = { status: 'waiting', players: [], online: 0 }, L = [];
-  let plan = null, planFor = null, finished = false, phase = '', cam = null;
-  // Аномалия "race": конвейер зон и шайба должны двигаться в одной системе координат —
-  // раньше конвейер крутился по CSS-анимации сам по себе, а шайба ставилась по "статическим"
-  // физическим координатам, из-за чего в момент остановки видимая под шайбой зона и реальный
-  // победитель расходились (казалось, что результат "скачком" меняется). Теперь сдвиг конвейера
-  // считается в JS от того же таймера, что и полёт шайбы, и шайба смещается на ту же величину —
-  // они гарантированно совпадают на каждом кадре и одновременно замирают.
-  const RACE_MS = 3600;
-  let raceTrackEl = null, raceOffset = 0;
+  "use strict";
+  if (typeof socket === "undefined") return;
+  const host = document.getElementById("gamesView");
+  const list = document.getElementById("gamesList");
+  if (!host || !list) return;
 
-  const fmt = v => String(+Number(v).toFixed(3));
-  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  function place(x, y) { puck.style.transform = `translate3d(${(x * W / 100 - PUCK / 2).toFixed(2)}px,${(y * W / 100 - PUCK / 2).toFixed(2)}px,0)`; }
-  window.addEventListener('resize', () => { W = arena.clientWidth || W; });
-  place(50, 50); puck.style.visibility = 'hidden';
+  const W = 560, H = 540, DPR = Math.min(window.devicePixelRatio || 1, 2);
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const lerp = (a, b, u) => a + (b - a) * u;
+  const easeOut = u => 1 - Math.pow(1 - u, 3);
+  const fmtM = v => (Number(v) >= 100 ? Number(v).toFixed(0) : Number(v).toFixed(2).replace(/\.?0+$/, ""));
+  const money = v => Number(v || 0).toFixed(2);
 
-  // ---------- аватарка ----------
-  function avatar(p, cls, size) {
-    const el = document.createElement(p.photo ? 'img' : 'div');
-    el.className = cls; el.style.width = el.style.height = size + 'px';
-    const initial = () => { const d = document.createElement('div'); d.className = cls; d.style.cssText = `width:${size}px;height:${size}px;background:${p.color};font-size:${size * .45}px`; d.textContent = (p.name || '?')[0].toUpperCase(); return d; };
-    if (p.photo) { el.src = p.photo; el.referrerPolicy = 'no-referrer'; el.onerror = () => el.replaceWith(initial()); return el; }
-    return initial();
+  // ---------- звук ----------
+  let muted = false, actx = null;
+  function audio() {
+    const C = window.AudioContext || window.webkitAudioContext;
+    if (!C) return null;
+    if (!actx) actx = new C();
+    if (actx.state === "suspended") actx.resume().catch(() => {});
+    return actx;
   }
-
-  // ---------- геометрия зон ----------
-  function clip(poly, a, b, c) { const out = []; for (let i = 0; i < poly.length; i++) { const p = poly[i], q = poly[(i + 1) % poly.length], dp = a * p[0] + b * p[1] - c, dq = a * q[0] + b * q[1] - c; if (dp <= 0) out.push(p); if (dp * dq < 0) { const t = dp / (dp - dq); out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]); } } return out; }
-  function cells() { return L.map(p => { let poly = [[0, 0], [S, 0], [S, S], [0, S]]; for (const o of L) { if (o === p || !poly.length) continue; poly = clip(poly, 2 * (o.sx - p.sx), 2 * (o.sy - p.sy), o.sx * o.sx + o.sy * o.sy - p.sx * p.sx - p.sy * p.sy + p.w - o.w); } return poly; }); }
-  function info(poly) { let A = 0, cx = 0, cy = 0; for (let i = 0; i < poly.length; i++) { const p = poly[i], q = poly[(i + 1) % poly.length], f = p[0] * q[1] - q[0] * p[1]; A += f; cx += (p[0] + q[0]) * f; cy += (p[1] + q[1]) * f; } A /= 2; return A > 1e-9 ? { A, cx: cx / (6 * A), cy: cy / (6 * A) } : { A: 0, cx: 50, cy: 50 }; }
-  function inr(poly, cx, cy) { let m = 1e9; for (let i = 0; i < poly.length; i++) { const p = poly[i], q = poly[(i + 1) % poly.length], dx = q[0] - p[0], dy = q[1] - p[1], l = Math.hypot(dx, dy); if (l > 1e-6) m = Math.min(m, Math.abs(dx * (cy - p[1]) - dy * (cx - p[0])) / l); } return m; }
-  function solve() {
-    const sum = L.reduce((s, p) => s + p.stake, 0);
-    for (let it = 0; it < 400; it++) {
-      const inf = cells().map(info);
-      L.forEach((p, i) => { const e = p.stake / sum * S * S - inf[i].A, d = Math.sign(e); p.step = Math.min(3000, Math.max(.02, p.step * (d === p.dir ? 1.25 : .5))); p.dir = d; p.w += d * Math.min(p.step, Math.abs(e) * 3); if (it < 25 && inf[i].A > 0) { p.sx += (inf[i].cx - p.sx) * .3; p.sy += (inf[i].cy - p.sy) * .3; } });
-      const m = L.reduce((s, p) => s + p.w, 0) / L.length; L.forEach(p => p.w -= m);
-    }
+  function tone(freq, dur, type, vol) {
+    if (muted) return;
+    const c = audio(); if (!c) return;
+    const t = c.currentTime, o = c.createOscillator(), g = c.createGain();
+    o.type = type || "sine"; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol || 0.1, t + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(c.destination); o.start(t); o.stop(t + dur + 0.02);
   }
-  function layout() { L = st.players.map(p => ({ id: p.id, stake: p.stake, sx: p.sx, sy: p.sy, w: 0, step: 200, dir: 0 })); if (L.length) solve(); }
-  function getWinner(x, y) { let best = L[0], bv = Infinity; for (const p of L) { const v = (x - p.sx) ** 2 + (y - p.sy) ** 2 - p.w; if (v < bv) { bv = v; best = p; } } return best; }
+  const sfx = {
+    tick: i => tone(420 + i * 38, 0.07, "triangle", 0.09),
+    kick: () => tone(95, 0.12, "square", 0.11),
+    win: () => [523, 659, 784].forEach((f, i) => setTimeout(() => tone(f, 0.18, "sine", 0.12), i * 90)),
+    lose: () => tone(160, 0.3, "sawtooth", 0.08)
+  };
 
-  // ---------- отрисовка ----------
-  // Строит мозаику зон один раз; для аномалии "race" вставляем её ДВУМЯ одинаковыми копиями
-  // друг под другом и бесконечно сдвигаем весь блок ровно на одну свою высоту — при таком
-  // сдвиге кадр в конце цикла пиксель-в-пиксель совпадает с начальным, поэтому шов незаметен
-  // (раньше двигалась только заливка внутри одной копии — на границе цикла было видно скачок).
-  function buildMosaic() {
-    const frag = document.createDocumentFragment(), cs = L.length ? cells() : [], zones = [];
-    st.players.map((p, i) => i).sort((a, b) => (st.players[a].id === (user && user.id) ? 1 : 0) - (st.players[b].id === (user && user.id) ? 1 : 0)).forEach(i => {
-      const p = st.players[i], poly = cs[i], inf = info(poly), r = inr(poly, inf.cx, inf.cy);
-      const el = document.createElement('div'); el.className = 'zone-item' + (user && p.id === user.id ? ' mine' : '');
-      el.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none"><polygon points="${poly.map(v => v[0].toFixed(2) + ',' + v[1].toFixed(2)).join(' ')}" fill="${p.color}"/></svg>`;
-      const d = Math.min(46, r * W / 100 * 1.4);
-      if (d >= 14) { const a = avatar(p, 'zone-av', Math.round(d)); a.style.left = inf.cx + '%'; a.style.top = inf.cy + '%'; el.append(a); }
-      frag.append(el); zones.push({ p, el });
+  // ---------- серверные настройки режимов ----------
+  let cfg = null;
+  function loadCfg(cb) {
+    if (cfg) return cb(cfg);
+    socket.emit("solo_modes", null, d => {
+      if (d && d.plinko) { cfg = d; cb(cfg); }
+      else toast("Не удалось загрузить режимы. Попробуйте ещё раз.");
     });
-    return { frag, zones };
   }
-  function render() {
-    zoneMap.innerHTML = ''; legend.innerHTML = '';
-    const sum = L.reduce((s, p) => s + p.stake, 0);
-    // 'result' держим в том же "конвейерном" режиме, что и 'running' — иначе в момент, когда
-    // сервер шлёт финальный статус, эта проверка резко становится false, зона-мозаика пересобирается
-    // уже БЕЗ сдвига raceOffset (который к этому моменту заморожен на правильном значении в
-    // updateRaceScroll) — и весь фон под шайбой визуально "прыгает" на нулевой сдвиг конвейера.
-    const racing = st.anomaly === 'race' && (st.status === 'running' || st.status === 'result');
-    const { frag, zones } = buildMosaic();
-    zones.forEach(({ p, el }) => { p.zone = el; });
-    if (racing) {
-      const track = document.createElement('div'); track.className = 'race-track';
-      const f1 = document.createElement('div'); f1.className = 'race-frame'; f1.append(frag);
-      const f2 = document.createElement('div'); f2.className = 'race-frame'; f2.innerHTML = f1.innerHTML;
-      track.append(f1, f2); zoneMap.append(track);
-      raceTrackEl = track; track.style.transform = `translateY(${(-raceOffset / 100 * W).toFixed(2)}px)`; // если DOM зон пересобрался посреди гонки (напр. state-рассылка от захода/выхода игрока), не сбрасываем сдвиг конвейера в 0 — берём текущий, следующий кадр его тут же уточнит по таймеру
-    } else { zoneMap.append(frag); raceTrackEl = null; }
-    st.players.forEach(p => {
-      const it = document.createElement('div'); it.className = 'ice-player';
-      it.append(avatar(p, 'lg-av', 20));
-      it.insertAdjacentHTML('beforeend', `<span>${esc(p.name)}</span><b>${fmt(p.stake)} · ${(p.stake / sum * 100).toFixed(1)}%</b>`);
-      legend.append(it);
-    });
-    $('icePool').textContent = fmt(sum);
-    if (finished) applyResult();
-    ui();
-  }
-  function applyResult() {
-    st.players.forEach(p => p.zone && p.zone.classList.add(p.id === st.winnerId ? 'winner-zone' : 'loser'));
-    const w = st.players.find(p => p.id === st.winnerId); if (!w) return;
-    const pool = st.players.reduce((s, p) => s + p.stake, 0);
-    const payout = Number(st.payout || Math.max(Number(w.stake || 0), Number((pool * 0.92).toFixed(2))));
-    const commission = Number(st.commission || Math.max(0, Number((pool - payout).toFixed(2))));
-    const avatarHtml = w.photo
-      ? `<img src="${esc(w.photo)}" alt="" loading="lazy">`
-      : `<div class="winner-fallback">${esc(String(w.name || "И").trim().charAt(0).toUpperCase() || "И")}</div>`;
-    winnerEl.innerHTML = `
-      <div class="winner-card ice-winner-card">
-        <div class="winner-crown">👑</div>
-        <div class="winner-title">Поздравляем!</div>
-        <div class="winner-avatar">${avatarHtml}</div>
-        <div class="winner-name">${esc(w.name || "Игрок")}</div>
-        <div class="winner-win-label">ВЫИГРЫШ:</div>
-        <div class="winner-payout">+${fmt(payout)} ⭐</div>
-        <div class="winner-detail">Ставка: ${fmt(w.stake || 0)} ⭐ · Комиссия: ${fmt(commission)} ⭐</div>
+
+  // ---------- общий каркас экрана (те же классы, что у ОТСКОКА) ----------
+  function makeGame(o) {
+    const root = document.createElement("div");
+    root.id = o.id + "Game";
+    root.className = "bounce-game solo-game hidden";
+    root.innerHTML =
+      `<div class="bounce-header">
+        <button class="upgrade-back bounce-back" type="button">‹ Игры</button>
+        <div class="bounce-title">${o.title}</div>
+        <button class="bounce-sound" type="button" aria-label="Звук" title="Звук">🔊</button>
+      </div>
+      <div class="bounce-layout">
+        <section class="bounce-stage">
+          <canvas class="solo-canvas" aria-label="${o.title}"></canvas>
+          <div class="bounce-tag"></div>
+        </section>
+        <section class="bounce-controls">
+          <div class="bounce-tabs"></div>
+          <div class="bounce-field-label"><span>Сумма</span><span>0.1 – 50 000</span></div>
+          <div class="bounce-amount">
+            <button class="sg-dec" type="button">−</button>
+            <label class="bounce-input"><span>⭐</span><input class="sg-bet" inputmode="decimal" value="1" aria-label="Сумма ставки"></label>
+            <button class="sg-inc" type="button">+</button>
+          </div>
+          <div class="bounce-quick"></div>
+          <div class="sg-extra"></div>
+          <button class="bet-button bounce-play" type="button">${o.playText}</button>
+          <button class="bet-button bounce-repeat hidden" type="button"></button>
+          <button class="bet-button bounce-cash hidden" type="button"></button>
+          <div class="bounce-error"></div>
+          <div class="bounce-history"></div>
+        </section>
       </div>`;
-    winnerEl.classList.add('show');
-  }
-  function ui() {
-    const now = Date.now() + skew; let txt = '', can = false;
-    if (st.status === 'waiting') { txt = st.players.length ? 'Ждём 2-го игрока' : 'Набор игроков'; can = true; }
-    else if (st.status === 'countdown') { const left = st.endsAt - now; if (left > CLOSE) { txt = 'Начало через 00:' + String(Math.ceil(left / 1000)).padStart(2, '0'); can = true; } else txt = 'Ставки закрыты'; }
-    else if (st.status === 'running') txt = phase === 'rushing' ? 'Шайба на льду' : 'Раунд начинается';
-    else txt = 'Раунд завершён';
-    $('iceStatus').textContent = txt;
-    $('iceJoinBtn').disabled = !can || !user;
-    const mine = user && st.players.find(p => p.id === user.id);
-    $('stakeInfo').textContent = mine ? 'Ваша: ' + fmt(mine.stake) : '';
-  }
-  setInterval(ui, 200);
+    host.appendChild(root);
 
-  // ---------- детерминированная физика шайбы ----------
-  function rng(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
-  function sim(x, y, ang, spd, flightMs, n) {
-    let vx = Math.cos(ang) * spd, vy = Math.sin(ang) * spd; const dt = 1 / 60, decay = 4.5 / (flightMs / 1000), pts = [[x, y]];
-    for (let i = 1; i <= n; i++) {
-      const boost = 1 + 3 * Math.exp(-((i - 1) * dt) / .4); x += vx * dt * boost; y += vy * dt * boost;
-      let bx = false, by = false;
-      if (x < 0) { x = 0; if (vx < 0) { vx = Math.abs(vx) * .78; bx = true; } } else if (x > 100) { x = 100; if (vx > 0) { vx = -Math.abs(vx) * .78; bx = true; } }
-      if (y < 0) { y = 0; if (vy < 0) { vy = Math.abs(vy) * .78; by = true; } } else if (y > 100) { y = 100; if (vy > 0) { vy = -Math.abs(vy) * .78; by = true; } }
-      if (bx || by) {
-        const s = Math.hypot(vx, vy) || 1, m = .37 * s, ax = bx ? (x < 50 ? 1 : -1) : 0, ay = by ? (y < 50 ? 1 : -1) : 0; let nx = vx, ny = vy;
-        if (ax && ax * nx < m) { nx = ax * m; ny = (Math.sign(ny) || 1) * Math.sqrt(Math.max(0, s * s - nx * nx)); }
-        if (ay && ay * ny < m) { ny = ay * m; nx = (Math.sign(nx) || 1) * Math.sqrt(Math.max(0, s * s - ny * ny)); }
-        vx = nx; vy = ny;
+    const q = s => root.querySelector(s);
+    const el = {
+      cv: q("canvas"), tag: q(".bounce-tag"), tabs: q(".bounce-tabs"), quick: q(".bounce-quick"),
+      bet: q(".sg-bet"), play: q(".bounce-play"), err: q(".bounce-error"), hist: q(".bounce-history"),
+      snd: q(".bounce-sound"), back: q(".bounce-back"), extra: q(".sg-extra"), cash: q(".bounce-cash"), rep: q(".bounce-repeat")
+    };
+    el.cv.width = W * DPR; el.cv.height = H * DPR;
+    const c = el.cv.getContext("2d");
+    const g = { mode: 0, bet: 1, phase: "idle", res: null, t0: 0, sel: 2, memo: {}, open: false, count: 1, last: null };
+    const hp = k => { if (window.ringHaptic) window.ringHaptic(k); };
+    const prefs = window.ringPrefs;
+    const savePrefs = () => { if (prefs) prefs.set(o.id, { bet: g.bet, mode: g.mode, count: g.count }); };
+    {   // последняя ставка и режим (режим потом обрезается по числу режимов в open())
+      const p = prefs && prefs.get(o.id, null);
+      if (p) {
+        if (Number.isInteger(p.mode) && p.mode >= 0) g.mode = p.mode;
+        if (Number(p.bet) >= 0.1) g.bet = Math.min(50000, Math.round(Number(p.bet) * 100) / 100);
+        if (Number.isInteger(p.count) && p.count >= 1 && p.count <= 20) g.count = p.count;
       }
-      if ((x < 12 || x > 88) && (y < 12 || y > 88)) { const s0 = Math.hypot(vx, vy); vx += (50 - x) * .02 * s0 * dt; vy += (50 - y) * .02 * s0 * dt; const s1 = Math.hypot(vx, vy) || 1; vx *= s0 / s1; vy *= s0 / s1; }
-      const f = Math.exp(-decay * dt); vx *= f; vy *= f; pts.push([x, y]);
     }
-    return pts;
-  }
-  // Победитель определён сервером; подбираем траекторию (по общему seed), которая приводит шайбу в его зону.
-  function buildPlan() {
-    if (st.anomaly === 'redo') return buildRedoPlan();
-    const flightMs = BASE_FLIGHT, n = Math.round(flightMs / 1000 * 60);
-    let best = null;
-    for (let k = 0; k < 4000; k++) {
-      const r = rng((st.seed + k * 7919) >>> 0);
-      const sx = 12 + r() * 76, sy = 14 + r() * 72, q = Math.floor(r() * 4), ang = (q * 90 + 24 + r() * 42) * Math.PI / 180, spd = 750 + r() * 160, sa = r() * 360;
-      const pts = sim(sx, sy, ang, spd, flightMs, n); best = { sp: [sx, sy], pts, ang, sa, flightMs, n };
-      const e = pts[n]; if (getWinner(e[0], e[1]).id === st.winnerId) break;
-    }
-    const fa = best.ang * 180 / Math.PI + 90;
-    best.fa = fa; best.ea = best.sa + 720 + ((((fa - best.sa) % 360) + 360) % 360); // 2 оборота и остановка ровно по направлению полёта
-    return best;
-  }
-  // Аномалия "redo": первый пролёт выглядит ровно как обычный (та же длительность 7с) и заканчивается
-  // в случайной точке — шайба тормозит, но победитель ещё не объявляется. С этого же места разыгрывается
-  // второй пролёт (со своим повторным прицеливанием), который уже по-настоящему приводит шайбу в зону победителя.
-  function buildRedoPlan() {
-    const r1 = rng((st.seed ^ 0x1a2b3c4d) >>> 0);
-    const flight1Ms = BASE_FLIGHT, n1 = Math.round(flight1Ms / 1000 * 60);
-    const sx1 = 12 + r1() * 76, sy1 = 14 + r1() * 72, q1 = Math.floor(r1() * 4), ang1 = (q1 * 90 + 24 + r1() * 42) * Math.PI / 180, spd1 = 750 + r1() * 160, sa1 = r1() * 360;
-    const pts1 = sim(sx1, sy1, ang1, spd1, flight1Ms, n1);
-    const fa1 = ang1 * 180 / Math.PI + 90, ea1 = sa1 + 720 + ((((fa1 - sa1) % 360) + 360) % 360);
-    const stop = pts1[n1];
-    const flight2Ms = BASE_FLIGHT, n2 = Math.round(flight2Ms / 1000 * 60);
-    let best2 = null;
-    for (let k = 0; k < 4000; k++) {
-      const r = rng((st.seed + 1 + k * 7919) >>> 0);
-      const ang = r() * Math.PI * 2, spd = 750 + r() * 160, sa = r() * 360;
-      const pts = sim(stop[0], stop[1], ang, spd, flight2Ms, n2);
-      best2 = { sp: stop, pts, ang, sa, flightMs: flight2Ms, n: n2 };
-      const e = pts[n2]; if (getWinner(e[0], e[1]).id === st.winnerId) break;
-    }
-    const fa2 = best2.ang * 180 / Math.PI + 90;
-    best2.ea = best2.sa + 720 + ((((fa2 - best2.sa) % 360) + 360) % 360);
-    return { mode: 'redo', phase1: { sp: [sx1, sy1], pts: pts1, sa: sa1, ea: ea1, flightMs: flight1Ms, n: n1 }, stop, phase2: best2 };
-  }
-  function setPhase(p) {
-    if (p === phase) return; phase = p;
-    puck.classList.toggle('choosing', p === 'choosing'); puck.classList.toggle('aiming', p === 'aiming'); puck.classList.toggle('rushing', p === 'rushing');
-  }
-  const clamp01 = x => Math.max(0, Math.min(1, x));
-  const easeOut = x => 1 - Math.pow(1 - x, 3);
-  // появление шайбы: плавный рост без затемнения, расходящееся кольцо, стрелка крутится вокруг шайбы и замирает по направлению броска
-  function fx(t, sa, ea) {
-    const e = easeOut(clamp01(t / APPEAR)), s = .45 + .55 * e;
-    puckImg.style.opacity = e.toFixed(3);
-    puckImg.style.transform = `scale(${s.toFixed(3)})`;
-    const r = clamp01(t / 800);
-    ripple.style.opacity = (.7 * (1 - r) * (1 - r)).toFixed(3);
-    ripple.style.transform = `translate(-50%,-50%) scale(${(.7 + 1.6 * easeOut(r)).toFixed(3)})`;
-    const ang = sa + (ea - sa) * easeOut(clamp01(t / SPIN));
-    const pop = 1 + .25 * Math.sin(Math.PI * clamp01((t - SPIN) / 350));
-    arrow.style.opacity = (clamp01(t / 150) * (1 - clamp01((t - INTRO) / 250))).toFixed(3);
-    arrow.style.transform = `rotate(${ang.toFixed(2)}deg) scale(${(s * pop).toFixed(3)})`;
-  }
-  // Общий для обычного полёта и второй фазы "redo": в последние 3с плавно наезжаем камерой на шайбу.
-  function applyCamZoom(ft, flightMs, x, y) {
-    const zt = Math.max(0, Math.min(1, (ft - (flightMs - 3000)) / 3000));
-    if (zt > 0) {
-      if (!cam) { cam = { x, y }; arena.style.transition = 'none'; }
-      cam.x += (x - cam.x) * .12; cam.y += (y - cam.y) * .12;
-      const e = zt * zt * (3 - 2 * zt), sc = 1 + .32 * e, lim = (sc - 1) * 50;
-      const tx = Math.max(-lim, Math.min(lim, (50 - cam.x) * sc)), ty = Math.max(-lim, Math.min(lim, (50 - cam.y) * sc));
-      arena.style.transform = `translate(${tx}%,${ty}%) scale(${sc})`;
-    }
-  }
-  // Сдвигает конвейер зон (0-100, % высоты арены). Пока раунд не завершён — считаем от общего
-  // таймера полёта; как только победитель определён (finished), просто перестаём его обновлять.
-  // Шайба на конвейер никак не завязана — она всегда едет по своей обычной физической траектории,
-  // конвейер под ней — чисто фоновая декорация.
-  function updateRaceScroll(t) {
-    if (!raceTrackEl || finished) return;
-    raceOffset = ((Math.max(0, t) % RACE_MS) / RACE_MS) * 100;
-    raceTrackEl.style.transform = `translateY(${(-raceOffset / 100 * W).toFixed(2)}px)`;
-  }
-  function frame(t) {
-    if (plan.mode === 'redo') { frameRedo(t); return; }
-    updateRaceScroll(t);
-    // Шайба уже долетела и замерла — дальше НИЧЕГО не трогаем. Без этой защиты каждое новое
-    // 'state' от сервера (чужая ставка, чей-то коннект/дисконнект и т.п.) пересчитывает
-    // skew = m.now - Date.now(), а t = Date.now()+skew-startAt считается заново каждый кадр —
-    // при обычном сетевом джиттере skew может на миг "качнуться" назад, t тоже уменьшится,
-    // ft перестаёт быть прижатым к plan.flightMs, и шайба на мгновение отматывается на более
-    // раннюю точку своего полёта — это и был видимый скачок в конце раунда.
-    if (finished) return;
-    if (t < 0) { puck.style.visibility = 'hidden'; place(plan.sp[0], plan.sp[1]); fx(0, plan.sa, plan.ea); return; }
-    puck.style.visibility = 'visible';
-    fx(t, plan.sa, plan.ea);
-    if (t < INTRO) { setPhase(t < SPIN ? 'choosing' : 'aiming'); place(plan.sp[0], plan.sp[1]); return; }
-    setPhase('rushing');
-    const ft = Math.min(t - INTRO, plan.flightMs), idx = ft / 1000 * 60, i = Math.min(plan.n - 1, Math.floor(idx)), f = idx - i;
-    const a = plan.pts[i], b = plan.pts[i + 1], x = a[0] + (b[0] - a[0]) * f, y = a[1] + (b[1] - a[1]) * f;
-    place(x, y);
-    applyCamZoom(ft, plan.flightMs, x, y);
-    if (ft >= plan.flightMs && !finished) { finished = true; applyResult(); }
-  }
-  // Аномалия "redo": интро1 → пролёт1 → короткая замершая пауза (без победителя) → интро2 → пролёт2 → победитель.
-  function frameRedo(t) {
-    const p1 = plan.phase1, p2 = plan.phase2;
-    const T1 = INTRO, T2 = T1 + p1.flightMs, T3 = T2 + STILL_HOLD, T4 = T3 + INTRO;
-    if (finished) return; // та же защита от "перемотки" из-за дрожания skew, что и в frame()
-    if (t < 0) { puck.style.visibility = 'hidden'; place(p1.sp[0], p1.sp[1]); fx(0, p1.sa, p1.ea); return; }
-    puck.style.visibility = 'visible';
-    if (t < T1) { fx(t, p1.sa, p1.ea); setPhase(t < SPIN ? 'choosing' : 'aiming'); place(p1.sp[0], p1.sp[1]); return; }
-    if (t < T2) {
-      setPhase('rushing');
-      const ft = t - T1, idx = ft / 1000 * 60, i = Math.min(p1.n - 1, Math.floor(idx)), f = idx - i;
-      const a = p1.pts[i], b = p1.pts[i + 1], x = a[0] + (b[0] - a[0]) * f, y = a[1] + (b[1] - a[1]) * f;
-      place(x, y);
-      arrow.style.opacity = 0; ripple.style.opacity = 0;
-      applyCamZoom(ft, p1.flightMs, x, y);
-      return;
-    }
-    if (t < T3) { // шайба замерла, победитель ещё не выбран
-      if (cam) { cam = null; arena.style.transition = ''; arena.style.transform = 'scale(1)'; }
-      setPhase(''); place(plan.stop[0], plan.stop[1]); arrow.style.opacity = 0; ripple.style.opacity = 0;
-      return;
-    }
-    if (t < T4) {
-      // Второй пролёт "дубля": шайба уже видна (только что остановилась), поэтому без
-      // повторной анимации появления (без роста/прозрачности/кольца) — просто тихо
-      // "прицеливается" (со стрелкой, крутящейся к направлению второго броска) и сразу летит дальше.
-      const lt = t - T3;
-      setPhase(lt < SPIN ? 'choosing' : 'aiming');
-      puckImg.style.opacity = '1'; puckImg.style.transform = 'scale(1)';
-      const ang2 = p2.sa + (p2.ea - p2.sa) * easeOut(clamp01(lt / SPIN));
-      const pop2 = 1 + .25 * Math.sin(Math.PI * clamp01((lt - SPIN) / 350));
-      arrow.style.opacity = (clamp01(lt / 150) * (1 - clamp01((lt - INTRO) / 250))).toFixed(3);
-      arrow.style.transform = `rotate(${ang2.toFixed(2)}deg) scale(${pop2.toFixed(3)})`;
-      ripple.style.opacity = '0';
-      place(p2.sp[0], p2.sp[1]);
-      return;
-    }
-    setPhase('rushing');
-    const ft = Math.min(t - T4, p2.flightMs), idx = ft / 1000 * 60, i = Math.min(p2.n - 1, Math.floor(idx)), f = idx - i;
-    const a = p2.pts[i], b = p2.pts[i + 1], x = a[0] + (b[0] - a[0]) * f, y = a[1] + (b[1] - a[1]) * f;
-    place(x, y);
-    arrow.style.opacity = 0; ripple.style.opacity = 0;
-    applyCamZoom(ft, p2.flightMs, x, y);
-    if (ft >= p2.flightMs && !finished) finished = true, applyResult();
-  }
-  function loop() {
-    requestAnimationFrame(loop);
-    if ((st.status !== 'running' && st.status !== 'result') || !st.startAt || !L.length) return;
-    if (planFor !== st.id) { plan = buildPlan(); planFor = st.id; finished = false; cam = null; }
-    frame(Date.now() + skew - st.startAt);
-  }
-  requestAnimationFrame(loop);
-  function resetVisual() {
-    if (!plan && !finished) return;
-    plan = null; planFor = null; finished = false; cam = null; phase = '';
-    arena.style.transition = ''; arena.style.transform = 'scale(1)';
-    puck.classList.remove('choosing', 'aiming', 'rushing'); winnerEl.classList.remove('show'); winnerEl.innerHTML = '';
-    W = arena.clientWidth || W; place(50, 50); puck.style.visibility = 'hidden';
-  }
+    let raf = 0;
 
-  // ---------- сеть (общий socket.io хоста, события с префиксом ice_) ----------
-  function syncBal() { $('bal').textContent = fmt(currentBalance); }
-  syncBal();
-  socket.on('ice_state', m => {
-    skew = m.now - Date.now(); st = m;
-    if (st.status === 'waiting' || st.status === 'countdown') resetVisual();
-    updateAnomalyUI();
-    layout(); render();
-  });
-  socket.on('ice_history', renderHistory);
-  socket.on('ice_admin_ok', d => toast(d.msg));
-  socket.on('balance_updated', () => syncBal());
-  socket.on('joined', () => { syncBal(); updateAdminAnomalyVisibility(); });
+    const modes = () => o.modes(cfg);
+    const lock = d => {
+      root.querySelectorAll(".bounce-controls button, .bounce-controls input").forEach(x => { x.disabled = d; });
+      // пока идёт серия (пенальти) ставка и режим зафиксированы, но «бить дальше» / «забрать» доступны
+      if (!d && g.open) root.querySelectorAll(".bounce-tabs button, .bounce-quick button, .sg-dec, .sg-inc, .sg-bet, .sg-extra button, .sg-extra input").forEach(x => { x.disabled = true; });
+    };
+    const shake = () => {
+      root.classList.remove("solo-shake"); void root.offsetWidth; root.classList.add("solo-shake");
+      setTimeout(() => root.classList.remove("solo-shake"), 520);
+      try { window.Telegram?.WebApp?.HapticFeedback?.notificationOccurred("error"); } catch {}
+    };
 
-  // ---------- аномалии ----------
-  // Сервер отдаёт st.anomaly = null, пока раунд не перешёл в running (ставки уже закрыты),
-  // так что до этого момента бейдж вообще не появляется и не спойлерит исход.
-  // Как только раунд стартует, бейдж выскакивает в углу арены и "крутит" иконки между
-  // вариантами анoмалий примерно 0.7с, затем останавливается на реальной аномалии этого раунда.
-  const ANOMALY_NAMES = { race: 'Гонка', mirage: 'H̷̢̨̹̞͚̫̖͓̳͇̰̹͕̝̘̘͂͛͒̈́͌̈́̈́̕̕͝͝͝͝i̸̟̮͙͕͎͇̱̯̪̤̺̯̩̗̘̐̅̿͌͛̈́̾̓́̓̿̿̕͘͝d̶͉̤̤͕̬̱̻̥͎͙͎̹̰̲̩̈́͐͌̿̓͆̈́̄̈́̄̾͐̚͘͝e̸̬̥̫͙̜̫͕̙̩̳͙̰͚͖̠̍̾̾͛̇͋͊̇̕͝͝͝͝͝', redo: 'Вторая жизнь!' };
-  const ANOMALY_ICON = { race: 'ic-race', mirage: 'ic-mirage', redo: 'ic-redo' };
-  const ANOMALY_CYCLE = ['ic-race', 'ic-mirage', 'ic-redo'];
-  let shownAnomalyFor = null, anomalySpin = null, anomalyRollT = null;
-  function updateAnomalyUI() {
-  const badge = $('anomalyBadge'), icon = badge.querySelector('.ab-icon');
-  const active = st.status === 'running' || st.status === 'result';
-  const kind = active && Object.prototype.hasOwnProperty.call(ANOMALY_ICON, st.anomaly) ? st.anomaly : null;
-  $('iceGame').classList.toggle('mirage-active', kind === 'mirage' && st.status === 'running');
-  const key = kind ? String(st.id) + ':' + kind : null;
-  if (key === shownAnomalyFor && (key === null || badge.classList.contains('show'))) return;
-  shownAnomalyFor = key;
-  clearInterval(anomalySpin); clearTimeout(anomalyRollT);
-  anomalySpin = null; anomalyRollT = null;
-  badge.classList.remove('show', 'rolling', 'settled');
-  icon.classList.remove(...ANOMALY_CYCLE, 'flip-out');
-  icon.style.backgroundImage = '';
-  badge.removeAttribute('title');
-  if (!kind) return;
-  const paint = value => {
-    icon.classList.remove(...ANOMALY_CYCLE, 'flip-out');
-    icon.classList.add(ANOMALY_ICON[value]);
-    icon.style.backgroundImage = 'url("/icons/icon-' + value + '.jpg")';
-  };
-  badge.title = ANOMALY_NAMES[kind];
-  badge.classList.add('show');
-  if (st.status === 'result') { paint(kind); badge.classList.add('settled'); return; }
-  badge.classList.add('rolling');
-  const cycle = ['race', 'mirage', 'redo']; let i = 0;
-  paint(cycle[0]);
-  // No nested timeout: nothing can overwrite the final icon after settling.
-  anomalySpin = setInterval(() => {
-    if (shownAnomalyFor !== key) return;
-    paint(cycle[++i % cycle.length]);
-  }, 170);
-  anomalyRollT = setTimeout(() => {
-    clearInterval(anomalySpin); anomalySpin = null;
-    if (shownAnomalyFor !== key) return;
-    paint(kind);
-    badge.classList.remove('rolling'); badge.classList.add('settled');
-    toast('Аномалия! ' + ANOMALY_NAMES[kind]);
-  }, 850);
-}
+    function readBet() {
+      let v = parseFloat(String(el.bet.value).replace(",", "."));
+      if (!(v >= 0.1)) v = 0.1;
+      return setBet(v);
+    }
+    function setBet(v) {
+      v = Math.max(0.1, Math.min(50000, Math.round(Number(v) * 100) / 100));
+      g.bet = v; el.bet.value = v;
+      el.quick.querySelectorAll("button[data-v]").forEach(b => b.classList.toggle("on", Number(b.dataset.v) === v));
+      return v;
+    }
+    function renderTabs() {
+      el.tabs.innerHTML = modes().map((m, i) =>
+        `<button type="button" class="${i === g.mode ? "on" : ""}" data-i="${i}"><b>${m.name}</b><small>${o.tabSub(m)}</small></button>`).join("");
+      el.tabs.querySelectorAll("button").forEach(b => b.onclick = () => {
+        if (g.phase === "waiting" || g.phase === "play" || g.open) return;
+        g.mode = Number(b.dataset.i); g.memo = {}; if (g.phase === "result") { g.phase = "idle"; g.res = null; }
+        renderTabs(); renderTag(); savePrefs();
+      });
+    }
+    function renderTag() { el.tag.innerHTML = o.tag(modes()[g.mode], g); }
 
-// ---------- ставки ----------
-  $('iceJoinBtn').addEventListener('click', () => socket.emit('ice_bet', { amount: Math.round(Number($('betAmt').value)) }));
-  document.querySelectorAll('.ice-stakes button').forEach(b => b.addEventListener('click', () => {
-    const cur = Math.round(Number($('betAmt').value)) || 1;
-    const max = user ? Math.max(1, Math.floor(currentBalance)) : cur;
-    const act = b.dataset.a;
-    let v = act === 'min' ? 1 : act === 'max' ? max : cur + Number(act);
-    $('betAmt').value = Math.max(1, Math.min(max, v));
-  }));
-  $('betAmt').addEventListener('input', () => { $('betAmt').value = $('betAmt').value.replace(/[^0-9]/g, ''); });
-
-  // ---------- история игр ----------
-  const ANOMALY_ICON_URL = { race: '/icons/icon-race.jpg', mirage: '/icons/icon-mirage.jpg', redo: '/icons/icon-redo.jpg' };
-  let hData = { top: null, last: null, list: [] }, curGame = null;
-  const GEM = '<span class="gem">⭐</span>';
-  const gp = g => ({ name: g.name || '?', photo: g.photo, color: g.color || '#ffc61a' });
-  function fillCard(el, g) {
-    if (!g) { el.innerHTML = '<span class="hd-empty">Пока нет игр</span>'; return; }
-    el.innerHTML = ''; el.append(avatar(gp(g), 'lg-av', 22));
-    const tag = g.anomaly && ANOMALY_ICON_URL[g.anomaly] ? ` <img class="hd-anomaly" src="${ANOMALY_ICON_URL[g.anomaly]}" alt="">` : '';
-    el.insertAdjacentHTML('beforeend', `<span class="hd-name">${esc(g.name)}${tag}</span><b class="hd-win">+${fmt(g.payout || g.pool)}${GEM}</b>`);
-  }
-  function renderHistory(h) {
-    hData = h;
-    fillCard($('topGame'), h.top); fillCard($('lastGame'), h.last);
-    const list = $('histList'); list.innerHTML = '';
-    if (!h.list.length) { list.innerHTML = '<p class="ice-hint">Игр пока не было</p>'; return; }
-    h.list.forEach(g => {
-      const row = document.createElement('div'); row.className = 'hist-row'; row.append(avatar(gp(g), 'lg-av', 30));
-      const when = new Date(g.ts).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-      const tag = g.anomaly && ANOMALY_ICON_URL[g.anomaly] ? ` <img class="hd-anomaly" src="${ANOMALY_ICON_URL[g.anomaly]}" alt="">` : '';
-      row.insertAdjacentHTML('beforeend', `<span style="flex:1;min-width:0"><span class="hd-name">${esc(g.name)}${tag}</span><small>${g.players.length} игр. · ${when}</small></span><b class="hd-win">+${fmt(g.payout || g.pool)}${GEM}</b>`);
-      row.addEventListener('click', () => openGame(g));
-      list.append(row);
+    // быстрые ставки — как в ОТСКОКЕ
+    [["Мин", () => 0.1], ["÷2", () => readBet() / 2], ["×2", () => readBet() * 2], ["Макс", () => Math.min(currentBalance, 50000)]].forEach(([t, f]) => {
+      const b = document.createElement("button"); b.type = "button"; b.textContent = t;
+      b.onclick = () => setBet(f()); el.quick.append(b);
     });
-  }
-  $('topGame').addEventListener('click', () => hData.top && openGame(hData.top));
-  $('lastGame').addEventListener('click', () => hData.last && openGame(hData.last));
-
-  // ---------- детали игры + legit check ----------
-  const shortHex = s => s.length > 10 ? s.slice(0, 4) + '…' + s.slice(-4) : s;
-  function openGame(g) {
-    curGame = g;
-    $('gmId').textContent = g.id;
-    const d = new Date(g.ts);
-    $('gmDate').textContent = d.toLocaleDateString('ru-RU') + ' · ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) + (g.anomaly && ANOMALY_NAMES[g.anomaly] ? ' · ' + ANOMALY_NAMES[g.anomaly] : '');
-    $('gmHash').textContent = shortHex(g.hash);
-    $('gmSeed').textContent = shortHex(String(g.seed));
-    const pool = g.players.reduce((s, p) => s + p.stake, 0);
-    // Older Ice Arena history rows predate the commission fields, so their
-    // actual historical payout is the stored pool. New rows have payout set.
-    const payout = Number(g.payout || g.pool || 0);
-    const commission = Number(g.commission || Math.max(0, Number((pool - payout).toFixed(2))));
-    $('gmSummary').innerHTML = `<div><span>Выплата</span><b>+${fmt(payout)}${GEM}</b></div><div><span>Комиссия</span><b>${fmt(commission)}${GEM}</b></div><div><span>Банк</span><b>${fmt(pool)}${GEM}</b></div>`;
-    const ordered = [...g.players].sort((a, b) => b.stake - a.stake);
-    $('gmPlayers').innerHTML = '';
-    ordered.forEach(p => {
-      const isWin = p.id === g.winnerId;
-      const row = document.createElement('div'); row.className = 'gm-p' + (isWin ? ' win' : '');
-      row.append(avatar(p, 'lg-av', 32));
-      row.insertAdjacentHTML('beforeend', `<span class="gm-p-name"><b>${esc(p.name)}${isWin ? '<span class="gm-win-badge">Победитель</span>' : ''}</b><small>${(p.stake / pool * 100).toFixed(2)}%</small></span><b class="gm-p-amt">${isWin ? '+' : ''}${fmt(isWin ? payout : p.stake)}${GEM}</b>`);
-      $('gmPlayers').append(row);
+    el.quick.append(document.createElement("i"));
+    [1, 5, 25, 100].forEach(v => {
+      const b = document.createElement("button"); b.type = "button"; b.textContent = v; b.dataset.v = v;
+      b.onclick = () => setBet(v); el.quick.append(b);
     });
-    $('gmVerdict').textContent = ''; $('gmVerdict').className = 'gm-verdict';
-    $('gameModal').classList.add('show');
+    el.bet.onchange = readBet;
+    q(".sg-dec").onclick = () => { const v = readBet(); setBet(v > 1 ? v - 1 : v - 0.1); };
+    q(".sg-inc").onclick = () => { const v = readBet(); setBet(v >= 1 ? v + 1 : v + 0.1); };
+    el.snd.onclick = () => { muted = !muted; document.querySelectorAll(".solo-game .bounce-sound").forEach(b => { b.textContent = muted ? "🔇" : "🔊"; b.classList.toggle("muted", muted); }); if (!muted) audio(); };
+
+    function syncOpenUI() {
+      const open = g.open && o.nextEvt;
+      el.cash.classList.toggle("hidden", !open);
+      const si = g.streakInfo || g.res;
+      if (open && si) {
+        el.play.textContent = `Бить дальше ×${fmtM(si.nextMultiplier)}`;
+        el.cash.textContent = `Забрать ${money(si.potential)} ⭐ (×${fmtM(si.multiplier)})`;
+      } else el.play.textContent = o.playText;
+      if (el.rep) {
+        const L = g.last, m = L && modes()[L.mode];
+        el.rep.classList.toggle("hidden", !m || !!open);
+        if (m) el.rep.textContent = `↻ Повторить · ${fmtM(L.bet)}${L.count > 1 ? " × " + L.count : ""} ⭐ · ${m.name}`;
+      }
+    }
+    function reset(msg) {
+      g.phase = g.open ? "result" : "idle"; lock(false); syncOpenUI();
+      if (el.cash) el.cash.disabled = false;
+      if (msg) el.err.textContent = msg;
+    }
+    function start() {
+      if (!initData) return handleNotTelegram();
+      if (g.phase === "waiting" || g.phase === "play") return;
+      if (g.open && o.nextEvt) {           // серия: следующий удар без новой ставки
+        audio(); g.phase = "waiting"; g.res = null; g.memo = {}; el.err.textContent = "";
+        lock(true); el.play.textContent = "Отправляем…";
+        socket.emit(o.nextEvt, { pick: g.sel });
+        return;
+      }
+      const bet = readBet();
+      const total = o.totalBet ? o.totalBet(g, bet) : bet;
+      if (total > currentBalance) return toast("Недостаточно Stars на балансе.");
+      g.last = { bet, mode: g.mode, count: g.count }; savePrefs(); syncOpenUI();
+      audio();
+      g.phase = "waiting"; g.res = null; g.memo = {}; el.err.textContent = "";
+      lock(true); el.play.textContent = "Отправляем…";
+      socket.emit(o.evt, o.payload(g, bet));
+    }
+    function cashout() {
+      if (!g.open || g.phase === "waiting" || g.phase === "play") return;
+      g.phase = "waiting"; lock(true); el.cash.disabled = true; el.err.textContent = "";
+      socket.emit(o.cashEvt);
+    }
+    el.cash.onclick = cashout;
+    el.play.onclick = start;
+    el.rep.onclick = () => {
+      const L = g.last;
+      if (!L || g.open || g.phase === "waiting" || g.phase === "play") return;
+      g.mode = Math.min(L.mode, modes().length - 1); g.count = L.count || 1; g.memo = {};
+      if (g.phase === "result") { g.phase = "idle"; g.res = null; }
+      renderTabs(); setBet(L.bet); renderTag();
+      root.querySelector(".bounce-controls").dispatchEvent(new Event("change", { bubbles: true }));   // обновить доп. блок (шары в ДРОПЕ)
+      start();
+    };
+
+    socket.on(o.evt.replace("_spin", "_result"), res => {
+      if (g.phase !== "waiting") return;
+      if (res && res.kind === "cashout") {           // выигрыш забран — без анимации
+        g.res = Object.assign({}, g.res || {}, res); g.open = false; g.phase = "result";
+        renderTag(); finish(true); return;
+      }
+      g.res = res; g.t0 = performance.now() / 1000; g.phase = "play"; g.shook = false;
+      el.play.textContent = "Идёт раунд…";
+      if (o.onStart) o.onStart(g, res);
+      startLoop();
+    });
+    socket.on("error_message", msg => {
+      if (g.phase !== "waiting") return;
+      if (g.open && /Нет активной серии|Нечего забирать/.test(String(msg || ""))) g.open = false; // серия уже выплачена сервером
+      reset();
+    });
+    socket.on("disconnect", () => {
+      if (g.open) { g.open = false; g.phase = "idle"; g.res = null; lock(false); syncOpenUI(); renderTag(); toast("Соединение потеряно — выигрыш серии выплачен автоматически."); return; }
+      if (g.phase === "waiting") reset();
+    });
+
+    function finish(isCash) {
+      const r = g.res;
+      g.phase = "result";
+      g.open = !!(o.nextEvt && r.canContinue && !r.over);
+      g.streakInfo = g.open ? r : null;
+      lock(false); syncOpenUI(); el.cash.disabled = false; renderTag();
+      if (g.open) {                       // серия продолжается: чип в историю ещё не пишем
+        sfx.win(); hp("win"); toast(o.toast(r)); return;
+      }
+      const chip = document.createElement("span");
+      chip.className = "chip " + (r.win ? "w" : "l");
+      chip.textContent = fmtM(r.multiplier) + "×";
+      el.hist.prepend(chip);
+      while (el.hist.children.length > 30) el.hist.lastElementChild.remove();
+      if (r.balance != null) setBalance(r.balance);
+      if (o.doneEvt) socket.emit(o.doneEvt.name, o.doneEvt.data);   // сообщаем серверу, что раунд закончился
+      if (r.win) { sfx.win(); hp("win"); } else { sfx.lose(); if (o.shakeOnLose && !g.shook && !isCash) shake(); else if (!o.shakeOnLose) hp("lose"); }
+      toast(o.toast(r));
+    }
+
+    function frame(now) {
+      if (root.classList.contains("hidden")) { raf = 0; return; }
+      const t = now / 1000;
+      if (g.phase === "play" && o.shakeAt && o.shakeOnLose && !g.shook && g.res && g.res.over && !g.res.win && t - g.t0 >= o.shakeAt) { g.shook = true; shake(); }
+      if (g.phase === "play" && t - g.t0 >= (o.totalFor ? o.totalFor(g.res) : o.total)) finish();
+      c.setTransform(DPR, 0, 0, DPR, 0, 0);
+      const bg = c.createRadialGradient(W / 2, H * 0.42, 20, W / 2, H * 0.42, 420);
+      bg.addColorStop(0, "#2a1809"); bg.addColorStop(1, "#080604");
+      c.fillStyle = bg; c.fillRect(0, 0, W, H);
+      o.draw(g, c, t, modes()[g.mode], cfg);
+      raf = requestAnimationFrame(frame);
+    }
+    function startLoop() { if (!raf) raf = requestAnimationFrame(frame); }
+
+    function open() {
+      if (!initData) return handleNotTelegram();
+      loadCfg(() => {
+        g.phase = "idle"; g.res = null; g.memo = {}; g.mode = Math.min(g.mode, modes().length - 1);
+        g.open = false; syncOpenUI();
+        if (o.buildExtra && !el.extra.dataset.built) { el.extra.dataset.built = "1"; o.buildExtra(g, el.extra, { setBet, readBet, renderTag }); }
+        renderTabs(); renderTag(); setBet(g.bet); lock(false); el.err.textContent = "";
+        list.classList.add("hidden"); root.classList.remove("hidden");
+        if (o.onOpen) o.onOpen(g, el, cfg);
+        startLoop();
+      });
+    }
+    el.back.onclick = () => {
+      if (g.phase === "waiting" || g.phase === "play") return toast("Дождитесь окончания раунда.");
+      if (g.open) return toast("Сначала заберите выигрыш или продолжайте серию.");
+      root.classList.add("hidden"); list.classList.remove("hidden");
+    };
+    const card = document.getElementById(o.card);
+    if (card) card.onclick = open;
+    return { root, g, el, renderTag, setBet, readBet };
   }
-  $('gmClose').addEventListener('click', () => $('gameModal').classList.remove('show'));
-  $('gameModal').addEventListener('click', e => { if (e.target === $('gameModal')) $('gameModal').classList.remove('show'); });
-  document.querySelectorAll('.gm-copy').forEach(b => b.addEventListener('click', () => {
-    if (!curGame) return;
-    const v = b.dataset.t === 'hash' ? curGame.hash : String(curGame.seed);
-    (navigator.clipboard ? navigator.clipboard.writeText(v) : Promise.reject()).then(() => toast('Скопировано')).catch(() => toast('Не удалось скопировать'));
-  }));
-  $('gmCheckBtn').addEventListener('click', async () => {
-    if (!curGame) return;
-    const v = $('gmVerdict');
-    v.textContent = 'Проверяем…'; v.className = 'gm-verdict';
-    try {
-      const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(curGame.seed)));
-      const hex = [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
-      const hashOk = hex === curGame.hash;
-      const pool = curGame.players.reduce((s, p) => s + p.stake, 0);
-      let x = rng(curGame.seed)() * pool, w = curGame.players[0];
-      for (const p of curGame.players) { if (x < p.stake) { w = p; break; } x -= p.stake; }
-      const pickOk = w.id === curGame.winnerId;
-      if (hashOk && pickOk) { v.textContent = '✅ Проверено — сид совпадает с хешем, победитель посчитан честно'; v.className = 'gm-verdict ok'; }
-      else { v.textContent = '❌ Проверка не пройдена'; v.className = 'gm-verdict bad'; }
-    } catch (e) { v.textContent = 'Не удалось проверить в этом браузере'; v.className = 'gm-verdict bad'; }
+
+  // ---------- ДРОП (plinko) ----------
+  const PL = { dx: 46, top: 62, rh: 38, cx: W / 2, slotY: 452, slotH: 40, T0: 0.55, TR: 0.34, STAG: 0.18 };
+  function slotColor(m) { return m < 1 ? "#ef4b4b" : m < 1.5 ? "#ff8a1f" : m < 5 ? "#ffc61a" : "#3bd47c"; }
+  function plinkoNodes(rows, path) {
+    const n = []; let R = 0;
+    for (let i = 0; i < rows; i++) {
+      n.push({ x: PL.cx + (2 * R - i) * PL.dx / 2, y: PL.top + i * PL.rh - 12 });
+      R += path[i];
+    }
+    n.push({ x: PL.cx + (2 * R - rows) * PL.dx / 2, y: PL.slotY + PL.slotH / 2 });
+    return n;
+  }
+  const PL_MAX_BALLS = 20;
+  makeGame({
+    id: "plinko", title: "ДРОП", card: "openPlinko", evt: "plinko_spin", playText: "Играть",
+    doneEvt: { name: "solo_done", data: { key: "plinko" } },
+    totalFor: r => 4.7 + Math.max(0, ((r && r.count) || 1) - 1) * PL.STAG,
+    total: 4.7,
+    modes: cf => cf.plinko.modes,
+    tabSub: m => "до " + fmtM(Math.max(...m.mults)) + "×",
+    tag: (m, g) => `${m.name}<b>Слоты от ${fmtM(Math.min(...m.mults))}× до ${fmtM(Math.max(...m.mults))}×${g.count > 1 ? " · шаров: " + g.count : ""}</b>`,
+    totalBet: (g, bet) => Number((bet * g.count).toFixed(2)),
+    payload: (g, bet) => ({ bet, modeIndex: g.mode, count: g.count }),
+    toast: r => {
+      const n = r.count || 1;
+      const head = n > 1 ? `ДРОП · ${n} шаров` : "ДРОП";
+      return r.win ? `${head}: ${fmtM(r.multiplier)}× · +${money(r.payout)} ⭐` : `${head}: ${fmtM(r.multiplier)}× · ${money(r.payout)} ⭐`;
+    },
+    onStart: g => { g.memo = { segs: [], flashes: [] }; },
+    buildExtra(g, box, api) {
+      const max = Math.min(PL_MAX_BALLS, (cfg && cfg.plinko && cfg.plinko.maxBalls) || PL_MAX_BALLS);
+      box.innerHTML = `<div class="bounce-field-label"><span>Шаров за раунд</span><span class="sg-total"></span></div><div class="bounce-quick sg-balls"></div>`;
+      const row = box.querySelector(".sg-balls"), tot = box.querySelector(".sg-total");
+      const label = box.parentElement.querySelector(".bounce-field-label span");
+      if (label) label.textContent = "Ставка на шар";
+      const upd = () => {
+        row.querySelectorAll("button[data-n]").forEach(b => b.classList.toggle("on", Number(b.dataset.n) === g.count));
+        tot.textContent = g.count > 1 ? `Итого: ${money(api.readBet() * g.count)} ⭐` : "";
+      };
+      const setN = n => { g.count = clamp(Math.round(n), 1, max); upd(); api.renderTag(); };
+      const mk = (t, f, n) => { const b = document.createElement("button"); b.type = "button"; b.textContent = t; if (n) b.dataset.n = n; b.onclick = f; row.append(b); };
+      mk("−", () => setN(g.count - 1));
+      [1, 3, 5, 10, max].forEach(n => mk(String(n), () => setN(n), n));
+      mk("+", () => setN(g.count + 1));
+      const ctl = box.closest(".bounce-controls");
+      ["click", "change", "input"].forEach(ev => ctl.addEventListener(ev, () => setTimeout(upd, 0)));
+      upd();
+    },
+    draw(g, c, t, mode, cf) {
+      const rows = cf.plinko.rows, mults = mode.mults;
+      // колышки
+      for (let i = 0; i < rows; i++) for (let j = 0; j <= i; j++) {
+        const x = PL.cx + (2 * j - i) * PL.dx / 2, y = PL.top + i * PL.rh;
+        c.fillStyle = "rgba(255,201,138,.55)"; c.beginPath(); c.arc(x, y, 4, 0, 6.2832); c.fill();
+      }
+      const r = g.res;
+      const balls = r ? (r.balls && r.balls.length ? r.balls : [{ path: r.path, slot: r.slot }]) : [];
+      const el = g.phase === "play" || g.phase === "result" ? t - g.t0 : -1;
+      const fall = PL.T0 + rows * PL.TR;
+      const counts = new Array(rows + 1).fill(0);
+      if (r) balls.forEach((b, i) => { if (g.phase === "result" || el - i * PL.STAG >= fall) counts[b.slot]++; });
+      const allLanded = r && (g.phase === "result" || el - (balls.length - 1) * PL.STAG >= fall);
+      // слоты
+      for (let k = 0; k <= rows; k++) {
+        const x = PL.cx + (2 * k - rows) * PL.dx / 2, col = slotColor(mults[k]);
+        const hit = counts[k] > 0;
+        c.fillStyle = hit ? col : col + "33"; c.strokeStyle = col;
+        c.lineWidth = hit ? 2.5 : 1.2;
+        c.beginPath(); c.roundRect(x - 20, PL.slotY, 40, PL.slotH, 8); c.fill(); c.stroke();
+        c.font = "800 12px 'Segoe UI',system-ui,sans-serif"; c.textAlign = "center"; c.textBaseline = "middle";
+        c.fillStyle = hit ? "#160c02" : col; c.fillText(fmtM(mults[k]), x, PL.slotY + PL.slotH / 2 + 1);
+        if (counts[k] > 1) { c.fillStyle = "#fff3e2"; c.font = "800 13px 'Segoe UI',system-ui,sans-serif"; c.fillText("×" + counts[k], x, PL.slotY - 9); }
+      }
+      if (!r || el < 0) return;
+      // шарики
+      const R = balls.length > 10 ? 6.5 : balls.length > 1 ? 8 : 9;
+      (g.memo.flashes || []).forEach(f => {
+        const a = 1 - (t - f.at) / 0.4; if (a <= 0) return;
+        const gr = c.createRadialGradient(f.x, f.y, 0, f.x, f.y, 16);
+        gr.addColorStop(0, `rgba(255,170,60,${a * 0.8})`); gr.addColorStop(1, "rgba(255,170,60,0)");
+        c.fillStyle = gr; c.beginPath(); c.arc(f.x, f.y, 16, 0, 6.2832); c.fill();
+      });
+      balls.forEach((b, i) => {
+        const e = el - i * PL.STAG;
+        if (e < 0) return;
+        const nodes = plinkoNodes(rows, b.path);
+        let bx, by;
+        if (e < PL.T0) {
+          const u = e / PL.T0; bx = PL.cx; by = lerp(16, nodes[0].y, u * u);
+        } else {
+          const rel = e - PL.T0, seg = clamp(Math.floor(rel / PL.TR), 0, rows - 1);
+          const u = clamp((rel - seg * PL.TR) / PL.TR, 0, 1);
+          if (rel >= rows * PL.TR) { bx = nodes[rows].x + (((i * 37) % 9) - 4) * 1.6; by = nodes[rows].y - (((i * 13) % 5) - 2) * 2; }
+          else {
+            bx = lerp(nodes[seg].x, nodes[seg + 1].x, u);
+            by = lerp(nodes[seg].y, nodes[seg + 1].y, u) - (seg < rows - 1 ? 13 * Math.sin(Math.PI * u) : 0);
+            if (g.memo.segs[i] !== seg) {
+              g.memo.segs[i] = seg;
+              g.memo.flashes.push({ x: nodes[seg].x, y: nodes[seg].y + 12, at: t });
+              if (i === 0) sfx.tick(seg);
+            }
+          }
+        }
+        const hg = c.createRadialGradient(bx, by, R * 0.5, bx, by, R * 2.3);
+        hg.addColorStop(0, "rgba(255,150,40,.5)"); hg.addColorStop(1, "rgba(255,150,40,0)");
+        c.fillStyle = hg; c.beginPath(); c.arc(bx, by, R * 2.3, 0, 6.2832); c.fill();
+        const sg = c.createRadialGradient(bx - 3, by - 4, 1, bx, by, R);
+        sg.addColorStop(0, "#fff0ce"); sg.addColorStop(0.35, "#ffbf5c"); sg.addColorStop(1, "#ee7711");
+        c.fillStyle = sg; c.beginPath(); c.arc(bx, by, R, 0, 6.2832); c.fill();
+      });
+      if (g.memo.flashes.length > 120) g.memo.flashes.splice(0, g.memo.flashes.length - 120);
+      // итог
+      if (allLanded) {
+        c.font = "800 26px 'Segoe UI',system-ui,sans-serif"; c.textAlign = "center";
+        c.fillStyle = r.win ? "#3bd47c" : "#ef4b4b"; c.shadowColor = "#000"; c.shadowBlur = 10;
+        const n = r.count || 1;
+        c.fillText(`${n > 1 ? n + " шаров · " : ""}${fmtM(r.multiplier)}×  ·  ${money(r.payout)} ⭐`, PL.cx, H - 22); c.shadowBlur = 0;
+      }
+    }
   });
-  $('histBtn').addEventListener('click', () => $('histModal').classList.add('show'));
-  $('histClose').addEventListener('click', () => $('histModal').classList.remove('show'));
-  $('histModal').addEventListener('click', e => { if (e.target === $('histModal')) $('histModal').classList.remove('show'); });
 
-  // ---------- админка ----------
-  // Баланс игроков выдаётся/списывается через админ-панель основного приложения (Профиль →
-  // Админка); тут остаётся только форс аномалии на следующий раунд, доступный лишь isAdmin.
-  function updateAdminAnomalyVisibility() {
-    $('iceAdminAnomaly').classList.toggle('hidden', !isAdmin);
-  }
-  document.querySelectorAll('#iceAdminAnomaly button').forEach(b => b.addEventListener('click', () => socket.emit('ice_admin_force_anomaly', { anomaly: b.dataset.an || null })));
-
-  // ---------- пасхалка: 3 тапа по подсказке "Бла-Бла-Бла" — звук мяуканья ----------
-  let hintTaps = 0, hintTapT = null;
-  const hintEl = $('iceHint');
-  const meowSound = new Audio('/meow.mp3');
-  if (hintEl) hintEl.addEventListener('click', () => {
-    hintTaps++; clearTimeout(hintTapT); hintTapT = setTimeout(() => hintTaps = 0, 900);
-    if (hintTaps >= 3) { hintTaps = 0; meowEasterEgg(); }
-  });
-  function meowEasterEgg() {
-    try { meowSound.currentTime = 0; meowSound.play(); } catch (e) {}
-  }
-
-  // ---------- открытие вкладки из games-view ----------
-  // Вызывается host-приложением (см. openIce() в основном коде) при каждом заходе на вкладку:
-  // на момент первой загрузки скрипта арена ещё display:none, поэтому её реальную ширину и
-  // актуальное состояние раунда подтягиваем именно в момент открытия.
-  window.__iceOnOpen = function () {
-    W = arena.clientWidth || W;
-    syncBal();
-    updateAdminAnomalyVisibility();
-    socket.emit('ice_request_state');
-  };
 })();
 
+
+/* Extracted from public/modes.js. Shared solo engine + PENALTY only. */
+/* Новые режимы в стиле ОТСКОК / ICE ARENA: ДРОП (plinko) и ПЕНАЛЬТИ.
+   Загружается после app.js и использует его глобалы: socket, toast, setBalance,
+   currentBalance, initData, handleNotTelegram. Вся математика — на сервере
+   (plinko_spin / penalty_spin), клиент только рисует присланный результат. */
+(function () {
+  "use strict";
+  if (typeof socket === "undefined") return;
+  const host = document.getElementById("gamesView");
+  const list = document.getElementById("gamesList");
+  if (!host || !list) return;
+
+  const W = 560, H = 540, DPR = Math.min(window.devicePixelRatio || 1, 2);
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const lerp = (a, b, u) => a + (b - a) * u;
+  const easeOut = u => 1 - Math.pow(1 - u, 3);
+  const fmtM = v => (Number(v) >= 100 ? Number(v).toFixed(0) : Number(v).toFixed(2).replace(/\.?0+$/, ""));
+  const money = v => Number(v || 0).toFixed(2);
+
+  // ---------- звук ----------
+  let muted = false, actx = null;
+  function audio() {
+    const C = window.AudioContext || window.webkitAudioContext;
+    if (!C) return null;
+    if (!actx) actx = new C();
+    if (actx.state === "suspended") actx.resume().catch(() => {});
+    return actx;
+  }
+  function tone(freq, dur, type, vol) {
+    if (muted) return;
+    const c = audio(); if (!c) return;
+    const t = c.currentTime, o = c.createOscillator(), g = c.createGain();
+    o.type = type || "sine"; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol || 0.1, t + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(c.destination); o.start(t); o.stop(t + dur + 0.02);
+  }
+  const sfx = {
+    tick: i => tone(420 + i * 38, 0.07, "triangle", 0.09),
+    kick: () => tone(95, 0.12, "square", 0.11),
+    win: () => [523, 659, 784].forEach((f, i) => setTimeout(() => tone(f, 0.18, "sine", 0.12), i * 90)),
+    lose: () => tone(160, 0.3, "sawtooth", 0.08)
+  };
+
+  // ---------- серверные настройки режимов ----------
+  let cfg = null;
+  function loadCfg(cb) {
+    if (cfg) return cb(cfg);
+    socket.emit("solo_modes", null, d => {
+      if (d && d.penalty) { cfg = d; cb(cfg); }
+      else toast("Не удалось загрузить режимы. Попробуйте ещё раз.");
+    });
+  }
+
+  // ---------- общий каркас экрана (те же классы, что у ОТСКОКА) ----------
+  function makeGame(o) {
+    const root = document.createElement("div");
+    root.id = o.id + "Game";
+    root.className = "bounce-game solo-game hidden";
+    root.innerHTML =
+      `<div class="bounce-header">
+        <button class="upgrade-back bounce-back" type="button">‹ Игры</button>
+        <div class="bounce-title">${o.title}</div>
+        <button class="bounce-sound" type="button" aria-label="Звук" title="Звук">🔊</button>
+      </div>
+      <div class="bounce-layout">
+        <section class="bounce-stage">
+          <canvas class="solo-canvas" aria-label="${o.title}"></canvas>
+          <div class="bounce-tag"></div>
+        </section>
+        <section class="bounce-controls">
+          <div class="bounce-tabs"></div>
+          <div class="bounce-field-label"><span>Сумма</span><span>0.1 – 50 000</span></div>
+          <div class="bounce-amount">
+            <button class="sg-dec" type="button">−</button>
+            <label class="bounce-input"><span>⭐</span><input class="sg-bet" inputmode="decimal" value="1" aria-label="Сумма ставки"></label>
+            <button class="sg-inc" type="button">+</button>
+          </div>
+          <div class="bounce-quick"></div>
+          <div class="sg-extra"></div>
+          <button class="bet-button bounce-play" type="button">${o.playText}</button>
+          <button class="bet-button bounce-repeat hidden" type="button"></button>
+          <button class="bet-button bounce-cash hidden" type="button"></button>
+          <div class="bounce-error"></div>
+          <div class="bounce-history"></div>
+        </section>
+      </div>`;
+    host.appendChild(root);
+
+    const q = s => root.querySelector(s);
+    const el = {
+      cv: q("canvas"), tag: q(".bounce-tag"), tabs: q(".bounce-tabs"), quick: q(".bounce-quick"),
+      bet: q(".sg-bet"), play: q(".bounce-play"), err: q(".bounce-error"), hist: q(".bounce-history"),
+      snd: q(".bounce-sound"), back: q(".bounce-back"), extra: q(".sg-extra"), cash: q(".bounce-cash"), rep: q(".bounce-repeat")
+    };
+    el.cv.width = W * DPR; el.cv.height = H * DPR;
+    const c = el.cv.getContext("2d");
+    const g = { mode: 0, bet: 1, phase: "idle", res: null, t0: 0, sel: 2, memo: {}, open: false, count: 1, last: null };
+    const hp = k => { if (window.ringHaptic) window.ringHaptic(k); };
+    const prefs = window.ringPrefs;
+    const savePrefs = () => { if (prefs) prefs.set(o.id, { bet: g.bet, mode: g.mode, count: g.count }); };
+    {   // последняя ставка и режим (режим потом обрезается по числу режимов в open())
+      const p = prefs && prefs.get(o.id, null);
+      if (p) {
+        if (Number.isInteger(p.mode) && p.mode >= 0) g.mode = p.mode;
+        if (Number(p.bet) >= 0.1) g.bet = Math.min(50000, Math.round(Number(p.bet) * 100) / 100);
+        if (Number.isInteger(p.count) && p.count >= 1 && p.count <= 20) g.count = p.count;
+      }
+    }
+    let raf = 0;
+
+    const modes = () => o.modes(cfg);
+    const lock = d => {
+      root.querySelectorAll(".bounce-controls button, .bounce-controls input").forEach(x => { x.disabled = d; });
+      // пока идёт серия (пенальти) ставка и режим зафиксированы, но «бить дальше» / «забрать» доступны
+      if (!d && g.open) root.querySelectorAll(".bounce-tabs button, .bounce-quick button, .sg-dec, .sg-inc, .sg-bet, .sg-extra button, .sg-extra input").forEach(x => { x.disabled = true; });
+    };
+    const shake = () => {
+      root.classList.remove("solo-shake"); void root.offsetWidth; root.classList.add("solo-shake");
+      setTimeout(() => root.classList.remove("solo-shake"), 520);
+      try { window.Telegram?.WebApp?.HapticFeedback?.notificationOccurred("error"); } catch {}
+    };
+
+    function readBet() {
+      let v = parseFloat(String(el.bet.value).replace(",", "."));
+      if (!(v >= 0.1)) v = 0.1;
+      return setBet(v);
+    }
+    function setBet(v) {
+      v = Math.max(0.1, Math.min(50000, Math.round(Number(v) * 100) / 100));
+      g.bet = v; el.bet.value = v;
+      el.quick.querySelectorAll("button[data-v]").forEach(b => b.classList.toggle("on", Number(b.dataset.v) === v));
+      return v;
+    }
+    function renderTabs() {
+      el.tabs.innerHTML = modes().map((m, i) =>
+        `<button type="button" class="${i === g.mode ? "on" : ""}" data-i="${i}"><b>${m.name}</b><small>${o.tabSub(m)}</small></button>`).join("");
+      el.tabs.querySelectorAll("button").forEach(b => b.onclick = () => {
+        if (g.phase === "waiting" || g.phase === "play" || g.open) return;
+        g.mode = Number(b.dataset.i); g.memo = {}; if (g.phase === "result") { g.phase = "idle"; g.res = null; }
+        renderTabs(); renderTag(); savePrefs();
+      });
+    }
+    function renderTag() { el.tag.innerHTML = o.tag(modes()[g.mode], g); }
+
+    // быстрые ставки — как в ОТСКОКЕ
+    [["Мин", () => 0.1], ["÷2", () => readBet() / 2], ["×2", () => readBet() * 2], ["Макс", () => Math.min(currentBalance, 50000)]].forEach(([t, f]) => {
+      const b = document.createElement("button"); b.type = "button"; b.textContent = t;
+      b.onclick = () => setBet(f()); el.quick.append(b);
+    });
+    el.quick.append(document.createElement("i"));
+    [1, 5, 25, 100].forEach(v => {
+      const b = document.createElement("button"); b.type = "button"; b.textContent = v; b.dataset.v = v;
+      b.onclick = () => setBet(v); el.quick.append(b);
+    });
+    el.bet.onchange = readBet;
+    q(".sg-dec").onclick = () => { const v = readBet(); setBet(v > 1 ? v - 1 : v - 0.1); };
+    q(".sg-inc").onclick = () => { const v = readBet(); setBet(v >= 1 ? v + 1 : v + 0.1); };
+    el.snd.onclick = () => { muted = !muted; document.querySelectorAll(".solo-game .bounce-sound").forEach(b => { b.textContent = muted ? "🔇" : "🔊"; b.classList.toggle("muted", muted); }); if (!muted) audio(); };
+
+    function syncOpenUI() {
+      const open = g.open && o.nextEvt;
+      el.cash.classList.toggle("hidden", !open);
+      const si = g.streakInfo || g.res;
+      if (open && si) {
+        el.play.textContent = `Бить дальше ×${fmtM(si.nextMultiplier)}`;
+        el.cash.textContent = `Забрать ${money(si.potential)} ⭐ (×${fmtM(si.multiplier)})`;
+      } else el.play.textContent = o.playText;
+      if (el.rep) {
+        const L = g.last, m = L && modes()[L.mode];
+        el.rep.classList.toggle("hidden", !m || !!open);
+        if (m) el.rep.textContent = `↻ Повторить · ${fmtM(L.bet)}${L.count > 1 ? " × " + L.count : ""} ⭐ · ${m.name}`;
+      }
+    }
+    function reset(msg) {
+      g.phase = g.open ? "result" : "idle"; lock(false); syncOpenUI();
+      if (el.cash) el.cash.disabled = false;
+      if (msg) el.err.textContent = msg;
+    }
+    function start() {
+      if (!initData) return handleNotTelegram();
+      if (g.phase === "waiting" || g.phase === "play") return;
+      if (g.open && o.nextEvt) {           // серия: следующий удар без новой ставки
+        audio(); g.phase = "waiting"; g.res = null; g.memo = {}; el.err.textContent = "";
+        lock(true); el.play.textContent = "Отправляем…";
+        socket.emit(o.nextEvt, { pick: g.sel });
+        return;
+      }
+      const bet = readBet();
+      const total = o.totalBet ? o.totalBet(g, bet) : bet;
+      if (total > currentBalance) return toast("Недостаточно Stars на балансе.");
+      g.last = { bet, mode: g.mode, count: g.count }; savePrefs(); syncOpenUI();
+      audio();
+      g.phase = "waiting"; g.res = null; g.memo = {}; el.err.textContent = "";
+      lock(true); el.play.textContent = "Отправляем…";
+      socket.emit(o.evt, o.payload(g, bet));
+    }
+    function cashout() {
+      if (!g.open || g.phase === "waiting" || g.phase === "play") return;
+      g.phase = "waiting"; lock(true); el.cash.disabled = true; el.err.textContent = "";
+      socket.emit(o.cashEvt);
+    }
+    el.cash.onclick = cashout;
+    el.play.onclick = start;
+    el.rep.onclick = () => {
+      const L = g.last;
+      if (!L || g.open || g.phase === "waiting" || g.phase === "play") return;
+      g.mode = Math.min(L.mode, modes().length - 1); g.count = L.count || 1; g.memo = {};
+      if (g.phase === "result") { g.phase = "idle"; g.res = null; }
+      renderTabs(); setBet(L.bet); renderTag();
+      root.querySelector(".bounce-controls").dispatchEvent(new Event("change", { bubbles: true }));   // обновить доп. блок (шары в ДРОПЕ)
+      start();
+    };
+
+    socket.on(o.evt.replace("_spin", "_result"), res => {
+      if (g.phase !== "waiting") return;
+      if (res && res.kind === "cashout") {           // выигрыш забран — без анимации
+        g.res = Object.assign({}, g.res || {}, res); g.open = false; g.phase = "result";
+        renderTag(); finish(true); return;
+      }
+      g.res = res; g.t0 = performance.now() / 1000; g.phase = "play"; g.shook = false;
+      el.play.textContent = "Идёт раунд…";
+      if (o.onStart) o.onStart(g, res);
+      startLoop();
+    });
+    socket.on("error_message", msg => {
+      if (g.phase !== "waiting") return;
+      if (g.open && /Нет активной серии|Нечего забирать/.test(String(msg || ""))) g.open = false; // серия уже выплачена сервером
+      reset();
+    });
+    socket.on("disconnect", () => {
+      if (g.open) { g.open = false; g.phase = "idle"; g.res = null; lock(false); syncOpenUI(); renderTag(); toast("Соединение потеряно — выигрыш серии выплачен автоматически."); return; }
+      if (g.phase === "waiting") reset();
+    });
+
+    function finish(isCash) {
+      const r = g.res;
+      g.phase = "result";
+      g.open = !!(o.nextEvt && r.canContinue && !r.over);
+      g.streakInfo = g.open ? r : null;
+      lock(false); syncOpenUI(); el.cash.disabled = false; renderTag();
+      if (g.open) {                       // серия продолжается: чип в историю ещё не пишем
+        sfx.win(); hp("win"); toast(o.toast(r)); return;
+      }
+      const chip = document.createElement("span");
+      chip.className = "chip " + (r.win ? "w" : "l");
+      chip.textContent = fmtM(r.multiplier) + "×";
+      el.hist.prepend(chip);
+      while (el.hist.children.length > 30) el.hist.lastElementChild.remove();
+      if (r.balance != null) setBalance(r.balance);
+      if (o.doneEvt) socket.emit(o.doneEvt.name, o.doneEvt.data);   // сообщаем серверу, что раунд закончился
+      if (r.win) { sfx.win(); hp("win"); } else { sfx.lose(); if (o.shakeOnLose && !g.shook && !isCash) shake(); else if (!o.shakeOnLose) hp("lose"); }
+      toast(o.toast(r));
+    }
+
+    function frame(now) {
+      if (root.classList.contains("hidden")) { raf = 0; return; }
+      const t = now / 1000;
+      if (g.phase === "play" && o.shakeAt && o.shakeOnLose && !g.shook && g.res && g.res.over && !g.res.win && t - g.t0 >= o.shakeAt) { g.shook = true; shake(); }
+      if (g.phase === "play" && t - g.t0 >= (o.totalFor ? o.totalFor(g.res) : o.total)) finish();
+      c.setTransform(DPR, 0, 0, DPR, 0, 0);
+      const bg = c.createRadialGradient(W / 2, H * 0.42, 20, W / 2, H * 0.42, 420);
+      bg.addColorStop(0, "#2a1809"); bg.addColorStop(1, "#080604");
+      c.fillStyle = bg; c.fillRect(0, 0, W, H);
+      o.draw(g, c, t, modes()[g.mode], cfg);
+      raf = requestAnimationFrame(frame);
+    }
+    function startLoop() { if (!raf) raf = requestAnimationFrame(frame); }
+
+    function open() {
+      if (!initData) return handleNotTelegram();
+      loadCfg(() => {
+        g.phase = "idle"; g.res = null; g.memo = {}; g.mode = Math.min(g.mode, modes().length - 1);
+        g.open = false; syncOpenUI();
+        if (o.buildExtra && !el.extra.dataset.built) { el.extra.dataset.built = "1"; o.buildExtra(g, el.extra, { setBet, readBet, renderTag }); }
+        renderTabs(); renderTag(); setBet(g.bet); lock(false); el.err.textContent = "";
+        list.classList.add("hidden"); root.classList.remove("hidden");
+        if (o.onOpen) o.onOpen(g, el, cfg);
+        startLoop();
+      });
+    }
+    el.back.onclick = () => {
+      if (g.phase === "waiting" || g.phase === "play") return toast("Дождитесь окончания раунда.");
+      if (g.open) return toast("Сначала заберите выигрыш или продолжайте серию.");
+      root.classList.add("hidden"); list.classList.remove("hidden");
+    };
+    const card = document.getElementById(o.card);
+    if (card) card.onclick = open;
+    return { root, g, el, renderTag, setBet, readBet };
+  }
+
+  // ---------- ПЕНАЛЬТИ ----------
+  const puckImg = new Image(); let puckOK = false;
+  puckImg.onload = () => { puckOK = true; }; puckImg.src = "/puck.png";
+  const GL = { x0: 40, x1: 520, y0: 80, y1: 290, spotY: 460 };
+  const zoneW = z => (GL.x1 - GL.x0) / z;
+  const zoneCx = (i, z) => GL.x0 + zoneW(z) * (i + 0.5);
+  function drawPuck(c, x, y, s, rot) {
+    c.save(); c.translate(x, y); c.rotate(rot); c.scale(s, s);
+    if (puckOK) c.drawImage(puckImg, -18, -18, 36, 36);
+    else {
+      const gr = c.createRadialGradient(-4, -5, 1, 0, 0, 18);
+      gr.addColorStop(0, "#5a5a5a"); gr.addColorStop(1, "#111");
+      c.fillStyle = gr; c.strokeStyle = "#ff8a1f"; c.lineWidth = 3;
+      c.beginPath(); c.arc(0, 0, 16, 0, 6.2832); c.fill(); c.stroke();
+    }
+    c.restore();
+  }
+  makeGame({
+    id: "penalty", title: "ПЕНАЛЬТИ", card: "openPenalty", evt: "penalty_spin", playText: "Бить!",
+    total: 3.4,
+    nextEvt: "penalty_next", cashEvt: "penalty_cashout",   // серия ударов, как в «Башне»
+    shakeOnLose: true, shakeAt: 1.35,                      // лёгкая тряска экрана при проигрыше
+    modes: cf => cf.penalty.modes,
+    tabSub: m => `×${fmtM(m.mult)} · ${Math.round(m.chance * 100)}%`,
+    tag: (m, g) => (g.open && g.streakInfo)
+      ? `${m.name}<b>Серия: ${g.streakInfo.streak} · сейчас ×${fmtM(g.streakInfo.multiplier)} → дальше ×${fmtM(g.streakInfo.nextMultiplier)}</b>`
+      : `${m.name}<b>Гол ×${fmtM(m.mult)} · защита закрывает ${m.covered} из 5 · можно бить дальше</b>`,
+    payload: (g, bet) => ({ bet, modeIndex: g.mode, pick: g.sel }),
+    toast: r => {
+      if (r.kind === "cashout") return `ПЕНАЛЬТИ: забрал ${money(r.payout)} ⭐ (×${fmtM(r.multiplier)})`;
+      if (r.saved) return "ПЕНАЛЬТИ: отбил — ставка проиграна";
+      if (r.canContinue) return `ГОЛ! Серия ${r.streak} · ×${fmtM(r.multiplier)} — бить дальше или забрать`;
+      return `ПЕНАЛЬТИ: серия ${r.streak} · +${money(r.payout)} ⭐`;
+    },
+    onStart: () => sfx.kick(),
+    onOpen(g, el) {
+      if (el.cv.dataset.bound) return;
+      el.cv.dataset.bound = "1";
+      el.cv.addEventListener("pointerdown", e => {
+        if (g.phase === "waiting" || g.phase === "play") return;
+        const r = el.cv.getBoundingClientRect();
+        const x = (e.clientX - r.left) * W / r.width, y = (e.clientY - r.top) * H / r.height;
+        if (x < GL.x0 || x > GL.x1 || y < GL.y0 - 20 || y > GL.y1 + 20) return;
+        const z = cfg.penalty.zones;
+        g.sel = clamp(Math.floor((x - GL.x0) / zoneW(z)), 0, z - 1);
+        if (g.phase === "result") { g.phase = "idle"; g.res = null; }   // g.streakInfo хранит состояние серии
+      });
+    },
+    draw(g, c, t, mode, cf) {
+      const Z = cf.penalty.zones, zw = zoneW(Z);
+      const el = g.res && (g.phase === "play" || g.phase === "result") ? (g.phase === "result" ? 99 : t - g.t0) : -1;
+      const reveal = el >= 1.3, r = g.res;
+      // сетка ворот
+      c.strokeStyle = "rgba(255,255,255,.06)"; c.lineWidth = 1; c.beginPath();
+      for (let x = GL.x0; x <= GL.x1; x += 24) { c.moveTo(x, GL.y0); c.lineTo(x, GL.y1); }
+      for (let y = GL.y0; y <= GL.y1; y += 24) { c.moveTo(GL.x0, y); c.lineTo(GL.x1, y); }
+      c.stroke();
+      // зоны
+      for (let i = 0; i < Z; i++) {
+        const x = GL.x0 + i * zw, picked = (r ? r.pick : g.sel) === i, cov = reveal && r.covered.includes(i);
+        let fill = "rgba(255,255,255,.03)";
+        if (reveal) fill = cov ? "rgba(239,75,75,.28)" : (picked ? "rgba(59,212,124,.30)" : "rgba(255,255,255,.03)");
+        else if (picked) fill = "rgba(255,138,31,.16)";
+        c.fillStyle = fill; c.fillRect(x + 2, GL.y0 + 2, zw - 4, GL.y1 - GL.y0 - 2);
+        if (picked && !reveal) { c.strokeStyle = "#ff8a1f"; c.lineWidth = 2.5; c.shadowColor = "#ff8a1f"; c.shadowBlur = 12; c.strokeRect(x + 3, GL.y0 + 3, zw - 6, GL.y1 - GL.y0 - 4); c.shadowBlur = 0; }
+        if (cov) { c.font = "800 15px 'Segoe UI',system-ui,sans-serif"; c.textAlign = "center"; c.fillStyle = "#ef4b4b"; c.fillText("ЗАКРЫТО", x + zw / 2, (GL.y0 + GL.y1) / 2); }
+      }
+      // штанги
+      c.strokeStyle = "#f2f2f2"; c.lineWidth = 6; c.lineCap = "round"; c.beginPath();
+      c.moveTo(GL.x0, GL.y1); c.lineTo(GL.x0, GL.y0); c.lineTo(GL.x1, GL.y0); c.lineTo(GL.x1, GL.y1); c.stroke();
+      // вратарь качается, пока не открыты зоны
+      if (!reveal) {
+        const gx = PL.cx + Math.sin(t * 1.7) * (GL.x1 - GL.x0) * 0.32, gy = GL.y0 + 78;
+        c.fillStyle = "#1b1712"; c.strokeStyle = "#ff8a1f"; c.lineWidth = 3;
+        c.beginPath(); c.roundRect(gx - 30, gy - 8, 60, 96, 16); c.fill(); c.stroke();
+        c.beginPath(); c.arc(gx, gy - 24, 17, 0, 6.2832); c.fill(); c.stroke();
+        c.fillStyle = "#ff8a1f"; c.fillRect(gx - 22, gy + 28, 44, 5);
+      }
+      // ледовая точка
+      c.strokeStyle = "rgba(255,138,31,.25)"; c.lineWidth = 2; c.beginPath(); c.arc(PL.cx, GL.spotY, 30, 0, 6.2832); c.stroke();
+      // шайба
+      const pick = r ? r.pick : g.sel, tx = zoneCx(pick, Z), ty = (GL.y0 + GL.y1) / 2;
+      if (el < 0.35) {
+        const wob = el < 0 ? 0 : Math.sin(el * 60) * 2;
+        drawPuck(c, PL.cx + wob, GL.spotY, 1, 0);
+      } else if (el < 1.15) {
+        const u = easeOut((el - 0.35) / 0.8);
+        drawPuck(c, lerp(PL.cx, tx, u), lerp(GL.spotY, ty + 20, u), lerp(1, 0.6, u), u * 14);
+      } else drawPuck(c, tx, ty + 20, 0.6, 14);
+      // итог
+      if (el >= 1.5 && r) {
+        c.textAlign = "center"; c.shadowColor = "#000"; c.shadowBlur = 12;
+        c.font = "800 34px 'Segoe UI',system-ui,sans-serif";
+        let head, sub, col = "#3bd47c";
+        if (r.kind === "cashout") { head = "ЗАБРАЛ!"; sub = `×${fmtM(r.multiplier)} · +${money(r.payout)} ⭐`; }
+        else if (r.saved) { head = "ОТБИЛ!"; sub = r.streak > 0 ? "Серия прервана, ставка проиграна" : "Ставка проиграна"; col = "#ef4b4b"; }
+        else if (r.canContinue) { head = `ГОЛ! Серия ${r.streak}`; sub = `×${fmtM(r.multiplier)} · бей дальше ×${fmtM(r.nextMultiplier)} или забирай`; }
+        else { head = "ГОЛ!"; sub = `×${fmtM(r.multiplier)} · +${money(r.payout)} ⭐`; }
+        c.fillStyle = col; c.fillText(head, PL.cx, 370);
+        c.font = "700 19px 'Segoe UI',system-ui,sans-serif";
+        c.fillText(sub, PL.cx, 402);
+        c.shadowBlur = 0;
+      } else if (el < 0 || g.phase === "idle") {
+        c.textAlign = "center"; c.font = "600 13px 'Segoe UI',system-ui,sans-serif"; c.fillStyle = "#8f7d6a";
+        c.fillText(g.open ? `Серия ${g.streakInfo ? g.streakInfo.streak : ""}: выбери зону и бей дальше или забери выигрыш` : "Нажмите на зону ворот, куда бить", PL.cx, 370);
+      }
+    }
+  });
+
+})();

@@ -945,21 +945,32 @@ html,body{height:100%;overflow:hidden}
   .bounce-layout{gap:10px!important;}
 }
 
-/* RING layout fixes 2026-09-27: constrain intrinsic grid width. */
-#gamesView, #bounceGame { min-width:0; max-width:100%; }
-#bounceGame .bounce-layout { grid-template-columns:minmax(0,1fr)!important; min-width:0; width:100%; }
-#bounceGame .bounce-layout > * { min-width:0; max-width:100%; }
-#bounceGame .bounce-stage { width:100%; max-width:430px; margin:0 auto; }
-#bounceCanvas { width:100%!important; max-width:100%; height:auto!important; aspect-ratio:560 / 600; }
-#bounceGame .bounce-controls, #bounceHistory { min-width:0; width:100%; max-width:100%; }
-#bounceHistory { overflow-x:auto; }
-#bounceTabs { grid-template-columns:repeat(3,minmax(0,1fr)); min-width:0; }
-#bounceQuick { grid-template-columns:repeat(4,minmax(0,1fr)) 1px repeat(4,minmax(0,1fr)); min-width:0; }
-/* Only the host balance remains visible; keep #bal for existing syncBal(). */
-#iceGame .ice-balance-row { display:none!important; }
-/* Use the host #gamesView as the single scrolling surface. */
-#iceGame { min-width:0; height:auto; overflow:visible; }
-#iceGame .ice-body { flex:none; min-height:0; height:auto; overflow:visible; overscroll-behavior:auto; touch-action:pan-y; }
-#iceGame .ice-bet-modal { position:fixed; }
-#iceGame .ice-bet-sheet { max-height:90vh; overflow-y:auto; overscroll-behavior:contain; }
-#iceGame input { font-size:16px; }
+
+/* ---------- DROP / PENALTY integration ---------- */
+.solo-game{margin-top:2px;touch-action:manipulation;overscroll-behavior:contain;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+.solo-game input{touch-action:manipulation;font-size:16px!important}
+.solo-game .solo-canvas{display:block;width:100%;height:auto;touch-action:manipulation;border-radius:28px;background:#0c0c0c}
+.solo-game .bounce-header{display:grid;grid-template-columns:72px 1fr 42px;align-items:center;gap:8px;margin:4px 0 12px;padding:0 2px}
+.solo-game .bounce-back{justify-self:start;min-width:72px;background:rgba(255,255,255,.055)!important;border:1px solid rgba(255,255,255,.10)!important;color:#d7d7d7!important;border-radius:999px!important;font-size:12px!important;font-weight:800;padding:8px 10px!important}
+.solo-game .bounce-title{margin:0!important;text-align:center;font-size:18px;font-weight:950;letter-spacing:2.5px;color:#fff}
+.solo-game .bounce-sound{justify-self:end;width:38px;height:38px;padding:0;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.10);font-size:17px}
+.solo-game .bounce-sound.muted{opacity:.58}
+.solo-game .bounce-layout{display:grid!important;grid-template-columns:1fr!important;gap:12px!important;align-items:start}
+.solo-game .bounce-stage{width:min(100%,430px);margin:0 auto;background:linear-gradient(180deg,#121212,#0c0c0c);border:1px solid rgba(255,255,255,.08);border-radius:28px;overflow:hidden;padding:0!important;box-shadow:0 18px 50px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.035);touch-action:manipulation}
+.solo-game .bounce-tag{position:absolute;left:14px;top:14px;background:rgba(0,0,0,.34);border:1px solid rgba(255,201,21,.16);border-radius:999px;padding:7px 10px;font-size:10px;color:#aaa;backdrop-filter:blur(8px)}
+.solo-game .bounce-tag b{color:#f6f6f6;font-size:11px}
+.solo-game .bounce-controls{display:flex;flex-direction:column;gap:10px;background:transparent!important;border:0!important;padding:0!important;touch-action:manipulation}
+.solo-game .bounce-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;background:#151515;border:1px solid rgba(255,255,255,.08);border-radius:18px;padding:5px}
+.solo-game .bounce-tabs button{background:#181818;border:1px solid transparent;border-radius:13px;color:#f2f2f2;padding:10px 4px;min-height:48px}
+.solo-game .bounce-tabs button b{font-size:12px;line-height:1.1}.solo-game .bounce-tabs button small{font-size:8px;color:#8f9196;margin-top:3px}.solo-game .bounce-tabs button.on{background:rgba(255,201,21,.10);border-color:rgba(255,201,21,.85);box-shadow:inset 0 0 0 1px rgba(255,201,21,.08)}.solo-game .bounce-tabs button.on small{color:#ffd21c}
+.solo-game .bounce-field-label{display:flex;justify-content:space-between;align-items:center;color:#85878b;font-size:11px;margin:1px 2px -2px}
+.solo-game .bounce-amount{display:grid;grid-template-columns:46px minmax(0,1fr) 46px;gap:7px}.solo-game .bounce-amount>button{background:#151515;border:1px solid rgba(255,255,255,.08);border-radius:15px;color:#f7f7f7;font-size:20px;font-weight:700;padding:0}
+.solo-game .bounce-input{display:flex;align-items:center;gap:8px;background:#151515;border:1px solid rgba(255,255,255,.08);border-radius:15px;padding:0 13px;color:#ffd21c}.solo-game .bounce-input>span{font-size:16px;line-height:1}.solo-game .bounce-input input{background:transparent!important;border:0!important;outline:none!important;color:#fff!important;font-size:16px!important;font-weight:850!important;padding:12px 0!important;min-width:0!important}
+.solo-game .bounce-quick{display:grid;grid-template-columns:repeat(4,1fr) 1px repeat(4,1fr);gap:5px;align-items:center}.solo-game .bounce-quick i{background:rgba(255,255,255,.08);height:65%}.solo-game .bounce-quick button{padding:9px 0;border-radius:12px;background:#151515;border:1px solid rgba(255,255,255,.08);color:#d8d8d8;font-size:11px}.solo-game .bounce-quick button.on{border-color:rgba(255,201,21,.75);color:#ffd21c;background:rgba(255,201,21,.08)}
+.solo-game .bounce-play{margin-top:2px;background:linear-gradient(180deg,#ffd21c,#ffb914)!important;color:#111!important;font-size:17px!important;font-weight:950!important;border-radius:999px!important;padding:15px 18px!important;box-shadow:0 8px 24px rgba(255,201,21,.22)!important}.solo-game .bounce-play:disabled{opacity:.45}
+.solo-game .bounce-error{min-height:14px;margin:0 2px;color:#ff7676;font-size:11px}.solo-game .bounce-history{display:flex;gap:6px;overflow-x:auto;padding:2px 0 5px;scrollbar-width:none}.solo-game .bounce-history::-webkit-scrollbar{display:none}.solo-game .bounce-history .chip{flex:none;padding:7px 10px;border-radius:10px;font-weight:850;font-size:11px;background:#151515;border:1px solid rgba(255,255,255,.08)}.solo-game .bounce-history .chip.w{color:#58f3a9;border-color:rgba(25,229,143,.40);background:rgba(25,229,143,.07)}.solo-game .bounce-history .chip.l{color:#ff7676;border-color:rgba(255,118,118,.35);background:rgba(255,118,118,.06)}
+.solo-game .sg-extra:empty{display:none}.solo-game .sg-extra{display:flex;flex-direction:column;gap:8px}.solo-game .sg-extra .bounce-field-label{margin-bottom:0}.solo-game .bounce-quick.sg-balls{grid-template-columns:repeat(7,1fr)}
+.solo-game .bounce-cash{margin-top:2px;background:linear-gradient(180deg,#3bd47c,#23a95e)!important;color:#07180e!important;font-size:16px!important;font-weight:900!important;border-radius:999px!important;padding:14px 18px!important;box-shadow:0 8px 24px rgba(59,212,124,.25)!important}.solo-game .bounce-cash:disabled{opacity:.45}.solo-game .bounce-cash.hidden{display:none}
+@keyframes soloShakeScoped{0%,100%{transform:translate(0,0)}15%{transform:translate(-4px,1px)}30%{transform:translate(4px,-1px)}45%{transform:translate(-3px,1px)}60%{transform:translate(3px,0)}80%{transform:translate(-1px,0)}}.solo-game.solo-shake{animation:soloShakeScoped .45s ease-in-out}
+.games-mini{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:0 20px 16px}.games-mini .game-card{width:100%;height:190px;aspect-ratio:auto;background:#1b120c}.games-mini .game-card-name.mini-name{font-size:24px!important;letter-spacing:1px!important;bottom:16px!important;text-shadow:0 2px 12px rgba(0,0,0,.8)}.mini-art{position:absolute;inset:0;overflow:hidden;background:radial-gradient(circle at 50% 40%,rgba(255,165,62,.20),transparent 34%),linear-gradient(145deg,#1a1008,#2b180b 48%,#101010 100%)}.plinko-art:before{content:"";position:absolute;left:14%;right:14%;top:12%;height:52%;background:radial-gradient(circle,#ffc98a 0 2.6px,transparent 3.2px) 0 0/24px 22px;opacity:.7;clip-path:polygon(50% 0,100% 100%,0 100%)}.plinko-ball{position:absolute;left:50%;top:26%;width:20px;height:20px;border-radius:50%;transform:translateX(-50%);background:radial-gradient(circle at 30% 25%,#fff0ce,#ffbf5c 30%,#ee7711 72%,#8f3e05);box-shadow:0 0 20px rgba(255,155,63,.85)}.penalty-goal{position:absolute;left:16%;right:16%;top:16%;height:38%;border:4px solid rgba(255,255,255,.82);border-bottom:0;border-radius:6px 6px 0 0;background:repeating-linear-gradient(90deg,rgba(255,255,255,.08) 0 1px,transparent 1px 12px)}.penalty-puck{position:absolute;left:50%;top:62%;width:26px;height:26px;border-radius:50%;transform:translateX(-50%);background:radial-gradient(circle at 35% 30%,#666,#111);border:3px solid #ff8a1f;box-shadow:0 0 16px rgba(255,138,31,.6)}
+@media(max-width:600px){.solo-game .bounce-header{grid-template-columns:66px 1fr 38px;margin:2px 0 10px}.solo-game .bounce-back{min-width:66px;font-size:11px!important;padding:8px 9px!important}.solo-game .bounce-title{font-size:16px}.solo-game .bounce-sound{width:34px;height:34px;font-size:16px}.solo-game .bounce-stage{width:100%;border-radius:26px}.solo-game .solo-canvas{border-radius:26px}.solo-game .bounce-layout{gap:10px!important}.games-mini{gap:10px;margin-left:6px;margin-right:6px}.games-mini .game-card{border-radius:28px}}

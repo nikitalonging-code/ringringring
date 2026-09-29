@@ -363,16 +363,6 @@ async function initDb() {
       commission NUMERIC(20,2),
       players JSONB NOT NULL
     )`,
-    `CREATE TABLE IF NOT EXISTS ice_rounds (
-      id BIGINT PRIMARY KEY,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      pool NUMERIC(20,2) NOT NULL,
-      winner_id TEXT,
-      seed TEXT NOT NULL,
-      seed_hash TEXT NOT NULL,
-      anomaly TEXT,
-      players JSONB NOT NULL
-    )`,
     `CREATE TABLE IF NOT EXISTS referral_earnings (
       id BIGSERIAL PRIMARY KEY,
       referrer_id TEXT NOT NULL,
@@ -513,8 +503,6 @@ async function initDb() {
     )`,
 
     // Migrate an already-existing database without wiping users.
-    `ALTER TABLE ice_rounds ADD COLUMN IF NOT EXISTS payout NUMERIC(20,2) NOT NULL DEFAULT 0`,
-    `ALTER TABLE ice_rounds ADD COLUMN IF NOT EXISTS commission NUMERIC(20,2) NOT NULL DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT NOT NULL DEFAULT ''`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by TEXT`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS games_played INTEGER NOT NULL DEFAULT 0`,
@@ -1086,23 +1074,261 @@ async function placeBet(playerId, amount) {
   }
 }
 
-// ---------- SOLO GAME RISK RULES ----------
-// Solo outcomes stay random and are never selected by player identity/history.
-// Upgrade uses a disclosed 8% house edge: actual win chance is 92% of the
-// mathematically fair chance (stake / target). This gives the application a
-// positive expected margin without rigging a particular player's outcome.
-// The guarantee is mathematical expectation, not a promise that every finite
-// sequence of rounds is profitable.
+// ---------- SOLO GAMES: shared risk/config ----------
+// Drop and Penalty use server-side cryptographic randomness and the same
+// disclosed RTP setting. Results are never selected by player identity/history.
 const SOLO_HOUSE_EDGE = (() => {
   const raw = Number(String(process.env.SOLO_HOUSE_EDGE ?? "0.08").replace(",", "."));
   return Number.isFinite(raw) ? Math.min(0.25, Math.max(0, raw)) : 0.08;
 })();
 const SOLO_RTP = 1 - SOLO_HOUSE_EDGE;
 
+
+// ===== DROP: extracted server logic =====
+const PLINKO_ROWS = 10;
+const PLINKO_SHAPES = [
+  { key: "easy",   name: "Лёгкий",   shape: [5.6, 2.1, 1.4, 1.1, 1, 0.5, 1, 1.1, 1.4, 2.1, 5.6] },
+  { key: "medium", name: "Средний",  shape: [18, 4, 1.7, 1.1, 0.6, 0.3, 0.6, 1.1, 1.7, 4, 18] },
+  { key: "hard",   name: "Сложный",  shape: [40, 9, 2.6, 0.9, 0.3, 0.2, 0.3, 0.9, 2.6, 9, 40] }
+];
+// Множители нормируются так, чтобы ожидаемая отдача = SOLO_RTP (1 - комиссия).
+const PLINKO_MODES = PLINKO_SHAPES.map(m => {
+  const n = PLINKO_ROWS;
+  let c = 1; const probs = [1];
+  for (let k = 1; k <= n; k++) { c = c * (n - k + 1) / k; probs.push(c); }
+  const total = 2 ** n;
+  const raw = m.shape.reduce((a, x, k) => a + x * probs[k] / total, 0);
+  const scale = SOLO_RTP / raw;
+  return { key: m.key, name: m.name, mults: m.shape.map(x => Number((x * scale).toFixed(2))) };
+});
+
+const soloBusy = new Map();
+async function playSoloRound(playerId, bet, key, title, durationMs, resolve) {
+  if (!Number.isFinite(bet) || bet < 0.1 || bet > 50000) {
+    throw new Error("Ставка должна быть от 0.1 до 50 000 Stars.");
+  }
+  const b = Number(bet.toFixed(2));
+  const dbUser = await getUser(playerId, { fresh: true });
+  if (!dbUser) throw new Error("Пользователь не найден в базе данных.");
+  if (dbUser.banned) throw new Error("Ваш аккаунт заблокирован в приложении.");
+  const busyKey = `${key}:${playerId}`;
+  if (soloBusy.has(busyKey)) throw new Error(`Предыдущий раунд «${title}» ещё не закончился.`);
+  soloBusy.set(busyKey, Date.now());
+  try {
+    const balance = await debitBalance(playerId, b, {
+      type: `${key}_bet`, description: `${title} · ставка ${b} ⭐`, countsAsWager: true
+    });
+    const r = resolve();
+    const payout = r.payout != null ? Number(Number(r.payout).toFixed(2)) : Number((b * r.multiplier).toFixed(2));
+    const win = payout >= b;
+    let balanceAfter = balance;
+    if (payout > 0) {
+      balanceAfter = await creditBalance(playerId, payout, pool, {
+        type: `${key}_win`,
+        description: `${title} · ${r.multiplier.toFixed(2)}× · выплата ${payout.toFixed(2)} ⭐`
+      });
+    }
+    try {
+      await pool.query(
+        `UPDATE users SET games_played = games_played + 1, games_won = games_won + $2,
+           total_wagered = total_wagered + $3, updated_at = NOW() WHERE telegram_id=$1`,
+        [String(playerId), win ? 1 : 0, b]
+      );
+      invalidateUserCache(playerId);
+    } catch (e) { console.error(`${title} stats update error:`, e.message); }
+    return { ...r, win, bet: b, payout, balance: balanceAfter, durationMs };
+  } finally {
+    setTimeout(() => soloBusy.delete(busyKey), durationMs + 450);
+  }
+}
+
+const PLINKO_MAX_BALLS = 20;
+const PLINKO_MAX_TOTAL_BET = 50000;
+const PLINKO_RED_BOOST = 1.2;      // красные слоты (множитель < 1) выпадают в 1.2 раза чаще
+const PLINKO_BALL_STAGGER_MS = 180; // задержка между шарами при массовом запуске
+
+function plinkoBinomial(n) {
+  let c = 1; const w = [1];
+  for (let k = 1; k <= n; k++) { c = c * (n - k + 1) / k; w.push(c); }
+  return w;
+}
+// Вероятность каждого слота с учётом усиления красных зон
+function plinkoSlotWeights(mode) {
+  const w = plinkoBinomial(PLINKO_ROWS).map((x, k) => x * (mode.mults[k] < 1 ? PLINKO_RED_BOOST : 1));
+  const sum = w.reduce((a, x) => a + x, 0);
+  return w.map(x => x / sum);
+}
+function plinkoRollBall(mode) {
+  const probs = plinkoSlotWeights(mode);
+  let u = secureUnit(), slot = probs.length - 1;
+  for (let k = 0; k < probs.length; k++) { if (u < probs[k]) { slot = k; break; } u -= probs[k]; }
+  // путь: ровно `slot` шагов вправо в случайном порядке
+  const path = Array.from({ length: PLINKO_ROWS }, (_, i) => (i < slot ? 1 : 0));
+  for (let i = path.length - 1; i > 0; i--) { const j = crypto.randomInt(0, i + 1); [path[i], path[j]] = [path[j], path[i]]; }
+  return { path, slot, multiplier: mode.mults[slot] };
+}
+
+function playPlinko(playerId, bet, modeIndex, ballCount) {
+  const idx = PLINKO_MODES[Number(modeIndex)] ? Number(modeIndex) : 0;
+  const mode = PLINKO_MODES[idx];
+  const count = Math.max(1, Math.min(PLINKO_MAX_BALLS, Math.floor(Number(ballCount) || 1)));
+  if (!Number.isFinite(bet) || bet < 0.1 || bet > 50000) throw new Error("Ставка должна быть от 0.1 до 50 000 Stars.");
+  const perBet = Number(bet.toFixed(2));
+  const total = Number((perBet * count).toFixed(2));
+  if (total > PLINKO_MAX_TOTAL_BET) throw new Error(`Общая ставка за раунд не может быть больше ${PLINKO_MAX_TOTAL_BET} Stars.`);
+  const durationMs = 4700 + (count - 1) * PLINKO_BALL_STAGGER_MS;
+  return playSoloRound(playerId, total, "plinko", "ДРОП", durationMs, () => {
+    const balls = Array.from({ length: count }, () => plinkoRollBall(mode));
+    const payout = balls.reduce((a, x) => a + perBet * x.multiplier, 0);
+    const multiplier = Number((payout / total).toFixed(4)); // средний множитель по шарам
+    return { modeIndex: idx, mode: mode.key, count, perBet, balls, path: balls[0].path, slot: balls[0].slot, multiplier, payout };
+  });
+}
+
+// ===== PENALTY: extracted server logic =====
+const PENALTY_ZONES = 5;
+const PENALTY_MODES = [
+  { key: "easy",   name: "Лёгкий",  covered: 1 },
+  { key: "medium", name: "Средний", covered: 2 },
+  { key: "hard",   name: "Сложный", covered: 3 }
+].map(m => {
+  const chance = (PENALTY_ZONES - m.covered) / PENALTY_ZONES;
+  return { ...m, chance, mult: Number((SOLO_RTP / chance).toFixed(2)) };
+});
+
+// ---------- ПЕНАЛЬТИ: серия ударов (как в «Башне») ----------
+// После гола можно бить дальше (множитель растёт) или забрать выигрыш.
+// Множитель после n голов = SOLO_RTP / chance^n, поэтому отдача остаётся ≈ SOLO_RTP на любом шаге.
+const PENALTY_MAX_STREAK = 6;          // максимум ударов в серии (после последнего гола выплата автоматическая)
+const PENALTY_IDLE_MS = 120000;        // нет действий 2 минуты — выигрыш забирается автоматически
+const penaltySessions = new Map();     // playerId -> { bet, idx, streak, mult, busy, timer, socketId }
+
+function penaltyMultAt(mode, n) { return Number((SOLO_RTP / Math.pow(mode.chance, n)).toFixed(2)); }
+
+function penaltyRollShot(mode, zone) {
+  const zones = Array.from({ length: PENALTY_ZONES }, (_, i) => i);
+  for (let i = zones.length - 1; i > 0; i--) { const j = crypto.randomInt(0, i + 1); [zones[i], zones[j]] = [zones[j], zones[i]]; }
+  const covered = zones.slice(0, mode.covered).sort((a, b) => a - b);
+  return { covered, saved: covered.includes(zone) };
+}
+
+async function penaltyFinishStats(playerId, bet, won) {
+  try {
+    await pool.query(
+      `UPDATE users SET games_played = games_played + 1, games_won = games_won + $2,
+         total_wagered = total_wagered + $3, updated_at = NOW() WHERE telegram_id=$1`,
+      [String(playerId), won ? 1 : 0, bet]
+    );
+    invalidateUserCache(playerId);
+  } catch (e) { console.error("ПЕНАЛЬТИ stats update error:", e.message); }
+}
+
+async function penaltyPayout(playerId, sess, reason) {
+  const mode = PENALTY_MODES[sess.idx];
+  const payout = Number((sess.bet * sess.mult).toFixed(2));
+  const balance = await creditBalance(playerId, payout, pool, {
+    type: "penalty_win",
+    description: `ПЕНАЛЬТИ · серия ${sess.streak} · ${sess.mult.toFixed(2)}× · выплата ${payout.toFixed(2)} ⭐${reason ? " · " + reason : ""}`
+  });
+  await penaltyFinishStats(playerId, sess.bet, true);
+  return { payout, balance, mode };
+}
+
+function penaltyArmTimer(playerId, sess) {
+  clearTimeout(sess.timer);
+  sess.timer = setTimeout(async () => {
+    if (penaltySessions.get(String(playerId)) !== sess || sess.busy) return;
+    penaltySessions.delete(String(playerId));
+    try { if (sess.streak > 0) await penaltyPayout(playerId, sess, "авто-выплата"); } catch (e) { console.error("penalty auto cashout:", e.message); }
+  }, PENALTY_IDLE_MS);
+}
+
+async function penaltyShoot(playerId, sess, zone) {
+  const mode = PENALTY_MODES[sess.idx];
+  const shot = penaltyRollShot(mode, zone);
+  const base = { kind: "shot", modeIndex: sess.idx, mode: mode.key, pick: zone, covered: shot.covered, saved: shot.saved, bet: sess.bet, durationMs: 3400 };
+  if (shot.saved) {
+    penaltySessions.delete(String(playerId));
+    clearTimeout(sess.timer);
+    await penaltyFinishStats(playerId, sess.bet, false);
+    const u = await getUser(playerId, { fresh: true });
+    return { ...base, streak: sess.streak, multiplier: 0, payout: 0, win: false, over: true, canContinue: false, balance: Number(u?.balance ?? sess.balance) };
+  }
+  sess.streak += 1;
+  sess.mult = penaltyMultAt(mode, sess.streak);
+  if (sess.streak >= PENALTY_MAX_STREAK) {
+    penaltySessions.delete(String(playerId));
+    clearTimeout(sess.timer);
+    const paid = await penaltyPayout(playerId, sess, "макс. серия");
+    return { ...base, streak: sess.streak, multiplier: sess.mult, payout: paid.payout, win: true, over: true, canContinue: false, balance: paid.balance };
+  }
+  penaltyArmTimer(playerId, sess);
+  return {
+    ...base, streak: sess.streak, multiplier: sess.mult, payout: 0, potential: Number((sess.bet * sess.mult).toFixed(2)),
+    nextMultiplier: penaltyMultAt(mode, sess.streak + 1), win: false, over: false, canContinue: true, balance: sess.balance
+  };
+}
+
+async function playPenalty(playerId, bet, modeIndex, pick) {
+  const idx = PENALTY_MODES[Number(modeIndex)] ? Number(modeIndex) : 0;
+  const zone = Number(pick);
+  if (!Number.isInteger(zone) || zone < 0 || zone >= PENALTY_ZONES) throw new Error("Выберите зону ворот.");
+  if (!Number.isFinite(bet) || bet < 0.1 || bet > 50000) throw new Error("Ставка должна быть от 0.1 до 50 000 Stars.");
+  const b = Number(bet.toFixed(2));
+  const key = String(playerId);
+  if (penaltySessions.has(key)) throw new Error("Серия «ПЕНАЛЬТИ» ещё не закончена: бейте дальше или заберите выигрыш.");
+  const dbUser = await getUser(playerId, { fresh: true });
+  if (!dbUser) throw new Error("Пользователь не найден в базе данных.");
+  if (dbUser.banned) throw new Error("Ваш аккаунт заблокирован в приложении.");
+  const sess = { bet: b, idx, streak: 0, mult: 0, busy: true, timer: null, balance: 0 };
+  penaltySessions.set(key, sess);
+  try {
+    sess.balance = await debitBalance(playerId, b, { type: "penalty_bet", description: `ПЕНАЛЬТИ · ставка ${b} ⭐`, countsAsWager: true });
+    return await penaltyShoot(playerId, sess, zone);
+  } catch (e) {
+    if (sess.streak === 0) { penaltySessions.delete(key); clearTimeout(sess.timer); }
+    throw e;
+  } finally { sess.busy = false; }
+}
+
+async function penaltyNext(playerId, pick) {
+  const key = String(playerId);
+  const sess = penaltySessions.get(key);
+  if (!sess || sess.streak < 1) throw new Error("Нет активной серии «ПЕНАЛЬТИ».");
+  if (sess.busy) throw new Error("Удар ещё выполняется.");
+  const zone = Number(pick);
+  if (!Number.isInteger(zone) || zone < 0 || zone >= PENALTY_ZONES) throw new Error("Выберите зону ворот.");
+  sess.busy = true;
+  try { return await penaltyShoot(playerId, sess, zone); }
+  finally { sess.busy = false; }
+}
+
+async function penaltyCashout(playerId) {
+  const key = String(playerId);
+  const sess = penaltySessions.get(key);
+  if (!sess || sess.streak < 1) throw new Error("Нечего забирать.");
+  if (sess.busy) throw new Error("Удар ещё выполняется.");
+  sess.busy = true;
+  penaltySessions.delete(key);
+  clearTimeout(sess.timer);
+  try {
+    const paid = await penaltyPayout(playerId, sess, "забрал");
+    return { kind: "cashout", modeIndex: sess.idx, streak: sess.streak, multiplier: sess.mult, payout: paid.payout, bet: sess.bet, win: true, over: true, canContinue: false, balance: paid.balance, durationMs: 0 };
+  } catch (e) { penaltySessions.set(key, sess); throw e; }
+  finally { sess.busy = false; }
+}
+const SOLO_MODES_PUBLIC = {
+  plinko: { rows: PLINKO_ROWS, modes: PLINKO_MODES, maxBalls: 20, staggerMs: 180 },
+  penalty: { zones: PENALTY_ZONES, modes: PENALTY_MODES.map(m => ({ key: m.key, name: m.name, covered: m.covered, chance: m.chance, mult: m.mult })) }
+};
+
+
 // ---------- UPGRADE (solo game) ----------
-// Player picks a stake and a target amount (target > stake). The displayed
-// chance is the fair chance (stake/target) reduced by the configured house
-// edge. Win: balance receives `target`. Loss: the stake is already debited.
+// Player picks a stake and a target amount (target > stake). The chance of
+// success is exactly stake/target — the same ratio that sizes the yellow
+// slice of the wheel. Win: balance receives `target`. Loss: the stake
+// (already debited) is simply gone. No extra commission is taken; the odds
+// themselves are the house edge.
 
 // ---------- ОТСКОК (solo game) ----------
 // The client supplies only the stake and mode. The server debits the real
@@ -1206,8 +1432,7 @@ async function playUpgrade(playerId, bet, target) {
   if (!dbUser) throw new Error("Пользователь не найден в базе данных.");
   if (dbUser.banned) throw new Error("Ваш аккаунт заблокирован в приложении.");
 
-  const fairChance = (bet / target) * 100;
-  const chance = fairChance * SOLO_RTP;
+  const chance = (bet / target) * 100;
 
   let balance = await debitBalance(playerId, bet, {
     type: "upgrade_bet",
@@ -1254,9 +1479,7 @@ async function playUpgrade(playerId, bet, target) {
 
   return {
     win,
-    fairChance: Number(fairChance.toFixed(4)),
     chance: Number(chance.toFixed(4)),
-    houseEdge: Number((SOLO_HOUSE_EDGE * 100).toFixed(2)),
     bet,
     target,
     rollPercent,
@@ -1298,210 +1521,6 @@ async function requireAdminRequest(req) {
   return checked.user;
 }
 
-// ===================== ICE ARENA =====================
-// Separate multiplayer mode: territory-conquest round, shared with the rest
-// of the app's Postgres balance (debitBalance/creditBalance/getUser/isAdmin
-// above), its own socket.io events (all prefixed "ice_") and its own
-// in-memory round state so it never touches the PVP `state` object.
-const ICE_COUNTDOWN = 10000, ICE_CLOSE = 1000, ICE_RUN_MS = 13600, ICE_RUN_MS_REDO = 26000, ICE_RESULT_MS = 4500;
-const ICE_COLORS = ["#ffc61a", "#ff8a1f", "#f4c430", "#e8720c", "#ffe066", "#d4a017", "#ff7f11", "#ffb347"];
-const ice_r3 = x => Math.round(x * 1000) / 1000;
-
-const ICE_ANOMALY_WEIGHTS = { race: 0.08, mirage: 0.06, redo: 0.06 };
-const ICE_ANOMALY_KEYS = Object.keys(ICE_ANOMALY_WEIGHTS);
-function iceRollAnomaly() {
-  const r = Math.random();
-  let acc = 0;
-  for (const k of ICE_ANOMALY_KEYS) { acc += ICE_ANOMALY_WEIGHTS[k]; if (r < acc) return k; }
-  return null;
-}
-// Deterministic PRNG (mulberry32) seeded per round, so the winner pick can be
-// re-derived and checked client-side from the revealed seed alone.
-function iceRng(a) {
-  return function () {
-    a |= 0; a = a + 0x6D2B79F5 | 0;
-    let t = Math.imul(a ^ a >>> 15, 1 | a);
-    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
-  };
-}
-const iceSha256 = s => crypto.createHash("sha256").update(String(s)).digest("hex");
-
-let iceHistory = []; // finished rounds, newest first, capped at 200 (mirrored to ice_rounds)
-let icePendingAnomaly = null;
-let iceRoundSeq = 1;
-let iceTimer = null;
-
-function iceNewRound() {
-  const seed = crypto.randomInt(0, 2 ** 31);
-  const anomaly = icePendingAnomaly || iceRollAnomaly();
-  icePendingAnomaly = null;
-  return { id: iceRoundSeq++, status: "waiting", players: [], endsAt: 0, startAt: 0, seed, hash: iceSha256(seed), winnerId: null, anomaly, payout: 0, commission: 0 };
-}
-let iceRound = iceNewRound();
-
-function iceSpot() {
-  let best = [50, 50], bd = -1;
-  for (let k = 0; k < 40; k++) {
-    const x = 10 + Math.random() * 80, y = 10 + Math.random() * 80;
-    const d = iceRound.players.reduce((m, o) => Math.min(m, (o.sx - x) ** 2 + (o.sy - y) ** 2), 1e9);
-    if (d > bd) { bd = d; best = [x, y]; }
-  }
-  return best;
-}
-
-function icePickWinner() {
-  const bank = ice_r3(iceRound.players.reduce((s, p) => s + p.stake, 0));
-  let x = iceRng(iceRound.seed)() * bank, w = iceRound.players[0];
-  for (const p of iceRound.players) { if (x < p.stake) { w = p; break; } x -= p.stake; }
-  return w;
-}
-
-function iceStateMsg() {
-  const revealed = iceRound.status === "running" || iceRound.status === "result";
-  return {
-    now: Date.now(), id: iceRound.id, status: iceRound.status, endsAt: iceRound.endsAt, startAt: iceRound.startAt,
-    hash: iceRound.hash, seed: revealed ? iceRound.seed : null, winnerId: iceRound.winnerId,
-    anomaly: revealed ? (iceRound.anomaly || null) : null,
-    payout: iceRound.status === "result" ? Number(iceRound.payout || 0) : 0,
-    commission: iceRound.status === "result" ? Number(iceRound.commission || 0) : 0,
-    players: iceRound.players.map(p => ({ id: p.id, name: p.name, photo: p.photo, stake: p.stake, color: p.color, sx: p.sx, sy: p.sy }))
-  };
-}
-function iceHistMsg() {
-  return { last: iceHistory[0] || null, top: iceHistory.reduce((b, g) => (!b || g.pool > b.pool ? g : b), null), list: iceHistory.slice(0, 30) };
-}
-function iceBroadcast() { io.emit("ice_state", iceStateMsg()); }
-function iceBroadcastHistory() { io.emit("ice_history", iceHistMsg()); }
-
-async function icePersistRound(entry) {
-  try {
-    requireDatabase();
-    await pool.query(
-      `INSERT INTO ice_rounds (id, pool, winner_id, seed, seed_hash, anomaly, payout, commission, players)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO NOTHING`,
-      [entry.id, entry.pool, entry.winnerId, String(entry.seed), entry.hash, entry.anomaly, Number(entry.payout || 0), Number(entry.commission || 0), JSON.stringify(entry.players)]
-    );
-  } catch (e) { console.error("ice_rounds persist error:", e.message); }
-}
-
-async function loadIceHistory() {
-  try {
-    requireDatabase();
-    const r = await pool.query(`SELECT id, created_at, pool, winner_id, seed, seed_hash, anomaly, payout, commission, players FROM ice_rounds ORDER BY id DESC LIMIT 200`);
-    iceHistory = r.rows.map(row => {
-      const players = row.players || [];
-      const wp = players.find(p => p.id === row.winner_id) || {};
-      return {
-        id: Number(row.id), ts: new Date(row.created_at).getTime(), pool: Number(row.pool),
-        winnerId: row.winner_id, name: wp.name || "", photo: wp.photo || "", color: wp.color || "#ffc61a",
-        payout: Number(row.payout || 0), commission: Number(row.commission || 0),
-        seed: Number(row.seed), hash: row.seed_hash, anomaly: row.anomaly || null, players
-      };
-    });
-    iceRoundSeq = (iceHistory[0]?.id || 0) + 1;
-    iceRound = iceNewRound();
-  } catch (e) { console.error("loadIceHistory failed:", e.message); }
-}
-
-async function icePlaceBet(playerId, amount, meta) {
-  if (!Number.isInteger(amount) || amount < 1) throw new Error("Ставка — целое число от 1 ⭐ (1, 2, 3…)");
-  if (iceRound.status === "running" || iceRound.status === "result") throw new Error("Раунд уже идёт, дождитесь следующего.");
-  if (iceRound.status === "countdown" && Date.now() > iceRound.endsAt - ICE_CLOSE) throw new Error("Приём ставок закрыт.");
-
-  let p = iceRound.players.find(x => x.id === playerId);
-  if (p && p.betLocked) throw new Error("Предыдущая ставка ещё обрабатывается.");
-  if (p) p.betLocked = true;
-
-  let balance;
-  try {
-    balance = await debitBalance(playerId, amount, { type: "ice_bet", description: `Ставка Ice Arena, раунд #${iceRound.id}` });
-  } catch (e) {
-    if (p) p.betLocked = false;
-    throw e;
-  }
-
-  if (!p) {
-    const [sx, sy] = iceSpot();
-    p = { id: playerId, name: meta.name, photo: meta.photo || "", stake: 0, color: ICE_COLORS[iceRound.players.length % ICE_COLORS.length], sx, sy, betLocked: false };
-    iceRound.players.push(p);
-  }
-  p.stake = ice_r3(p.stake + amount);
-  p.betLocked = false;
-
-  if (iceRound.status === "waiting" && iceRound.players.length >= 2) {
-    iceRound.status = "countdown";
-    iceRound.endsAt = Date.now() + ICE_COUNTDOWN;
-    clearTimeout(iceTimer);
-    iceTimer = setTimeout(iceStartRun, ICE_COUNTDOWN);
-  }
-  iceBroadcast();
-  return balance;
-}
-
-function iceStartRun() {
-  const w = icePickWinner();
-  iceRound.status = "running";
-  iceRound.winnerId = w ? w.id : null;
-  iceRound.startAt = Date.now() + 500;
-  iceBroadcast();
-  clearTimeout(iceTimer);
-  iceTimer = setTimeout(iceFinish, iceRound.anomaly === "redo" ? ICE_RUN_MS_REDO : ICE_RUN_MS);
-}
-
-async function iceFinish() {
-  const poolAmount = ice_r3(iceRound.players.reduce((s, p) => s + p.stake, 0));
-  const winner = iceRound.players.find(p => p.id === iceRound.winnerId);
-  // Same settlement rule as the PVP roll: target 8% commission, while the
-  // winner is never paid less than the original stake.
-  const normalPayout = Number((poolAmount * 0.92).toFixed(2));
-  const payout = Math.max(Number(winner?.stake || 0), normalPayout);
-  const commission = Math.max(0, Number((poolAmount - payout).toFixed(2)));
-  iceRound.payout = payout;
-  iceRound.commission = commission;
-  const entry = {
-    id: iceRound.id, ts: Date.now(), pool: poolAmount, winnerId: iceRound.winnerId,
-    name: winner?.name || "", photo: winner?.photo || "", color: winner?.color || "#ffc61a",
-    payout, commission,
-    seed: iceRound.seed, hash: iceRound.hash, anomaly: iceRound.anomaly || null,
-    players: iceRound.players.map(p => ({ id: p.id, name: p.name, photo: p.photo, color: p.color, stake: p.stake }))
-  };
-  iceHistory.unshift(entry);
-  if (iceHistory.length > 200) iceHistory.length = 200;
-  icePersistRound(entry);
-
-  if (winner) {
-    try {
-      requireDatabase();
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        const balanceAfter = await creditBalance(winner.id, payout, client, { type: "ice_win", description: `Победа Ice Arena, раунд #${entry.id} · ${payout.toFixed(2)} ⭐ · комиссия ${commission.toFixed(2)} ⭐` });
-        for (const p of iceRound.players) {
-          await client.query(
-            `UPDATE users SET games_played = games_played + 1, games_won = games_won + $2, total_wagered = total_wagered + $3, updated_at = NOW() WHERE telegram_id = $1`,
-            [String(p.id), p.id === winner.id ? 1 : 0, Number(p.stake)]
-          );
-        }
-        await client.query("COMMIT");
-        io.to(`user:${winner.id}`).emit("balance_updated", { balance: balanceAfter });
-      } catch (e) {
-        try { await client.query("ROLLBACK"); } catch {}
-        console.error("Ice Arena settlement error:", e.message);
-      } finally {
-        client.release();
-      }
-    } catch (e) { console.error("Ice Arena settlement database error:", e.message); }
-  }
-
-  iceBroadcastHistory();
-  iceRound.status = "result";
-  iceBroadcast();
-  clearTimeout(iceTimer);
-  iceTimer = setTimeout(() => { iceRound = iceNewRound(); iceBroadcast(); }, ICE_RESULT_MS);
-}
-// =================== END ICE ARENA STATE ===================
-
 io.on("connection", socket => {
   socket.on("join_room", async data => {
     try {
@@ -1534,8 +1553,6 @@ io.on("connection", socket => {
       });
       socket.emit("room_state", publicState());
       broadcast();
-      socket.emit("ice_state", iceStateMsg());
-      socket.emit("ice_history", iceHistMsg());
     } catch (e) {
       socket.emit("error_message", e.message);
     }
@@ -1543,45 +1560,6 @@ io.on("connection", socket => {
 
   socket.on("new_round_ack", () => {
     // Kept for client compatibility; server state is already reset.
-  });
-
-  // ---- Ice Arena ----
-  socket.on("ice_bet", async data => {
-    try {
-      const id = socket.data.playerId;
-      if (maintenanceMode && !isAdmin(id)) throw new Error(maintenanceMessage());
-      if (!id) throw new Error("Авторизация Telegram не выполнена.");
-      const dbUser = await getUser(id);
-      if (!dbUser || dbUser.banned) throw new Error("Ваш аккаунт заблокирован в приложении.");
-      const amount = Math.round(Number(data?.amount));
-      const name = dbUser.username ? "@" + dbUser.username : (dbUser.first_name || "Игрок");
-      const balance = await icePlaceBet(id, amount, { name, photo: dbUser.avatar_url || "" });
-      socket.emit("balance_updated", { balance });
-    } catch (e) {
-      socket.emit("error_message", e.message);
-    }
-  });
-
-  socket.on("ice_admin_force_anomaly", data => {
-    const id = socket.data.playerId;
-    if (!id || !isAdmin(id)) return;
-    const key = ICE_ANOMALY_KEYS.includes(data?.anomaly) ? data.anomaly : null;
-    if (iceRound.status === "waiting" || iceRound.status === "countdown") {
-      iceRound.anomaly = key;
-      iceBroadcast();
-    } else {
-      icePendingAnomaly = key;
-    }
-    socket.emit("ice_admin_ok", { msg: key ? "Аномалия применится к раунду." : "Форс аномалии снят." });
-  });
-
-  socket.on("ice_request_state", () => {
-    socket.emit("ice_state", iceStateMsg());
-    socket.emit("ice_history", iceHistMsg());
-  });
-
-  socket.on("ice_request_history", () => {
-    socket.emit("ice_history", iceHistMsg());
   });
 
   socket.on("place_bet", async data => {
@@ -1628,14 +1606,80 @@ io.on("connection", socket => {
     } catch (e) { socket.emit("error_message", e.message); }
   });
 
+
+
+  // ---------- DROP / PENALTY solo sockets ----------
+  socket.on("solo_done", data => {
+    const id = socket.data.playerId;
+    const key = String(data?.key || "");
+    if (id && key === "plinko") soloBusy.delete(`${key}:${id}`);
+  });
+
+  socket.on("solo_modes", (_d, cb) => {
+    if (typeof cb === "function") cb(SOLO_MODES_PUBLIC);
+  });
+
+  socket.on("plinko_spin", async data => {
+    try {
+      const id = socket.data.playerId;
+      if (maintenanceMode && !isAdmin(id)) throw new Error(maintenanceMessage());
+      if (!id) throw new Error("Авторизация Telegram не выполнена.");
+      const result = await playPlinko(id, Number(data?.bet), Number(data?.modeIndex ?? 0), Number(data?.count ?? 1));
+      socket.emit("plinko_result", result);
+      setTimeout(() => socket.emit("balance_updated", { balance: result.balance }), result.durationMs);
+    } catch (e) { socket.emit("error_message", e.message); }
+  });
+
+  socket.on("penalty_spin", async data => {
+    try {
+      const id = socket.data.playerId;
+      if (maintenanceMode && !isAdmin(id)) throw new Error(maintenanceMessage());
+      if (!id) throw new Error("Авторизация Telegram не выполнена.");
+      const result = await playPenalty(id, Number(data?.bet), Number(data?.modeIndex ?? 0), data?.pick);
+      socket.emit("penalty_result", result);
+      setTimeout(() => socket.emit("balance_updated", { balance: result.balance }), result.durationMs);
+    } catch (e) { socket.emit("error_message", e.message); }
+  });
+
+  socket.on("penalty_next", async data => {
+    try {
+      const id = socket.data.playerId;
+      if (maintenanceMode && !isAdmin(id)) throw new Error(maintenanceMessage());
+      if (!id) throw new Error("Авторизация Telegram не выполнена.");
+      const result = await penaltyNext(id, data?.pick);
+      socket.emit("penalty_result", result);
+      setTimeout(() => socket.emit("balance_updated", { balance: result.balance }), result.durationMs);
+    } catch (e) { socket.emit("error_message", e.message); }
+  });
+
+  socket.on("penalty_cashout", async () => {
+    try {
+      const id = socket.data.playerId;
+      if (!id) throw new Error("Авторизация Telegram не выполнена.");
+      const result = await penaltyCashout(id);
+      socket.emit("penalty_result", result);
+      socket.emit("balance_updated", { balance: result.balance });
+    } catch (e) { socket.emit("error_message", e.message); }
+  });
+
   socket.on("request_state", () => socket.emit("room_state", publicState()));
 
-  socket.on("disconnect", () => {
+  socket.on("disconnect", async () => {
     const id = socket.data.playerId;
     if (id && state.status === "WAITING") {
       const p = state.players.get(id);
       if (p && p.bet === 0 && !p.betLocked) state.players.delete(id);
       broadcast();
+    }
+
+    // Preserve the original Penalty behavior: an active winning series is
+    // settled automatically if the player closes/disconnects the Mini App.
+    const ps = id ? penaltySessions.get(String(id)) : null;
+    if (ps && ps.streak > 0 && !ps.busy) {
+      penaltySessions.delete(String(id));
+      clearTimeout(ps.timer);
+      try { await penaltyPayout(id, ps, "выход из игры"); }
+      catch (e) { console.error("penalty disconnect payout:", e.message); }
     }
   });
 });
@@ -3528,83 +3572,6 @@ app.post("/api/support/webhook", async (req, res) => {
   }
 });
 
-
-function appGameProfitStats() {
-  return pool.query(`
-    WITH sums AS (
-      SELECT
-        COALESCE(SUM(CASE WHEN type='pvp_bet' THEN -amount ELSE 0 END),0)::float AS pvp_bets,
-        COALESCE(SUM(CASE WHEN type='pvp_win' THEN amount ELSE 0 END),0)::float AS pvp_payouts,
-        COALESCE(SUM(CASE WHEN type='upgrade_bet' THEN -amount ELSE 0 END),0)::float AS upgrade_bets,
-        COALESCE(SUM(CASE WHEN type='upgrade_win' THEN amount ELSE 0 END),0)::float AS upgrade_payouts,
-        COALESCE(SUM(CASE WHEN type='bounce_bet' THEN -amount ELSE 0 END),0)::float AS bounce_bets,
-        COALESCE(SUM(CASE WHEN type='bounce_win' THEN amount ELSE 0 END),0)::float AS bounce_payouts,
-        COALESCE(SUM(CASE WHEN type='ice_bet' THEN -amount ELSE 0 END),0)::float AS ice_bets,
-        COALESCE(SUM(CASE WHEN type='ice_win' THEN amount ELSE 0 END),0)::float AS ice_payouts
-      FROM balance_transactions
-      WHERE type IN ('pvp_bet','pvp_win','upgrade_bet','upgrade_win','bounce_bet','bounce_win','ice_bet','ice_win')
-    )
-    SELECT *,
-      (pvp_bets - pvp_payouts)::float AS pvp_profit,
-      (upgrade_bets - upgrade_payouts)::float AS upgrade_profit,
-      (bounce_bets - bounce_payouts)::float AS bounce_profit,
-      (ice_bets - ice_payouts)::float AS ice_profit,
-      ((pvp_bets - pvp_payouts)
-       + (upgrade_bets - upgrade_payouts)
-       + (bounce_bets - bounce_payouts)
-       + (ice_bets - ice_payouts))::float AS total_profit
-    FROM sums
-  `);
-}
-
-async function handleTelegramStats(message) {
-  const chatId = message?.chat?.id;
-  const adminId = String(message?.from?.id || "");
-  if (!chatId) return;
-  if (!isAdmin(adminId)) {
-    await telegramApi("sendMessage", {
-      chat_id: chatId,
-      text: "⛔ Команда /stats доступна только администраторам."
-    }).catch(() => {});
-    return;
-  }
-
-  try {
-    requireDatabase();
-    const r = await appGameProfitStats();
-    const s = r.rows[0] || {};
-    const mode = (name, bets, payouts, profit) =>
-      `${name}\n  Ставки: <b>${formatAdminMoney(bets)} ⭐</b>\n  Выплаты: <b>${formatAdminMoney(payouts)} ⭐</b>\n  Результат: <b>${profit >= 0 ? "+" : ""}${formatAdminMoney(profit)} ⭐</b>`;
-
-    const currentPvp = totalBank();
-    const currentIce = ice_r3(iceRound.players.reduce((sum, p) => sum + Number(p.stake || 0), 0));
-
-    const text =
-      `📊 <b>ПРИБЫЛЬ ПРИЛОЖЕНИЯ</b>\n\n` +
-      mode("🎡 PVP ROLL", Number(s.pvp_bets), Number(s.pvp_payouts), Number(s.pvp_profit)) + `\n\n` +
-      mode("⬆️ UPGRADE", Number(s.upgrade_bets), Number(s.upgrade_payouts), Number(s.upgrade_profit)) + `\n\n` +
-      mode("↩️ ОТСКОК", Number(s.bounce_bets), Number(s.bounce_payouts), Number(s.bounce_profit)) + `\n\n` +
-      mode("❄️ ICE ARENA", Number(s.ice_bets), Number(s.ice_payouts), Number(s.ice_profit)) + `\n\n` +
-      `━━━━━━━━━━━━━━\n` +
-      `💰 <b>ОБЩИЙ РЕЗУЛЬТАТ: ${Number(s.total_profit) >= 0 ? "+" : ""}${formatAdminMoney(s.total_profit)} ⭐</b>\n\n` +
-      `⏳ Незавершённый PVP банк: <b>${formatAdminMoney(currentPvp)} ⭐</b>\n` +
-      `⏳ Незавершённый Ice Arena банк: <b>${formatAdminMoney(currentIce)} ⭐</b>\n\n` +
-      `<i>Результат считается по проведённым игровым ставкам и выплатам из PostgreSQL.</i>`;
-
-    await telegramApi("sendMessage", {
-      chat_id: chatId,
-      text,
-      parse_mode: "HTML"
-    });
-  } catch (e) {
-    await telegramApi("sendMessage", {
-      chat_id: chatId,
-      text: `❌ Не удалось получить статистику: ${escapeHtmlTelegram(e.message || "DB error")}`,
-      parse_mode: "HTML"
-    }).catch(() => {});
-  }
-}
-
 app.post("/api/telegram/webhook", async (req, res) => {
   const expectedSecret = activeWebhookSecret();
   if (expectedSecret && req.headers["x-telegram-bot-api-secret-token"] !== expectedSecret) {
@@ -3639,12 +3606,6 @@ app.post("/api/telegram/webhook", async (req, res) => {
 
     const incomingMessage = update.message;
     const incomingText = String(incomingMessage?.text || "").trim();
-
-    if (/^\/stats(?:@\w+)?$/i.test(incomingText)) {
-      res.json({ ok: true, handled: "stats" });
-      setImmediate(() => handleTelegramStats(incomingMessage).catch(e => console.error("Telegram /stats async error:", e.message)));
-      return;
-    }
 
     if (/^\/broadcast(?:@\w+)?$/i.test(incomingText)) {
       res.json({ ok: true, handled: "broadcast" });
@@ -4877,7 +4838,7 @@ app.get("/api/admin/transactions", async (req, res) => {
 // spirit of the "Статистика" screen the client asked to match.
 const ADMIN_SUMMARY_METHOD_LABELS = {
   stars_topup: "Stars", balance_topup: "Stars", ton_topup: "TON / GRAM",
-  pvp_bet: "PVP", upgrade_bet: "Upgrade", bounce_bet: "Отскок",
+  pvp_bet: "PVP", upgrade_bet: "Upgrade", bounce_bet: "Отскок", plinko_bet: "Дроп", penalty_bet: "Пенальти",
   STAR: "Stars", GRAM: "GRAM", TON: "TON",
   true: "Выплачено", false: "Не выплачено"
 };
@@ -4899,7 +4860,7 @@ app.get("/api/admin/summary/:category", async (req, res) => {
         `SELECT t.type AS method, ABS(t.amount::float) AS amount, t.created_at,
                 COALESCE(NULLIF(u.username,''), u.first_name) AS name, u.username
          FROM balance_transactions t JOIN users u ON u.telegram_id=t.telegram_user_id
-         WHERE t.type IN ('pvp_bet','upgrade_bet','bounce_bet') ORDER BY t.created_at DESC LIMIT 500`
+         WHERE t.type IN ('pvp_bet','upgrade_bet','bounce_bet','plinko_bet','penalty_bet') ORDER BY t.created_at DESC LIMIT 500`
       )).rows;
     } else if (category === "withdrawals") {
       rows = (await pool.query(
@@ -5114,7 +5075,6 @@ app.get("*", (req, res) => res.sendFile(path.join(__dirname, "public", "index.ht
 
 async function start() {
   await initDb();
-  await loadIceHistory();
   await loadMaintenanceMode();
   await settleExpiredRaffles();
   setInterval(settleExpiredRaffles, 5000).unref();
