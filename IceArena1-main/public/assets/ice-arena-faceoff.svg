@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="180" viewBox="0 0 600 180" fill="none">
+  <defs>
+    <linearGradient id="arenaBase" x1="20" y1="0" x2="580" y2="180" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1b1009"/>
+      <stop offset=".5" stop-color="#100b07"/>
+      <stop offset="1" stop-color="#1b1008"/>
+    </linearGradient>
+    <radialGradient id="centerAmber" cx="0" cy="0" r="1" gradientTransform="matrix(0 104 -255 0 300 74)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ff9f32" stop-opacity=".3"/>
+      <stop offset=".55" stop-color="#e8751b" stop-opacity=".12"/>
+      <stop offset="1" stop-color="#e8751b" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="sideAmber" cx="0" cy="0" r="1" gradientTransform="matrix(0 110 -175 0 28 110)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#d76b19" stop-opacity=".12"/>
+      <stop offset="1" stop-color="#d76b19" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="arenaClip"><rect width="600" height="180" rx="24"/></clipPath>
+  </defs>
+  <g clip-path="url(#arenaClip)">
+    <rect width="600" height="180" fill="url(#arenaBase)"/>
+    <rect width="600" height="180" fill="url(#centerAmber)"/>
+    <rect width="600" height="180" fill="url(#sideAmber)"/>
+    <circle cx="516" cy="38" r="1.7" fill="#ffc16a" fill-opacity=".62"/>
+    <circle cx="447" cy="126" r="1.3" fill="#ffb14d" fill-opacity=".5"/>
+    <circle cx="171" cy="35" r="1.5" fill="#ffd48e" fill-opacity=".58"/>
+    <circle cx="77" cy="118" r="1.2" fill="#ffad47" fill-opacity=".56"/>
+    <circle cx="366" cy="145" r="1.4" fill="#ffc16a" fill-opacity=".52"/>
+  </g>
+</svg>
